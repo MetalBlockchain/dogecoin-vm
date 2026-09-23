@@ -20,3 +20,6 @@ telegram-token
 telegram-chat
 rpc-password
 secrets/
+
+# Local builds
+/cmd/dogevm/dogevm
