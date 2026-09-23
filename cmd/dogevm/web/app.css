@@ -39,7 +39,7 @@ a { color: var(--vm); }
   outline-offset: 2px;
 }
 
-.testnet-band {
+.network-band {
   max-width: none;
   margin: 0;
   padding: 0.5rem 1rem;

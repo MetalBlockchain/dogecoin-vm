@@ -70,12 +70,24 @@ async function loadInfo() {
   $('min-pegout').textContent = tidy(info.minPegOut);
   $('signers').textContent =
     `Held by ${info.signers.required} of ${info.signers.publicKeys.length} signers. Peg address on Dogecoin: ${info.pegAddress}`;
-  if (info.faucet.enabled) {
-    $('faucet-text').textContent =
-      `The faucet sends ${tidy(info.faucet.amount)} testnet DOGE straight to your DogecoinVM address, once a day.`;
+  const mainnet = info.dogecoinNetwork === 'mainnet';
+  const band = $('network-band');
+  band.hidden = false;
+  if (mainnet) {
+    $('network-name').textContent = 'bridge beta';
+    band.textContent = 'Beta, with real DOGE. Keep amounts small: the bridge is new and has not been audited.';
   } else {
-    $('faucet-text').textContent = 'This network has no faucet. Deposit Dogecoin testnet DOGE on the Deposit tab instead.';
-    $('faucet-claim').hidden = true;
+    $('network-name').textContent = 'testnet bridge';
+    band.textContent = 'Testnet. These coins have no value, and the network may be reset at any time.';
+  }
+  const limits = [];
+  if (chain.parseDoge(info.maxDeposit) > 0n) limits.push(`Deposits over ${tidy(info.maxDeposit)} DOGE are not credited; they are held for a refund.`);
+  if (chain.parseDoge(info.maxCirculating) > 0n) limits.push(`At most ${tidy(info.maxCirculating)} DOGE can be on DogecoinVM in total during the beta.`);
+  $('deposit-limits').textContent = limits.length ? ' ' + limits.join(' ') : '';
+  if (info.faucet.enabled) {
+    $('tab-faucet').hidden = false;
+    $('faucet-text').textContent =
+      `The faucet sends ${tidy(info.faucet.amount)} DOGE straight to your DogecoinVM address, once a day.`;
   }
 }
 

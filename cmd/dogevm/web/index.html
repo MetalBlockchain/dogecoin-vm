@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DogecoinVM testnet bridge</title>
-  <meta name="description" content="Move testnet DOGE between Dogecoin and DogecoinVM, and send it on DogecoinVM.">
+  <title>DogecoinVM bridge</title>
+  <meta name="description" content="Move DOGE between Dogecoin and DogecoinVM on Metal Blockchain, one for one.">
   <link rel="icon" href="dogecoin.svg" type="image/svg+xml">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://metaldoge.com/">
-  <meta property="og:title" content="DogecoinVM testnet bridge">
+  <meta property="og:title" content="DogecoinVM bridge">
   <meta property="og:description" content="Move DOGE between Dogecoin and a fast chain on Metal Blockchain, one for one.">
   <meta property="og:image" content="https://metaldoge.com/og.png">
   <meta property="og:image:width" content="1200">
@@ -22,13 +22,13 @@
   <script type="module" src="app.js"></script>
 </head>
 <body>
-  <p class="testnet-band" role="note">Testnet. These coins have no value, and the network may be reset at any time.</p>
+  <p class="network-band" id="network-band" role="note" hidden></p>
   <p class="sync-band" id="sync-band" role="status" hidden></p>
 
   <header class="masthead">
     <div class="brand">
       <img class="brand-coin" src="dogecoin.svg" alt="" width="64" height="64">
-      <h1>DogecoinVM <span class="masthead-sub">testnet bridge</span></h1>
+      <h1>DogecoinVM <span class="masthead-sub" id="network-name">bridge</span></h1>
     </div>
     <dl class="heights" aria-live="polite">
       <div class="height height-doge"><dt>Dogecoin block</dt><dd id="doge-height">…</dd></div>
@@ -65,14 +65,14 @@
         <button role="tab" id="tab-wallet" aria-controls="panel-wallet" aria-selected="true">Wallet</button>
         <button role="tab" id="tab-deposit" aria-controls="panel-deposit" aria-selected="false">Deposit</button>
         <button role="tab" id="tab-withdraw" aria-controls="panel-withdraw" aria-selected="false">Withdraw</button>
-        <button role="tab" id="tab-faucet" aria-controls="panel-faucet" aria-selected="false">Faucet</button>
+        <button role="tab" id="tab-faucet" aria-controls="panel-faucet" aria-selected="false" hidden>Faucet</button>
       </nav>
 
       <!-- Wallet -->
       <div class="panel" role="tabpanel" id="panel-wallet" aria-labelledby="tab-wallet">
         <div id="no-key">
           <h2>Start with a key</h2>
-          <p>Your key stays in this browser. Anyone with it can spend your testnet DOGE, so don't reuse a real key here.</p>
+          <p>Your key stays in this browser and nowhere else. Back it up once you have it: if this browser's data is cleared, the key and its DOGE are gone.</p>
           <div class="actions">
             <button class="primary" id="create-key">Create a new key</button>
           </div>
@@ -123,7 +123,7 @@
         <h2>Deposit DOGE from Dogecoin</h2>
         <p class="needs-key">Create or import a key on the Wallet tab first.</p>
         <div class="with-key">
-          <p>Send testnet DOGE to this Dogecoin address from any wallet. After <span id="confs-needed">6</span> confirmations it appears in your DogecoinVM wallet, less a <span id="vm-fee">0.01</span> DOGE fee. The minimum is <span id="min-deposit">1</span> DOGE.</p>
+          <p>Send DOGE to this Dogecoin address from any wallet. After <span id="confs-needed">6</span> confirmations it appears in your DogecoinVM wallet, less a <span id="vm-fee">0.01</span> DOGE fee. The minimum is <span id="min-deposit">1</span> DOGE.<span id="deposit-limits"></span></p>
           <div class="deposit-address">
             <div id="deposit-qr" class="qr" aria-hidden="true"></div>
             <div>
@@ -155,20 +155,20 @@
 
       <!-- Faucet -->
       <div class="panel" role="tabpanel" id="panel-faucet" aria-labelledby="tab-faucet" hidden>
-        <h2>Get testnet DOGE</h2>
+        <h2>Get DOGE to try DogecoinVM</h2>
         <p class="needs-key">Create or import a key on the Wallet tab first.</p>
         <div class="with-key">
-          <p id="faucet-text">The faucet sends testnet DOGE straight to your DogecoinVM address, once a day.</p>
-          <button class="primary" id="faucet-claim">Get testnet DOGE</button>
+          <p id="faucet-text"></p>
+          <button class="primary" id="faucet-claim">Get DOGE</button>
           <p class="result" id="faucet-result" aria-live="polite"></p>
-          <p>To try the bridge itself, get Dogecoin testnet DOGE from a Dogecoin testnet faucet, then send it to your address on the Deposit tab.</p>
+          <p>To try the bridge itself, send DOGE from Dogecoin to your address on the Deposit tab.</p>
         </div>
       </div>
     </section>
   </main>
 
   <footer class="footer">
-    <p>DogecoinVM runs on Metal Blockchain. The bridge is run by a set of signers: this testnet trusts them to hold the locked DOGE. <a href="https://github.com/paulgnz/dogecoin-vm">Source and docs</a>.</p>
+    <p>DogecoinVM runs on Metal Blockchain. The bridge is run by a set of signers, who hold the DOGE locked on Dogecoin. <a href="https://github.com/paulgnz/dogecoin-vm">Source and docs</a>.</p>
   </footer>
 </body>
 </html>
