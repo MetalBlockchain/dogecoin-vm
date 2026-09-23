@@ -167,7 +167,7 @@ func (srv *server) dogeBroadcast(r *http.Request) (any, error) {
 	}
 	txid, err := srv.doge.send(tx)
 	if err != nil {
-		return nil, badRequest("rejected by the Dogecoin network: %v", err)
+		return nil, broadcastError(err)
 	}
 	return map[string]string{"txid": txid.String()}, nil
 }

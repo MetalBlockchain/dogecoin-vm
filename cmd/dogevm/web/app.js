@@ -52,9 +52,18 @@ async function api(path, body) {
 const tidy = (s) => chain.formatDoge(chain.parseDoge(String(s).replace('-', '')));
 const short = (txid) => `${txid.slice(0, 10)}…${txid.slice(-6)}`;
 
-function showResult(el, message, ok) {
+function showResult(el, message, ok, txid, network = 'vm') {
   el.textContent = message;
   el.className = 'result ' + (ok ? 'ok' : 'error');
+  if (txid) {
+    // The full transaction, in the right explorer, to check the outcome.
+    const a = document.createElement('a');
+    a.href = network === 'doge' ? `https://blockchair.com/dogecoin/transaction/${txid}` : `#/tx/${txid}`;
+    if (network === 'doge') { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+    a.textContent = txid;
+    a.className = 'mono';
+    el.append(' ', a);
+  }
 }
 
 function item(...texts) {
@@ -139,7 +148,7 @@ document.addEventListener('click', async (e) => {
   } catch {
     // Select the text so it can be copied by hand.
     getSelection().selectAllChildren($(target.dataset.copy));
-    target.textContent = 'Press Ctrl+C';
+    target.textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? 'Press ⌘C' : 'Press Ctrl+C';
   }
   setTimeout(() => { target.textContent = target.dataset.label || 'Copy'; }, 2000);
 });
@@ -381,11 +390,22 @@ function renderHistory(list, history, emptyText) {
 
 // refreshDogeWallet shows the key's Dogecoin balance, registering the
 // address with the bridge's Dogecoin index first if need be.
+// The Dogecoin send option and the one-click move need the Dogecoin
+// balance; until it's available they're disabled, with the reason shown.
+function setDogeReady(ready, why = '') {
+  const radio = document.querySelector('input[name=send-network][value=doge]');
+  radio.disabled = !ready;
+  if (!ready && radio.checked) document.querySelector('input[name=send-network][value=vm]').checked = true;
+  radio.parentElement.title = ready ? '' : why;
+  $('move-form').querySelector('button[type=submit]').disabled = !ready;
+}
+
 async function refreshDogeWallet() {
   if (!key || !info.dogeWallet) {
     $('doge-balance').textContent = '–';
     $('doge-pending').textContent = 'Not available from this bridge.';
     dogeState = 'off';
+    setDogeReady(false, "This bridge doesn't serve Dogecoin balances.");
     return;
   }
   const gen = generation;
@@ -401,6 +421,7 @@ async function refreshDogeWallet() {
     }
     if (gen !== generation) return;
     dogeState = 'ready';
+    setDogeReady(true);
     dogeUtxos = a.utxos;
     $('doge-balance').textContent = tidy(a.confirmed);
     const pending = chain.parseDoge(a.pending.replace('-', ''));
@@ -412,6 +433,7 @@ async function refreshDogeWallet() {
   } catch (err) {
     if (gen !== generation) return;
     dogeState = err.status === 503 ? 'syncing' : 'unknown';
+    setDogeReady(false, "Available once the bridge's Dogecoin node has caught up.");
     $('doge-balance').textContent = '…';
     $('doge-pending').textContent = err.status === 503
       ? "Shows once the bridge's Dogecoin node has caught up."
@@ -459,8 +481,13 @@ function renderPasskey() {
 
 $('passkey-protect').addEventListener('click', async (e) => {
   e.target.disabled = true;
+  // The passkey prompt takes a while; if the wallet changes meanwhile, this
+  // backup belongs to the old key, so drop it.
+  const gen = generation;
+  const protecting = key;
   try {
-    const backup = await passkey.protect(key);
+    const backup = await passkey.protect(protecting);
+    if (gen !== generation) return;
     if (!store.set(PASSKEY_STORE, backup)) throw new Error("This browser won't store the encrypted key, so nothing was changed.");
     store.remove(KEY_STORE);
     showResult($('passkey-result'), 'Done. Copy the encrypted backup and keep it somewhere safe.', true);
@@ -556,8 +583,7 @@ async function pay(script, amount, data, beforeBroadcast, network = 'vm') {
   return { txid: built.txid, unknown: false };
 }
 
-const unknownOutcome = (txid) =>
-  `No answer from the bridge, so this may or may not have gone through. Check transaction ${short(txid)} in the explorer before trying again.`;
+const unknownOutcome = 'No answer from the bridge, so this may or may not have gone through. Check the transaction before trying again:';
 
 $('send-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -570,8 +596,8 @@ $('send-form').addEventListener('submit', async (e) => {
     const amount = chain.parseDoge($('send-amount').value);
     const { txid, unknown } = await pay(chain.pkScript(to), amount, undefined, undefined, network);
     const where = network === 'doge' ? 'on Dogecoin' : 'on DogecoinVM';
-    if (unknown) showResult($('send-result'), unknownOutcome(txid), false);
-    else showResult($('send-result'), `Sent ${where}. Transaction ${short(txid)}.`, true);
+    if (unknown) showResult($('send-result'), unknownOutcome, false, txid, network);
+    else showResult($('send-result'), `Sent ${where}. Transaction:`, true, txid, network);
     $('send-to').value = '';
     $('send-amount').value = '';
   } catch (err) {
@@ -642,10 +668,10 @@ $('move-form').addEventListener('submit', async (e) => {
     const script = chain.pkScript(chain.decodeAddress(expected, info.dogecoinVersions));
     const { txid, unknown } = await pay(script, amount, undefined, undefined, 'doge');
     if (unknown) {
-      showResult($('move-result'), unknownOutcome(txid), false);
+      showResult($('move-result'), unknownOutcome, false, txid, 'doge');
     } else {
       showResult($('move-result'),
-        `Sent to your deposit address. It's credited on DogecoinVM after ${info.depositConfirmations} Dogecoin confirmations, about ${info.depositConfirmations} minutes. Transaction ${short(txid)}.`, true);
+        `Sent to your deposit address. It's credited on DogecoinVM after ${info.depositConfirmations} Dogecoin confirmations, about ${info.depositConfirmations} minutes. Transaction:`, true, txid, 'doge');
     }
     $('move-amount').value = '';
     setTimeout(refreshDeposits, 3000);
@@ -704,8 +730,8 @@ $('withdraw-form').addEventListener('submit', async (e) => {
       pendingTxid = id;
       saveWithdrawals([{ txid: id, to: toText, amount: chain.formatDoge(amount) }, ...savedWithdrawals()]);
     });
-    if (unknown) showResult($('withdraw-result'), unknownOutcome(txid), false);
-    else showResult($('withdraw-result'), 'Withdrawal sent. The bridge pays out once it is in a block.', true);
+    if (unknown) showResult($('withdraw-result'), unknownOutcome, false, txid);
+    else showResult($('withdraw-result'), 'Withdrawal sent. The bridge pays out once it is in a block. Transaction:', true, txid);
     $('withdraw-form').reset();
   } catch (err) {
     // The bridge refused it, so it will never be paid; forget it.

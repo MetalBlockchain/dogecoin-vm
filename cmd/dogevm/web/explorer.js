@@ -13,7 +13,7 @@ let routeGen = 0;
 async function api(path) {
   const res = await fetch(path);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `request failed (${res.status})`), { status: res.status });
   return data;
 }
 
@@ -36,7 +36,8 @@ function ago(unix) {
   if (s < 90) return `${s}s ago`;
   if (s < 5400) return `${Math.round(s / 60)} min ago`;
   if (s < 129600) return `${Math.round(s / 3600)} h ago`;
-  return `${Math.round(s / 86400)} days ago`;
+  const days = Math.round(s / 86400);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
 }
 
 // Links: Dogecoin ids open on a public explorer, DogecoinVM ids in-page.
@@ -255,8 +256,11 @@ async function search(q) {
   q = q.trim();
   if (/^[0-9a-f]{64}$/i.test(q)) {
     q = q.toLowerCase();
-    const isTx = await api(`/api/tx/${q}`).then(() => true, () => false);
-    location.hash = isTx ? `#/tx/${q}` : `#/block/${q}`;
+    // A 64-hex string is a transaction or a block hash. Only "not found" as
+    // a transaction means try it as a block; any other failure shows on the
+    // transaction page.
+    const notTx = await api(`/api/tx/${q}`).then(() => false, (err) => err.status === 404);
+    location.hash = notTx ? `#/block/${q}` : `#/tx/${q}`;
   } else if (/^\d+$/.test(q)) location.hash = `#/block/${q}`;
   else if (q) location.hash = `#/address/${encodeURIComponent(q)}`;
 }

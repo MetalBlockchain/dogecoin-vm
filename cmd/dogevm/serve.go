@@ -248,12 +248,26 @@ func (srv *server) healthHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "checks": []check{}})
 		return
 	}
-	ok := allOK(snap.checks)
-	if !ok {
+	// A Dogecoin node catching up, or a deliberate pause, is degraded, not
+	// down: uptime monitors should not page for them.
+	status := "ok"
+	for _, c := range snap.checks {
+		if c.OK {
+			continue
+		}
+		if (c.Name == "dogecoin" && strings.HasPrefix(c.Detail, "still syncing")) || c.Name == "pause" {
+			if status == "ok" {
+				status = "degraded"
+			}
+			continue
+		}
+		status = "down"
+	}
+	if status == "down" {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok": ok, "checks": snap.checks, "updated": snap.updated.UTC().Format(time.RFC3339),
+		"ok": status == "ok", "status": status, "checks": snap.checks, "updated": snap.updated.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -422,9 +436,21 @@ func (srv *server) broadcast(r *http.Request) (any, error) {
 	}
 	txid, err := srv.vm.send(tx)
 	if err != nil {
-		return nil, badRequest("rejected: %v", err)
+		return nil, broadcastError(err)
 	}
 	return map[string]string{"txid": txid.String()}, nil
+}
+
+// broadcastError tells a transaction the node refused (400: it was not sent)
+// from a node that didn't answer (502: it may or may not have been sent, so
+// the wallet must keep its record and check the chain).
+func broadcastError(err error) error {
+	var rejected *rpcError
+	if errors.As(err, &rejected) {
+		return badRequest("rejected by the network: %s", rejected.Message)
+	}
+	log.Printf("broadcast: %v", err)
+	return &apiError{http.StatusBadGateway, "no answer from the node, so the transaction may or may not have been sent; check its ID in the explorer before trying again"}
 }
 
 func (srv *server) depositAddress(r *http.Request) (any, error) {
