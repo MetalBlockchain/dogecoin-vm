@@ -73,6 +73,7 @@ async function loadInfo() {
   const mainnet = info.dogecoinNetwork === 'mainnet';
   const band = $('network-band');
   band.hidden = false;
+  $('import-key').placeholder = mainnet ? 'Q…, 6… or 64 hex characters' : 'c…, 9… or 64 hex characters';
   if (mainnet) {
     $('network-name').textContent = 'bridge beta';
     band.textContent = 'Beta, with real DOGE. Keep amounts small: the bridge is new and has not been audited.';

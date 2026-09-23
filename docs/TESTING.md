@@ -1,8 +1,23 @@
 # Running and testing DogecoinVM
 
-## Public testnet
+## Mainnet beta
 
-The quickest way in is the hosted test network, at **https://metaldoge.com**:
+**https://metaldoge.com** runs DogecoinVM as an L1 on Metal mainnet, pegged to Dogecoin mainnet with real DOGE:
+
+| | |
+|---|---|
+| Metal subnet | `2t2zEB1T3mNUE2WoheMFMjfhAvQJawtgiwnKPJz2NsFk7FDgyN` |
+| DogecoinVM chain | `2hFCfzdMmfXBxYgvvdL7BYiJAxdejyn4AksMYUM2eM5gN7Xrjy` |
+| L1 conversion | `2Ns8AgaesW78Z8CwJvjzkdGpV7qnLTgEfBoXn9zDTcNNxx3phR` |
+| Validator | `NodeID-5qeQJPktXm63RrXxxkfjunFJPQCP7YeeK` |
+| Peg address (Dogecoin) | `AAvNfukpAa4iTcRJPetxuxX8XxbC5gFqUM` |
+| JSON-RPC | `https://metaldoge.com/rpc`, user and password `public` |
+
+It is a beta: deposits over 100 DOGE are not credited (they are held for a refund), at most 1,000 DOGE can circulate, deposits need 20 Dogecoin confirmations, and one server holds every peg signer key. It was set up with [`deploy/mainnet.sh`](../deploy/mainnet.sh) and [`cmd/dogevm-l1`](../cmd/dogevm-l1). Anyone can check the L1 on the P-Chain, for example with `platform.getL1Validator` and the validation ID `qPanCREE6TaXz1TFT2qbt9uKvjtHg1AzWNMzYnStYAeJshNmB`.
+
+## Public testnet (retired)
+
+The hosted test network used to run at **https://metaldoge.com**; the notes below describe it and still apply to a testnet you run yourself:
 
 - **Web wallet.** Create a key (it stays in your browser), then use the faucet or deposit Dogecoin testnet DOGE and withdraw it back. The page shows the live peg audit: DOGE locked on Dogecoin against DOGE circulating on DogecoinVM.
 - **JSON-RPC** at `https://metaldoge.com/rpc`, user `public`, password `public`. It can read and broadcast but not administer.
