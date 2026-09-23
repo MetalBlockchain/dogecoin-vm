@@ -24,9 +24,12 @@ export const isBackup = (s) => typeof s === 'string' && s.trim().startsWith(PREF
 
 class PasskeyError extends Error {}
 
-const noPRF = () => new PasskeyError(
+// noPRF explains a missing PRF result, saying at which step, since that tells
+// a browser that lacks PRF apart from an authenticator that lacks it.
+const noPRF = (step, results) => new PasskeyError(
   "This browser and passkey can't encrypt the wallet: they don't support the PRF extension together. " +
-  'With a security key such as a YubiKey, use Chrome, Edge or Firefox; Safari supports it only for iCloud Keychain passkeys.');
+  'With a security key such as a YubiKey (5 series), use Chrome, Edge or Firefox; Safari supports it only for iCloud Keychain passkeys. ' +
+  `(Details: ${step}; the browser reported ${JSON.stringify(results?.prf ?? null)}.)`);
 
 function failure(err) {
   if (err.name === 'NotAllowedError') return new PasskeyError('The passkey request was cancelled, timed out, or not allowed by the browser.');
@@ -59,8 +62,9 @@ async function prfSecret(credentialId, salt) {
   } catch (err) {
     throw failure(err);
   }
-  const out = assertion?.getClientExtensionResults()?.prf?.results?.first;
-  if (!out) throw noPRF();
+  const results = assertion?.getClientExtensionResults();
+  const out = results?.prf?.results?.first;
+  if (!out) throw noPRF('the passkey was made, but returned no PRF output when used', results);
   return { secret: new Uint8Array(out), credentialId: new Uint8Array(assertion.rawId) };
 }
 
@@ -87,7 +91,8 @@ export async function protect(key) {
   }
   // Some browsers only report PRF support when it is used, so only an
   // explicit "no" stops here; otherwise the next step finds out.
-  if (credential.getClientExtensionResults()?.prf?.enabled === false) throw noPRF();
+  const made = credential.getClientExtensionResults();
+  if (made?.prf?.enabled === false) throw noPRF('the passkey was made without PRF', made);
   const salt = random(32);
   const { secret } = await prfSecret(new Uint8Array(credential.rawId), salt);
   const iv = random(12);
