@@ -121,7 +121,7 @@ UNIT
 
   # metaldoge.com serves mainnet; the testnet stack is retired.
   cat >/etc/caddy/Caddyfile <<CADDY
-$DOMAIN, ${DOMAIN/#/www.} {
+$DOMAIN {
 	handle /rpc {
 		rewrite * /ext/bc/$chain/rpc
 		reverse_proxy 127.0.0.1:9660 {
