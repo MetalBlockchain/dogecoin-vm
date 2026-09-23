@@ -149,6 +149,7 @@ document.addEventListener('click', async (e) => {
 async function loadInfo() {
   info = await api('/api/info');
   $('confs-needed').textContent = info.depositConfirmations;
+  $('confs-needed-top').textContent = info.depositConfirmations;
   $('vm-fee').textContent = tidy(info.vmFee);
   $('min-deposit').textContent = tidy(info.minDeposit);
   $('doge-fee').textContent = tidy(info.dogeFee);

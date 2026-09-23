@@ -191,26 +191,29 @@
 
       <!-- Deposit -->
       <div class="panel" role="tabpanel" id="panel-deposit" aria-labelledby="tab-deposit" hidden>
-        <h2>Deposit DOGE from Dogecoin</h2>
+        <h2>Move DOGE to DogecoinVM</h2>
+        <p class="route"><span class="route-chain route-doge">Dogecoin</span><span class="route-arrow" aria-hidden="true">→</span><span class="route-chain route-vm">DogecoinVM</span><span class="visually-hidden">: DOGE moves from Dogecoin to DogecoinVM</span></p>
+        <p class="route-lede">A deposit brings DOGE from Dogecoin onto DogecoinVM, one for one. It arrives in your DogecoinVM balance after <span id="confs-needed-top">…</span> Dogecoin confirmations, about a minute each.</p>
         <p class="needs-key">Create or import a key on the Wallet tab first.</p>
         <div class="with-key">
           <p class="notice" id="deposit-sync" hidden></p>
           <form id="move-form" class="stack move-form">
-            <h3>Move from your Dogecoin balance</h3>
+            <h3>From your Dogecoin balance</h3>
             <p class="muted" id="move-available">Your Dogecoin balance appears on the Wallet tab.</p>
             <label for="move-amount">Amount (DOGE)</label>
             <input id="move-amount" inputmode="decimal" autocomplete="off" required>
             <button class="primary" type="submit">Move to DogecoinVM</button>
             <p class="result" id="move-result" aria-live="polite"></p>
           </form>
-          <h3>Or send from any Dogecoin wallet</h3>
-          <p>Send DOGE to this Dogecoin address from any wallet. After <span id="confs-needed">…</span> confirmations it appears in your DogecoinVM wallet, less a <span id="vm-fee">…</span> DOGE fee. The minimum is <span id="min-deposit">…</span> DOGE.<span id="deposit-limits"></span></p>
+          <h3>Or from any Dogecoin wallet or exchange</h3>
+          <p>Send DOGE on Dogecoin to your deposit address below. After <span id="confs-needed">…</span> confirmations it arrives in your DogecoinVM balance, less a <span id="vm-fee">…</span> DOGE fee. The minimum is <span id="min-deposit">…</span> DOGE.<span id="deposit-limits"></span></p>
           <div class="deposit-address">
             <div id="deposit-qr" class="qr" aria-hidden="true"></div>
             <div>
-              <p class="account-label">Your Dogecoin deposit address</p>
+              <p class="account-label">Your deposit address, on Dogecoin</p>
               <p class="address address-doge"><span id="deposit-address">…</span> <button class="copy" data-copy="deposit-address" aria-label="Copy your Dogecoin deposit address">Copy</button></p>
               <p class="verified" id="deposit-verified" aria-live="polite"></p>
+              <p class="deposit-note">This is only for deposits. DOGE sent to your wallet address stays on Dogecoin, in your Dogecoin balance.</p>
             </div>
           </div>
           <h3>Your deposits</h3>
@@ -220,7 +223,8 @@
 
       <!-- Withdraw -->
       <div class="panel" role="tabpanel" id="panel-withdraw" aria-labelledby="tab-withdraw" hidden>
-        <h2>Withdraw DOGE to Dogecoin</h2>
+        <h2>Move DOGE back to Dogecoin</h2>
+        <p class="route"><span class="route-chain route-vm">DogecoinVM</span><span class="route-arrow" aria-hidden="true">→</span><span class="route-chain route-doge">Dogecoin</span><span class="visually-hidden">: DOGE moves from DogecoinVM to Dogecoin</span></p>
         <p class="needs-key">Create or import a key on the Wallet tab first.</p>
         <form id="withdraw-form" class="stack with-key">
           <p>The bridge pays your Dogecoin address once the withdrawal is in a DogecoinVM block, less a <span id="doge-fee">…</span> DOGE Dogecoin fee. The minimum is <span id="min-pegout">…</span> DOGE.</p>

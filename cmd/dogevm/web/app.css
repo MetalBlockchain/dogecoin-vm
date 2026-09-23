@@ -433,3 +433,13 @@ dialog.review::backdrop { background: rgba(13, 21, 36, 0.6); }
 .setup-text { margin: 0.2rem 0 0; color: var(--ink-soft); }
 .setup-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.75rem; }
 .setup-reopen { margin: 1rem 0 0; }
+
+/* Which way DOGE moves on the Deposit and Withdraw tabs. */
+
+.route { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0 0 0.75rem; }
+.route-chain { font-weight: 600; padding: 0.3rem 0.75rem; border-radius: 99px; }
+.route-doge { background: var(--coin-wash); color: var(--coin-ink); }
+.route-vm { background: var(--vm-wash); color: var(--vm-ink); }
+.route-arrow { font-size: var(--step-1); color: var(--ink-soft); }
+.route-lede { color: var(--ink-soft); margin-top: 0; }
+.deposit-note { font-size: var(--step--1); color: var(--ink-soft); margin: 0.5rem 0 0; }
