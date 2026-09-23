@@ -25,11 +25,15 @@ import (
 // payment tags are only trusted on transactions that spend peg outputs,
 // which only the signers can create.
 type bridge struct {
-	signers    *signerSet
-	registry   *depositRegistry // personal deposit addresses; may be nil
-	vm, doge   chain
-	vmParams   *chaincfg.Params
-	dogeParams *chaincfg.Params
+	signers *signerSet
+	// cosigners are remote signers, each holding one key, asked to sign
+	// what this process cannot sign with the keys in signers.
+	cosigners     []*remoteSigner
+	cosignersPath string
+	registry      *depositRegistry // personal deposit addresses; may be nil
+	vm, doge      chain
+	vmParams      *chaincfg.Params
+	dogeParams    *chaincfg.Params
 
 	depositConfirmations int64
 	vmFee                int64 // deducted from each credit to pay the VM fee
@@ -67,9 +71,10 @@ type pegOut struct {
 
 // pegState is everything the bridge knows, read from both chains.
 type pegState struct {
-	redeemFor       map[string][]byte // Dogecoin peg output script -> redeem script
-	reserveCreated  int64             // reserve paid in by consensus (coinbases)
-	reserveUnspent  int64             // reserve still held
+	redeemFor       map[string][]byte      // Dogecoin peg output script -> redeem script
+	depositDest     map[string]destination // personal deposit script -> its destination
+	reserveCreated  int64                  // reserve paid in by consensus (coinbases)
+	reserveUnspent  int64                  // reserve still held
 	reserveUTXOs    []utxo
 	vmPending       bool                             // a release is still in the VM mempool
 	released        map[wire.OutPoint]chainhash.Hash // deposit -> release txid
@@ -246,6 +251,7 @@ func (b *bridge) load() (*pegState, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.depositDest = depositDest
 	dogeTxs, err := b.doge.txsFor(dogeAddrs)
 	if err != nil {
 		return nil, fmt.Errorf("reading Dogecoin peg addresses: %w", err)
@@ -420,6 +426,26 @@ func (b *bridge) release(s *pegState, d deposit) (chainhash.Hash, error) {
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
+	tx := b.buildRelease(inputs, total, d)
+	redeems := make([][]byte, len(tx.TxIn))
+	for i := range redeems {
+		redeems[i] = b.signers.redeemScript
+	}
+	p := &proposal{
+		Chain: chainDogecoinVM, tx: tx, redeems: redeems,
+		Action:   action{Kind: actionRelease, Deposit: d.outPoint.String()},
+		Register: []destination{d.dest},
+	}
+	if err := b.authorize(p); err != nil {
+		return chainhash.Hash{}, err
+	}
+	return b.vm.send(tx)
+}
+
+// buildRelease is the unsigned transaction crediting d from inputs, which
+// hold total. Signers rebuild it to check a proposal, so it must depend
+// only on its arguments.
+func (b *bridge) buildRelease(inputs []utxo, total int64, d deposit) *wire.MsgTx {
 	tx := wire.NewMsgTx(wire.TxVersion)
 	for _, u := range inputs {
 		tx.AddTxIn(wire.NewTxIn(&u.outPoint, nil, nil))
@@ -429,25 +455,19 @@ func (b *bridge) release(s *pegState, d deposit) (chainhash.Hash, error) {
 		tx.AddTxOut(wire.NewTxOut(change, b.signers.pkScript()))
 	}
 	tx.AddTxOut(nullData(encodeRelease(d.outPoint)))
-	redeems := make([][]byte, len(tx.TxIn))
-	for i := range redeems {
-		redeems[i] = b.signers.redeemScript
-	}
-	if err := b.signers.sign(tx, redeems); err != nil {
-		return chainhash.Hash{}, err
-	}
-	return b.vm.send(tx)
+	return tx
 }
 
 // pay pays peg-out p on Dogecoin from the peg address. The peg gives up the
 // full peg-out; the Dogecoin fee comes out of the payment.
 func (b *bridge) pay(s *pegState, p pegOut) (chainhash.Hash, error) {
-	return b.payFromPeg(s, p.value, p.dest, encodePayment(p.txid))
+	return b.payFromPeg(s, p.value, p.dest, encodePayment(p.txid),
+		action{Kind: actionPayout, PegOut: p.txid.String()})
 }
 
 // payFromPeg pays value, less the Dogecoin fee, to dest from confirmed peg
 // outputs on Dogecoin, tagged with data. Change returns to the peg address.
-func (b *bridge) payFromPeg(s *pegState, value int64, dest destination, data []byte) (chainhash.Hash, error) {
+func (b *bridge) payFromPeg(s *pegState, value int64, dest destination, data []byte, why action) (chainhash.Hash, error) {
 	var confirmed []utxo
 	for _, u := range s.lockedUTXOs {
 		if u.confirmations > 0 {
@@ -461,6 +481,28 @@ func (b *bridge) payFromPeg(s *pegState, value int64, dest destination, data []b
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
+	tx := b.buildPayout(inputs, total, value, dest, data)
+	redeems := make([][]byte, len(inputs))
+	var register []destination
+	for i, u := range inputs {
+		if redeems[i] = s.redeemFor[string(u.pkScript)]; redeems[i] == nil {
+			return chainhash.Hash{}, fmt.Errorf("no redeem script for peg output %v", u.outPoint)
+		}
+		if d, ok := s.depositDest[string(u.pkScript)]; ok {
+			register = append(register, d)
+		}
+	}
+	p := &proposal{Chain: chainDogecoin, Action: why, tx: tx, redeems: redeems, Register: register}
+	if err := b.authorize(p); err != nil {
+		return chainhash.Hash{}, err
+	}
+	return b.doge.send(tx)
+}
+
+// buildPayout is the unsigned Dogecoin transaction paying value, less the
+// Dogecoin fee, to dest from inputs, which hold total. Like buildRelease,
+// signers rebuild it, so it depends only on its arguments.
+func (b *bridge) buildPayout(inputs []utxo, total, value int64, dest destination, data []byte) *wire.MsgTx {
 	tx := wire.NewMsgTx(1) // Dogecoin Core 1.14 relays version 1 and 2
 	for _, u := range inputs {
 		tx.AddTxIn(wire.NewTxIn(&u.outPoint, nil, nil))
@@ -472,16 +514,7 @@ func (b *bridge) payFromPeg(s *pegState, value int64, dest destination, data []b
 		tx.AddTxOut(wire.NewTxOut(change, b.signers.pkScript()))
 	}
 	tx.AddTxOut(nullData(data))
-	redeems := make([][]byte, len(inputs))
-	for i, u := range inputs {
-		if redeems[i] = s.redeemFor[string(u.pkScript)]; redeems[i] == nil {
-			return chainhash.Hash{}, fmt.Errorf("no redeem script for peg output %v", u.outPoint)
-		}
-	}
-	if err := b.signers.sign(tx, redeems); err != nil {
-		return chainhash.Hash{}, err
-	}
-	return b.doge.send(tx)
+	return tx
 }
 
 var (
@@ -507,7 +540,7 @@ func (b *bridge) refund(op wire.OutPoint, dest destination, force bool) (chainha
 	}
 	for _, d := range s.held {
 		if d.outPoint == op {
-			return b.payFromPeg(s, d.value, dest, encodeRefund(op))
+			return b.payFromPeg(s, d.value, dest, encodeRefund(op), refundAction(op, dest))
 		}
 	}
 	for _, d := range s.deposits {
@@ -515,7 +548,7 @@ func (b *bridge) refund(op wire.OutPoint, dest destination, force bool) (chainha
 			if !force {
 				return chainhash.Hash{}, errCreditable
 			}
-			return b.payFromPeg(s, d.value, dest, encodeRefund(op))
+			return b.payFromPeg(s, d.value, dest, encodeRefund(op), refundAction(op, dest))
 		}
 	}
 	return chainhash.Hash{}, errNotRefundable

@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
 	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
 	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
 	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
@@ -146,38 +147,101 @@ func p2shScript(redeemScript []byte) []byte {
 	return destination{kind: destP2SH, hash: hash160Of(redeemScript)}.pkScript()
 }
 
-// sign signs every input of tx. redeemScripts[i] is the redeem script of
-// the peg output input i spends: the peg multisig or a deposit script.
+// sign signs every input of tx with the private keys this process holds.
+// redeemScripts[i] is the redeem script of the peg output input i spends:
+// the peg multisig or a deposit script.
 func (s *signerSet) sign(tx *wire.MsgTx, redeemScripts [][]byte) error {
-	if len(redeemScripts) != len(tx.TxIn) {
-		return fmt.Errorf("have %d redeem scripts for %d inputs", len(redeemScripts), len(tx.TxIn))
-	}
-
-	// CHECKMULTISIG needs signatures in public key order.
-	var signers []*btcec.PrivateKey
-	for _, pub := range s.pubKeys {
+	sigs := map[int][][]byte{}
+	for i, pub := range s.pubKeys {
 		for _, key := range s.privKeys {
 			if key.PubKey().IsEqual(pub) {
-				signers = append(signers, key)
+				inputSigs, err := signInputs(tx, redeemScripts, key)
+				if err != nil {
+					return err
+				}
+				sigs[i] = inputSigs
 				break
 			}
 		}
-		if len(signers) == s.Required {
-			break
+	}
+	return s.assemble(tx, redeemScripts, sigs)
+}
+
+// indexOf returns the position of pub in the set, or -1.
+func (s *signerSet) indexOf(pub *btcec.PublicKey) int {
+	for i, p := range s.pubKeys {
+		if p.IsEqual(pub) {
+			return i
+		}
+	}
+	return -1
+}
+
+// signInputs returns key's signature, with its sighash byte, for each input
+// of tx. redeemScripts[i] is the script input i spends.
+func signInputs(tx *wire.MsgTx, redeemScripts [][]byte, key *btcec.PrivateKey) ([][]byte, error) {
+	if len(redeemScripts) != len(tx.TxIn) {
+		return nil, fmt.Errorf("have %d redeem scripts for %d inputs", len(redeemScripts), len(tx.TxIn))
+	}
+	sigs := make([][]byte, len(tx.TxIn))
+	for i, redeem := range redeemScripts {
+		sig, err := txscript.RawTxInSignature(tx, i, redeem, txscript.SigHashAll, key)
+		if err != nil {
+			return nil, fmt.Errorf("signing input %d: %w", i, err)
+		}
+		sigs[i] = sig
+	}
+	return sigs, nil
+}
+
+// verifyInputs checks sigs are the signer at index's signatures of every
+// input of tx.
+func (s *signerSet) verifyInputs(tx *wire.MsgTx, redeemScripts [][]byte, index int, sigs [][]byte) error {
+	if index < 0 || index >= len(s.pubKeys) {
+		return fmt.Errorf("no signer %d", index)
+	}
+	if len(sigs) != len(tx.TxIn) || len(redeemScripts) != len(tx.TxIn) {
+		return fmt.Errorf("have %d signatures for %d inputs", len(sigs), len(tx.TxIn))
+	}
+	for i, sig := range sigs {
+		if len(sig) < 2 || txscript.SigHashType(sig[len(sig)-1]) != txscript.SigHashAll {
+			return fmt.Errorf("input %d: not a SIGHASH_ALL signature", i)
+		}
+		parsed, err := ecdsa.ParseDERSignature(sig[:len(sig)-1])
+		if err != nil {
+			return fmt.Errorf("input %d: %w", i, err)
+		}
+		hash, err := txscript.CalcSignatureHash(redeemScripts[i], txscript.SigHashAll, tx, i)
+		if err != nil {
+			return err
+		}
+		if !parsed.Verify(hash, s.pubKeys[index]) {
+			return fmt.Errorf("input %d: signature does not verify", i)
+		}
+	}
+	return nil
+}
+
+// assemble completes tx's signature scripts from the signatures of at least
+// Required signers, keyed by their position in the set.
+func (s *signerSet) assemble(tx *wire.MsgTx, redeemScripts [][]byte, sigs map[int][][]byte) error {
+	if len(redeemScripts) != len(tx.TxIn) {
+		return fmt.Errorf("have %d redeem scripts for %d inputs", len(redeemScripts), len(tx.TxIn))
+	}
+	// CHECKMULTISIG needs signatures in public key order.
+	var signers []int
+	for i := range s.pubKeys {
+		if _, ok := sigs[i]; ok && len(signers) < s.Required {
+			signers = append(signers, i)
 		}
 	}
 	if len(signers) < s.Required {
-		return fmt.Errorf("have %d of the signer private keys, need %d", len(signers), s.Required)
+		return fmt.Errorf("have signatures from %d signers, need %d", len(signers), s.Required)
 	}
-
 	for i, redeem := range redeemScripts {
 		b := txscript.NewScriptBuilder().AddOp(txscript.OP_0) // CHECKMULTISIG's extra pop
-		for _, key := range signers {
-			sig, err := txscript.RawTxInSignature(tx, i, redeem, txscript.SigHashAll, key)
-			if err != nil {
-				return fmt.Errorf("signing input %d: %w", i, err)
-			}
-			b.AddData(sig)
+		for _, signer := range signers {
+			b.AddData(sigs[signer][i])
 		}
 		sigScript, err := b.AddData(redeem).Script()
 		if err != nil {

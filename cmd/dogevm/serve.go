@@ -647,7 +647,9 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	b.connect(&s, signers)
+	if err := b.connect(&s, signers); err != nil {
+		return err
+	}
 	b.registry = registryFor(*depositsPath, *signersPath)
 
 	srv := &server{
