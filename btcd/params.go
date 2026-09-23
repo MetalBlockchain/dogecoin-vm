@@ -143,27 +143,12 @@ func newDogecoinVMParams() chaincfg.Params {
 					time.Time{}, // Never expires
 				),
 			},
-			// TODO(dogecoinvm): Dogecoin has neither SegWit nor Taproot.
-			// Both are disabled as a separate step.
-			chaincfg.DeploymentSegwit: {
-				BitNumber: 1,
-				DeploymentStarter: chaincfg.NewMedianTimeDeploymentStarter(
-					time.Time{}, // Always available for vote
-				),
-				DeploymentEnder: chaincfg.NewMedianTimeDeploymentEnder(
-					time.Time{}, // Never expires.
-				),
-			},
-			chaincfg.DeploymentTaproot: {
-				BitNumber: 2,
-				DeploymentStarter: chaincfg.NewMedianTimeDeploymentStarter(
-					time.Time{}, // Always available for vote
-				),
-				DeploymentEnder: chaincfg.NewMedianTimeDeploymentEnder(
-					time.Time{}, // Never expires.
-				),
-				CustomActivationThreshold: 75, // Only needs 75% hash rate.
-			},
+			// Dogecoin has neither SegWit nor Taproot. A deployment that
+			// has started gets signalled by every block template and
+			// would lock in within a few hundred blocks, so these never
+			// start.
+			chaincfg.DeploymentSegwit:  neverStartedDeployment(1),
+			chaincfg.DeploymentTaproot: neverStartedDeployment(2),
 			chaincfg.DeploymentTestDummyAlwaysActive: {
 				BitNumber: 29,
 				DeploymentStarter: chaincfg.NewMedianTimeDeploymentStarter(
@@ -176,8 +161,24 @@ func newDogecoinVMParams() chaincfg.Params {
 			},
 		},
 
-		// Mempool parameters
-		RelayNonStdTxs: true,
+		// Mempool parameters. Standardness carries Dogecoin's dust rules
+		// and keeps witness outputs out of the mempool, so it is enforced
+		// on every network.
+		RelayNonStdTxs: false,
+	}
+}
+
+// neverStartedDeployment returns a deployment that never starts, so it can
+// never be signalled, locked in or activated.
+func neverStartedDeployment(bit uint8) chaincfg.ConsensusDeployment {
+	return chaincfg.ConsensusDeployment{
+		BitNumber: bit,
+		DeploymentStarter: chaincfg.NewMedianTimeDeploymentStarter(
+			time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC),
+		),
+		DeploymentEnder: chaincfg.NewMedianTimeDeploymentEnder(
+			time.Time{}, // Never expires.
+		),
 	}
 }
 
@@ -194,9 +195,9 @@ var DogecoinVMMainNetParams = func() chaincfg.Params {
 	p.GenesisBlock = dogecoinVMMainNetGenesisBlock
 	p.GenesisHash = &dogecoinVMMainNetGenesisHash
 
-	// Dogecoin has no bech32 addresses. This HRP only exists until SegWit
-	// is disabled and must never be handed to users.
-	p.Bech32HRPSegwit = "dogevm"
+	// Dogecoin has no bech32 addresses. With an empty HRP no string
+	// decodes as a segwit address.
+	p.Bech32HRPSegwit = ""
 
 	// Address encoding magics (Dogecoin Core chainparams.cpp, CMainParams)
 	p.PubKeyHashAddrID = 30 // starts with D
@@ -227,9 +228,9 @@ var DogecoinVMTestNetParams = func() chaincfg.Params {
 	p.GenesisBlock = dogecoinVMTestNetGenesisBlock
 	p.GenesisHash = &dogecoinVMTestNetGenesisHash
 
-	// Dogecoin has no bech32 addresses. This HRP only exists until SegWit
-	// is disabled and must never be handed to users.
-	p.Bech32HRPSegwit = "tdogevm"
+	// Dogecoin has no bech32 addresses. With an empty HRP no string
+	// decodes as a segwit address.
+	p.Bech32HRPSegwit = ""
 
 	// Address encoding magics (Dogecoin Core chainparams.cpp, CTestNetParams)
 	p.PubKeyHashAddrID = 113 // starts with n

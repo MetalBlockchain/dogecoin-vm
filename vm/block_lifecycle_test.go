@@ -20,6 +20,7 @@ import (
 	btcd "github.com/MetalBlockchain/btcvm/btcd"
 	"github.com/MetalBlockchain/btcvm/btcd/blockchain"
 	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
+	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
 	"github.com/MetalBlockchain/btcvm/btcd/txscript"
 	"github.com/MetalBlockchain/btcvm/btcd/wire"
 )
@@ -319,4 +320,50 @@ func TestLastAcceptedSurvivesRestart(t *testing.T) {
 	require.Equal(blk.ID(), lastAccepted)
 	_, err = vm.GetBlock(ctx, pending.ID())
 	require.ErrorIs(err, database.ErrNotFound)
+}
+
+// acceptBlocks builds, verifies and accepts n blocks.
+func acceptBlocks(t *testing.T, vm *VM, n int) {
+	t.Helper()
+	ctx := context.Background()
+	for i := 0; i < n; i++ {
+		blk := buildBlock(t, vm)
+		require.NoError(t, blk.Verify(ctx))
+		require.NoError(t, blk.Accept(ctx))
+	}
+}
+
+// TestSegwitAndTaprootNeverActivate checks that DogecoinVM never activates
+// SegWit or Taproot. Under btcvm's parameters both locked in within a few
+// hundred blocks, because every block template signalled for them.
+func TestSegwitAndTaprootNeverActivate(t *testing.T) {
+	require := require.New(t)
+	vm := setupVM(t)
+
+	// Four miner confirmation windows: enough to start, lock in and
+	// activate a deployment that every block signals for.
+	acceptBlocks(t, vm, 4*int(vm.config.ChainParams.MinerConfirmationWindow))
+
+	for _, deployment := range []uint32{chaincfg.DeploymentSegwit, chaincfg.DeploymentTaproot} {
+		active, err := vm.chain.IsDeploymentActive(deployment)
+		require.NoError(err)
+		require.False(active, "deployment %d is active", deployment)
+	}
+}
+
+// TestVerifyRejectsWitnessData checks that a block carrying witness data is
+// invalid while SegWit is inactive.
+func TestVerifyRejectsWitnessData(t *testing.T) {
+	require := require.New(t)
+	ctx := context.Background()
+	vm := setupVM(t)
+	blk := buildBlock(t, vm)
+
+	b := parse(t, vm, mutateBlock(t, blk, 1, 0, func(msg *wire.MsgBlock) {
+		msg.Transactions[0].TxIn[0].Witness = wire.TxWitness{make([]byte, 32)}
+	}))
+	err := b.Verify(ctx)
+	var ruleErr blockchain.RuleError
+	require.True(errors.As(err, &ruleErr), "got %v", err)
+	require.Equal(blockchain.ErrUnexpectedWitness, ruleErr.ErrorCode)
 }

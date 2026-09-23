@@ -317,13 +317,11 @@ func newPoolHarness(chainParams *chaincfg.Params) (*poolHarness, []spendableOutp
 		chain: chain,
 		txPool: New(&Config{
 			Policy: Policy{
-				DisableRelayPriority: true,
-				FreeTxRelayLimit:     15.0,
-				MaxOrphanTxs:         5,
-				MaxOrphanTxSize:      1000,
-				MaxSigOpCostPerTx:    blockchain.MaxBlockSigOpsCost / 4,
-				MinRelayTxFee:        1000, // 1 Satoshi per byte
-				MaxTxVersion:         1,
+				MaxOrphanTxs:      5,
+				MaxOrphanTxSize:   1000,
+				MaxSigOpCostPerTx: blockchain.MaxBlockSigOpsCost / 4,
+				MinRelayTxFee:     0, // fee policy is covered by TestDogecoinRelayFee
+				MaxTxVersion:      1,
 			},
 			ChainParams:      chainParams,
 			FetchUtxoView:    chain.FetchUtxoView,
@@ -1800,11 +1798,6 @@ func TestRBF(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unable to create test pool: %v", err)
 			}
-
-			// We'll enable relay priority to ensure we can properly
-			// test fees between replacement transactions and the
-			// transactions it replaces.
-			harness.txPool.cfg.Policy.DisableRelayPriority = false
 
 			// Each test includes a setup method, which will set up
 			// its required dependencies. The transaction returned

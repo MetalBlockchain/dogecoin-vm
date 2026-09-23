@@ -880,6 +880,21 @@ func (b *BlockChain) checkBlockContext(block *btcutil.Block, prevNode *blockNode
 					blockWeight, MaxBlockWeight)
 				return ruleError(ErrBlockWeightTooHigh, str)
 			}
+		} else {
+			// Before segwit is active, witness data is not
+			// committed to by the block hash, so accepting it
+			// would let the same block ID carry arbitrary,
+			// unweighted bytes. Reject it, as Bitcoin Core does
+			// ("unexpected-witness"). DogecoinVM never activates
+			// segwit, so this always applies there.
+			for _, tx := range block.Transactions() {
+				if tx.MsgTx().HasWitness() {
+					str := fmt.Sprintf("block contains "+
+						"transaction %v with witness data "+
+						"before segwit is active", tx.Hash())
+					return ruleError(ErrUnexpectedWitness, str)
+				}
+			}
 		}
 	}
 

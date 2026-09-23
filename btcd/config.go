@@ -50,7 +50,6 @@ const (
 	defaultMaxRPCWebsockets      = 25
 	defaultMaxRPCConcurrentReqs  = 20
 	defaultDbType                = "ffldb"
-	defaultFreeTxRelayLimit      = 15.0
 	defaultTrickleInterval       = peer.DefaultTrickleInterval
 	defaultBlockMinSize          = 0
 	defaultBlockMaxSize          = 750000
@@ -127,13 +126,12 @@ type Config struct {
 	DropTxIndex          bool          `json:"dropTxIndex"          long:"droptxindex"          description:"Deletes the hash-based transaction index from the database on start up and then exits."`
 	ExternalIPs          []string      `json:"externalIPs"          long:"externalip"           description:"Add an ip to the list of local addresses we claim to listen on to peers"`
 	Generate             bool          `json:"generate"             long:"generate"             description:"Generate (mine) bitcoins using the CPU"`
-	FreeTxRelayLimit     float64       `json:"freeTxRelayLimit"     long:"limitfreerelay"       description:"Limit relay of transactions with no transaction fee to the given amount in thousands of bytes per minute"`
 	Listeners            []string      `json:"listeners"            long:"listen"               description:"Add an interface/port to listen for connections (default all interfaces port: 8333, testnet: 18333)"`
 	LogDir               string        `json:"logDir"               long:"logdir"               description:"Directory to log output."`
 	MaxOrphanTxs         int           `json:"maxOrphanTxs"         long:"maxorphantx"          description:"Max number of orphan transactions to keep in memory"`
 	MaxPeers             int           `json:"maxPeers"             long:"maxpeers"             description:"Max number of inbound and outbound peers"`
 	MiningAddrs          []string      `json:"miningAddrs"          long:"miningaddr"           description:"Add the specified payment address to the list of addresses to use for generated blocks -- At least one address is required if the generate option is set"`
-	MinRelayTxFee        float64       `json:"minRelayTxFee"        long:"minrelaytxfee"        description:"The minimum transaction fee in BTC/kB to be considered a non-zero fee."`
+	MinRelayTxFee        float64       `json:"minRelayTxFee"        long:"minrelaytxfee"        description:"The minimum transaction fee rate in DOGE/kB every relayed transaction must pay"`
 	DisableBanning       bool          `json:"disableBanning"       long:"nobanning"            description:"Disable banning of misbehaving peers"`
 	NoCFilters           bool          `json:"noCFilters"           long:"nocfilters"           description:"Disable committed filtering (CF) support"`
 	DisableCheckpoints   bool          `json:"disableCheckpoints"   long:"nocheckpoints"        description:"Disable built-in checkpoints.  Don't do this unless you know what you're doing."`
@@ -141,7 +139,6 @@ type Config struct {
 	DisableListen        bool          `json:"disableListen"        long:"nolisten"             description:"Disable listening for incoming connections -- NOTE: Listening is automatically disabled if the --connect or --proxy options are used without also specifying listen interfaces via --listen"`
 	NoOnion              bool          `json:"noOnion"              long:"noonion"              description:"Disable connecting to tor hidden services"`
 	NoPeerBloomFilters   bool          `json:"noPeerBloomFilters"   long:"nopeerbloomfilters"   description:"Disable bloom filtering support"`
-	NoRelayPriority      bool          `json:"noRelayPriority"      long:"norelaypriority"      description:"Do not require free or low-fee transactions to have high priority for relaying"`
 	NoWinService         bool          `json:"noWinService"         long:"nowinservice"         description:"Do not start as a background service on Windows -- NOTE: This flag only works on the command line, not in the config file"`
 	DisableRPC           bool          `json:"disableRPC"           long:"norpc"                description:"Disable built-in RPC server -- NOTE: The RPC server is disabled by default if no rpcuser/rpcpass or rpclimituser/rpclimitpass is specified"`
 	DisableStallHandler  bool          `json:"disableStallHandler"  long:"nostalldetect"        description:"Disables the stall handler system for each peer, useful in simnet/regtest integration tests frameworks"`
@@ -476,7 +473,6 @@ func LoadConfig(nodeId string, overrideCfg *Config) (*Config, []string, error) {
 		RPCKey:               defaultRPCKeyFile,
 		RPCCert:              defaultRPCCertFile,
 		MinRelayTxFee:        mempool.DefaultMinRelayTxFee.ToBTC(),
-		FreeTxRelayLimit:     defaultFreeTxRelayLimit,
 		TrickleInterval:      defaultTrickleInterval,
 		BlockMinSize:         defaultBlockMinSize,
 		BlockMaxSize:         defaultBlockMaxSize,

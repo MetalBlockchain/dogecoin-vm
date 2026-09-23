@@ -22,6 +22,20 @@ DogecoinVM is a fork of [MetalBlockchain/btcvm](https://github.com/MetalBlockcha
 
 The parameters live in [`btcd/params.go`](btcd/params.go). The encodings match Dogecoin Core's `chainparams.cpp`.
 
+## Fees and policy
+
+Relay policy matches Dogecoin Core 1.14 ([`btcd/mempool/policy.go`](btcd/mempool/policy.go)):
+
+| Rule | Value |
+|---|---|
+| Minimum relay fee | 0.001 DOGE/kB, required on every transaction (no free or priority relay) |
+| Soft dust | each spendable output below 0.01 DOGE adds 0.01 DOGE to the required fee |
+| Hard dust | a spendable output below 0.001 DOGE makes the transaction non-standard |
+| OP_RETURN | never dust; at most one per transaction |
+| Replace-by-fee increment | 0.0001 DOGE/kB |
+
+Dogecoin has no SegWit or Taproot, and DogecoinVM never activates either. Witness outputs are non-standard, and a block carrying witness data is invalid.
+
 ## How it works
 
 Metal's Snowman consensus orders blocks, and btcd validates and stores them. The adapter in [`vm/block_adapter.go`](vm/block_adapter.go) keeps one rule: **btcd only ever holds accepted blocks.**
@@ -37,7 +51,7 @@ As a result, btcd's chain tip is always the last accepted block. Blocks propagat
 
 1. ~~Dogecoin chain parameters~~ — done
 2. ~~Snowman block lifecycle~~ — done
-3. Dogecoin fee and dust policy; disable SegWit and Taproot — in progress
+3. ~~Dogecoin fee and dust policy; disable SegWit and Taproot~~ — done
 4. Peg-in/peg-out, supply accounting in arbitrary precision, and Warp/ICM messaging
 5. RPC responses shaped like Dogecoin Core's
 

@@ -34,16 +34,17 @@ func TestCalcMinRequiredTxRelayFee(t *testing.T) {
 			3,
 		},
 		{
+			// 0.001 DOGE/kB.
 			"100 bytes with default minimum relay fee",
 			100,
 			DefaultMinRelayTxFee,
-			100,
+			10000,
 		},
 		{
 			"max standard tx size with default minimum relay fee",
 			maxStandardTxWeight / 4,
 			DefaultMinRelayTxFee,
-			100000,
+			10000000,
 		},
 		{
 			"max standard tx size with max satoshi relay fee",
@@ -205,75 +206,72 @@ func TestCheckPkScriptStandard(t *testing.T) {
 
 // TestDust tests the IsDust API.
 func TestDust(t *testing.T) {
-	pkScript := []byte{0x76, 0xa9, 0x21, 0x03, 0x2f, 0x7e, 0x43,
-		0x0a, 0xa4, 0xc9, 0xd1, 0x59, 0x43, 0x7e, 0x84, 0xb9,
-		0x75, 0xdc, 0x76, 0xd9, 0x00, 0x3b, 0xf0, 0x92, 0x2c,
-		0xf3, 0xaa, 0x45, 0x28, 0x46, 0x4b, 0xab, 0x78, 0x0d,
-		0xba, 0x5e, 0x88, 0xac}
+	p2pkh := []byte{0x76, 0xa9, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x88, 0xac}
+	opReturn := []byte{txscript.OP_RETURN, 0x01, 0x42}
 
 	tests := []struct {
-		name     string // test description
-		txOut    wire.TxOut
-		relayFee btcutil.Amount // minimum relay transaction fee.
-		isDust   bool
+		name      string
+		txOut     wire.TxOut
+		dustLimit btcutil.Amount
+		isDust    bool
 	}{
-		{
-			// Any value is allowed with a zero relay fee.
-			"zero value with zero relay fee",
-			wire.TxOut{Value: 0, PkScript: pkScript},
-			0,
-			false,
-		},
-		{
-			// Zero value is dust with any relay fee"
-			"zero value with very small tx fee",
-			wire.TxOut{Value: 0, PkScript: pkScript},
-			1,
-			true,
-		},
-		{
-			"38 byte public key script with value 584",
-			wire.TxOut{Value: 584, PkScript: pkScript},
-			1000,
-			true,
-		},
-		{
-			"38 byte public key script with value 585",
-			wire.TxOut{Value: 585, PkScript: pkScript},
-			1000,
-			false,
-		},
-		{
-			// Maximum allowed value is never dust.
-			"max satoshi amount is never dust",
-			wire.TxOut{Value: btcutil.MaxSatoshi, PkScript: pkScript},
-			btcutil.MaxSatoshi,
-			false,
-		},
-		{
-			// Maximum int64 value. IsDust compares exactly rather
-			// than overflowing, and value*1000 exceeds
-			// fee*threshold, so this is not dust.
-			"maximum int64 value",
-			wire.TxOut{Value: 1<<63 - 1, PkScript: pkScript},
-			1<<63 - 1,
-			false,
-		},
-		{
-			// Unspendable pkScript due to an invalid public key
-			// script.
-			"unspendable pkScript",
-			wire.TxOut{Value: 5000, PkScript: []byte{0x01}},
-			0, // no relay fee
-			true,
-		},
+		{"zero value with zero limit", wire.TxOut{Value: 0, PkScript: p2pkh}, 0, false},
+		{"zero value", wire.TxOut{Value: 0, PkScript: p2pkh}, DefaultHardDustLimit, true},
+		{"one koinu below hard limit", wire.TxOut{Value: 99999, PkScript: p2pkh}, DefaultHardDustLimit, true},
+		{"exactly hard limit", wire.TxOut{Value: 100000, PkScript: p2pkh}, DefaultHardDustLimit, false},
+		{"one koinu below soft limit", wire.TxOut{Value: 999999, PkScript: p2pkh}, DefaultDustLimit, true},
+		{"exactly soft limit", wire.TxOut{Value: 1000000, PkScript: p2pkh}, DefaultDustLimit, false},
+		{"MAX_MONEY", wire.TxOut{Value: btcutil.MaxSatoshi, PkScript: p2pkh}, DefaultDustLimit, false},
+		{"maximum int64 value", wire.TxOut{Value: 1<<63 - 1, PkScript: p2pkh}, 1<<63 - 1, false},
+		// As in Dogecoin Core, unspendable outputs are never dust.
+		{"zero value OP_RETURN", wire.TxOut{Value: 0, PkScript: opReturn}, DefaultDustLimit, false},
 	}
 	for _, test := range tests {
-		res := IsDust(&test.txOut, test.relayFee)
-		if res != test.isDust {
-			t.Fatalf("Dust test '%s' failed: want %v got %v",
-				test.name, test.isDust, res)
+		if got := IsDust(&test.txOut, test.dustLimit); got != test.isDust {
+			t.Errorf("Dust test '%s' failed: want %v got %v",
+				test.name, test.isDust, got)
 		}
+	}
+}
+
+// TestCalcDustFee checks Dogecoin's soft dust surcharge: the dust limit is
+// added once for every spendable output below it.
+func TestCalcDustFee(t *testing.T) {
+	p2pkh := []byte{0x76, 0xa9, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x88, 0xac}
+	opReturn := []byte{txscript.OP_RETURN, 0x01, 0x42}
+
+	tests := []struct {
+		name   string
+		values []int64
+		script []byte
+		want   int64
+	}{
+		{"no dust", []int64{1000000, 5e8}, p2pkh, 0},
+		{"one dust output", []int64{999999, 5e8}, p2pkh, 1000000},
+		{"three dust outputs", []int64{1, 500000, 999999, 5e8}, p2pkh, 3000000},
+		{"OP_RETURN is not dust", []int64{0}, opReturn, 0},
+	}
+	for _, test := range tests {
+		tx := wire.NewMsgTx(1)
+		for _, v := range test.values {
+			tx.AddTxOut(wire.NewTxOut(v, test.script))
+		}
+		if got := calcDustFee(tx, DefaultDustLimit); got != test.want {
+			t.Errorf("%s: dust fee %d, want %d", test.name, got, test.want)
+		}
+	}
+
+	// The surcharge is clamped to MAX_MONEY rather than overflowing.
+	tx := wire.NewMsgTx(1)
+	for i := 0; i < 3; i++ {
+		tx.AddTxOut(wire.NewTxOut(0, p2pkh))
+	}
+	if got := calcDustFee(tx, btcutil.MaxSatoshi); got != btcutil.MaxSatoshi {
+		t.Errorf("huge dust limit: dust fee %d, want MaxSatoshi", got)
 	}
 }
 

@@ -69,9 +69,6 @@ Application Options:
 	    --externalip=           Add an ip to the list of local addresses we claim
 	                            to listen on to peers
 	    --generate              Generate (mine) bitcoins using the CPU
-	    --limitfreerelay=       Limit relay of transactions with no transaction
-	                            fee to the given amount in thousands of bytes per
-	                            minute (default: 15)
 	    --listen=               Add an interface/port to listen for connections
 	                            (default all interfaces port: 8333, testnet:
 	                            18333, signet: 38333)
@@ -84,8 +81,8 @@ Application Options:
 	                            addresses to use for generated blocks -- At least
 	                            one address is required if the generate option is
 	                            set
-	    --minrelaytxfee=        The minimum transaction fee in BTC/kB to be
-	                            considered a non-zero fee. (default: 1e-05)
+	    --minrelaytxfee=        The minimum transaction fee rate in DOGE/kB every
+	                            relayed transaction must pay (default: 0.001)
 	    --nobanning             Disable banning of misbehaving peers
 	    --nocfilters            Disable committed filtering (CF) support
 	    --nocheckpoints         Disable built-in checkpoints.  Don't do this
@@ -97,8 +94,6 @@ Application Options:
 	                            also specifying listen interfaces via --listen
 	    --noonion               Disable connecting to tor hidden services
 	    --nopeerbloomfilters    Disable bloom filtering support
-	    --norelaypriority       Do not require free or low-fee transactions to
-	                            have high priority for relaying
 	    --norpc                 Disable built-in RPC server -- NOTE: The RPC
 	                            server is disabled by default if no
 	                            rpcuser/rpcpass or rpclimituser/rpclimitpass is

@@ -8,7 +8,6 @@ import (
 	"container/list"
 	"fmt"
 	"maps"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -119,18 +118,10 @@ type Policy struct {
 	// non-standard.
 	MaxTxVersion int32
 
-	// DisableRelayPriority defines whether to relay free or low-fee
-	// transactions that do not have enough priority to be relayed.
-	DisableRelayPriority bool
-
 	// AcceptNonStd defines whether to accept non-standard transactions. If
 	// true, non-standard transactions will be accepted into the mempool.
 	// Otherwise, all non-standard transactions will be rejected.
 	AcceptNonStd bool
-
-	// FreeTxRelayLimit defines the given amount in thousands of bytes
-	// per minute that transactions with no fee are rate limited to.
-	FreeTxRelayLimit float64
 
 	// MaxOrphanTxs is the maximum number of orphan transactions
 	// that can be queued.
@@ -146,9 +137,17 @@ type Policy struct {
 	// fraction of the max signature operations for a block.
 	MaxSigOpCostPerTx int
 
-	// MinRelayTxFee defines the minimum transaction fee in BTC/kB to be
-	// considered a non-zero fee.
+	// MinRelayTxFee defines the minimum transaction fee rate, in koinu/kB,
+	// every relayed transaction must pay. Dogecoin has no free relay.
 	MinRelayTxFee btcutil.Amount
+
+	// DustLimit is the soft dust limit: each spendable output below it
+	// adds DustLimit to the fee the transaction must pay.
+	DustLimit btcutil.Amount
+
+	// HardDustLimit is the hard dust limit: a transaction with a spendable
+	// output below it is not standard.
+	HardDustLimit btcutil.Amount
 
 	// RejectReplacement, if true, rejects accepting replacement
 	// transactions using the Replace-By-Fee (RBF) signaling policy into
@@ -188,8 +187,6 @@ type TxPool struct {
 	orphans       map[chainhash.Hash]*orphanTx
 	orphansByPrev map[wire.OutPoint]map[chainhash.Hash]*btcutil.Tx
 	outpoints     map[wire.OutPoint]*btcutil.Tx
-	pennyTotal    float64 // exponentially decaying total for penny spends.
-	lastPennyUnix int64   // unix time of last ``penny spend''
 
 	// nextExpireScan is the time after which the orphan pool will be
 	// scanned in order to evict orphans.  This is NOT a hard deadline as
@@ -903,8 +900,8 @@ func (mp *TxPool) validateReplacement(tx *btcutil.Tx,
 
 	// It should also have an absolute fee greater than all of the
 	// transactions it intends to replace and pay for its own bandwidth,
-	// which is determined by our minimum relay fee.
-	minFee := calcMinRequiredTxRelayFee(txSize, mp.cfg.Policy.MinRelayTxFee)
+	// which is determined by Dogecoin's incremental relay fee.
+	minFee := calcMinRequiredTxRelayFee(txSize, DefaultIncrementalRelayFee)
 	if txFee < conflictsFee+minFee {
 		str := fmt.Sprintf("%v: replacement transaction has an "+
 			"insufficient absolute fee: needs %v, has %v",
@@ -1522,9 +1519,7 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 
 	// Don't allow transactions with fees too low to get into a mined
 	// block.
-	err = mp.validateRelayFeeMet(
-		tx, txFee, txSize, utxoView, nextBlockHeight, isNew, rateLimit,
-	)
+	err = mp.validateRelayFeeMet(tx, txFee, txSize)
 	if err != nil {
 		return nil, err
 	}
@@ -1614,7 +1609,7 @@ func (mp *TxPool) validateStandardness(tx *btcutil.Tx, nextBlockHeight int32,
 	// Check the transaction standard.
 	err := CheckTransactionStandard(
 		tx, nextBlockHeight, medianTimePast,
-		mp.cfg.Policy.MinRelayTxFee, mp.cfg.Policy.MaxTxVersion,
+		mp.cfg.Policy.HardDustLimit, mp.cfg.Policy.MaxTxVersion,
 	)
 	if err != nil {
 		// Attempt to extract a reject code from the error so it can be
@@ -1681,84 +1676,22 @@ func (mp *TxPool) validateSigCost(tx *btcutil.Tx,
 	return txRuleError(wire.RejectNonstandard, str)
 }
 
-// validateRelayFeeMet checks that the min relay fee is covered by this
-// transaction.
-func (mp *TxPool) validateRelayFeeMet(tx *btcutil.Tx, txFee, txSize int64,
-	utxoView *blockchain.UtxoViewpoint, nextBlockHeight int32,
-	isNew, rateLimit bool) error {
-
-	txHash := tx.Hash()
-
-	// Most miners allow a free transaction area in blocks they mine to go
-	// alongside the area used for high-priority transactions as well as
-	// transactions with fees. A transaction size of up to 1000 bytes is
-	// considered safe to go into this section. Further, the minimum fee
-	// calculated below on its own would encourage several small
-	// transactions to avoid fees rather than one single larger transaction
-	// which is more desirable. Therefore, as long as the size of the
-	// transaction does not exceed 1000 less than the reserved space for
-	// high-priority transactions, don't require a fee for it.
+// validateRelayFeeMet checks that the transaction pays Dogecoin's minimum
+// relay fee: MinRelayTxFee for its size, plus DustLimit for each output below
+// the soft dust limit (Dogecoin Core's GetDogecoinMinRelayFee). Unlike
+// Bitcoin, Dogecoin has no free or priority relay.
+func (mp *TxPool) validateRelayFeeMet(tx *btcutil.Tx, txFee, txSize int64) error {
 	minFee := calcMinRequiredTxRelayFee(txSize, mp.cfg.Policy.MinRelayTxFee)
+	minFee += calcDustFee(tx.MsgTx(), mp.cfg.Policy.DustLimit)
+	if minFee > btcutil.MaxSatoshi {
+		minFee = btcutil.MaxSatoshi
+	}
 
-	if txSize >= (DefaultBlockPrioritySize-1000) && txFee < minFee {
+	if txFee < minFee {
 		str := fmt.Sprintf("transaction %v has %d fees which is under "+
-			"the required amount of %d", txHash, txFee, minFee)
-
+			"the required amount of %d", tx.Hash(), txFee, minFee)
 		return txRuleError(wire.RejectInsufficientFee, str)
 	}
-
-	// Exit early if the min relay fee is met.
-	if txFee >= minFee {
-		return nil
-	}
-
-	// Exit early if this is neither a new tx or rate limited.
-	if !isNew && !rateLimit {
-		return nil
-	}
-
-	// Require that free transactions have sufficient priority to be mined
-	// in the next block. Transactions which are being added back to the
-	// memory pool from blocks that have been disconnected during a reorg
-	// are exempted.
-	if isNew && !mp.cfg.Policy.DisableRelayPriority {
-		currentPriority := mining.CalcPriority(
-			tx.MsgTx(), utxoView, nextBlockHeight,
-		)
-		if currentPriority <= mining.MinHighPriority {
-			str := fmt.Sprintf("transaction %v has insufficient "+
-				"priority (%g <= %g)", txHash,
-				currentPriority, mining.MinHighPriority)
-
-			return txRuleError(wire.RejectInsufficientFee, str)
-		}
-	}
-
-	// We can only end up here when the rateLimit is true. Free-to-relay
-	// transactions are rate limited here to prevent penny-flooding with
-	// tiny transactions as a form of attack.
-	nowUnix := time.Now().Unix()
-
-	// Decay passed data with an exponentially decaying ~10 minute window -
-	// matches bitcoind handling.
-	mp.pennyTotal *= math.Pow(
-		1.0-1.0/600.0, float64(nowUnix-mp.lastPennyUnix),
-	)
-	mp.lastPennyUnix = nowUnix
-
-	// Are we still over the limit?
-	if mp.pennyTotal >= mp.cfg.Policy.FreeTxRelayLimit*10*1000 {
-		str := fmt.Sprintf("transaction %v has been rejected "+
-			"by the rate limiter due to low fees", txHash)
-
-		return txRuleError(wire.RejectInsufficientFee, str)
-	}
-
-	oldTotal := mp.pennyTotal
-	mp.pennyTotal += float64(txSize)
-	log.Tracef("rate limit: curTotal %v, nextTotal: %v, limit %v",
-		oldTotal, mp.pennyTotal, mp.cfg.Policy.FreeTxRelayLimit*10*1000)
-
 	return nil
 }
 
