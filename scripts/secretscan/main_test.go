@@ -6,6 +6,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// fakeBotToken is shaped like a Telegram bot token, built up so that
+// GitHub's own secret scanning does not flag this file.
+var fakeBotToken = "123456789:" + "AA" + "HdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+
 func TestScanLine(t *testing.T) {
 	for _, tc := range []struct {
 		line string
@@ -14,7 +18,7 @@ func TestScanLine(t *testing.T) {
 		// Secrets. These are generated for this test and hold nothing.
 		{`  "privateKeys": ["` + "5a" + `"]`, true},
 		{`PrivateKey-ewoqjP7PxY4yr3iLTpLisriqt94hdyDFNgchSxGGztUrTXtNN`, true},
-		{`token=` + "123456789:AA" + `HdqTcvCH1vGWJxfSeofSAs0K5PALDsaw`, true},
+		{`token=` + fakeBotToken, true},
 		{`private key: 0c28fca386c7a227600b2fe50b7cae11ec86d3bf1fbe471be89827e19d72aa1d`, true},
 		{`5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ`, true}, // a textbook WIF
 		{`password: "hunter2hunter2hunter2hunter2"`, true},
@@ -55,7 +59,7 @@ diff --git a/README.md b/README.md
 --- a/README.md
 +++ b/README.md
 @@ -40,0 +41 @@
-+bot token 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw
++bot token `+fakeBotToken+`
 `)
 	found := scanDiff("", diff)
 	require.Len(t, found, 2, "%v", found)
