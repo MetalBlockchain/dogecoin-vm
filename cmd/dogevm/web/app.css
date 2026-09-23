@@ -379,6 +379,7 @@ button.copy { font-size: var(--step--1); padding: 0.2rem 0.6rem; vertical-align:
 .network-choice { border: 0; padding: 0; margin: 0.25rem 0 0; display: grid; gap: 0.35rem; }
 .network-choice legend { font-weight: 500; margin-bottom: 0.35rem; padding: 0; }
 .network-choice label { font-weight: 400; margin: 0; display: flex; gap: 0.5rem; align-items: baseline; }
+.history { margin-top: 2.5rem; }
 .history-chain { font-size: var(--step-0); margin: 1.25rem 0 0.5rem; }
 .history-chain.chain-doge { color: var(--coin-ink); }
 .history-chain.chain-vm { color: var(--vm-ink); }

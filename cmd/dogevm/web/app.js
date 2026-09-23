@@ -403,6 +403,9 @@ async function refreshDogeWallet() {
       ? "Shows once the bridge's Dogecoin node has caught up."
       : `Can't load your Dogecoin balance: ${err.message}`;
     $('move-available').textContent = $('doge-pending').textContent;
+    $('doge-history').replaceChildren(empty(err.status === 503
+      ? "Your Dogecoin activity appears once the bridge's Dogecoin node has caught up."
+      : "Can't load your Dogecoin activity right now."));
   }
 }
 
