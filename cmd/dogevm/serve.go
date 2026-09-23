@@ -30,11 +30,12 @@ var webFiles embed.FS
 // credentials; browsers get read access, broadcast, deposit-address
 // registration and the faucet, and never see a key or password.
 type server struct {
-	b      *bridge
-	health *healthChecker
-	vm     *vmChain
-	doge   *dogeChain
-	faucet *faucet
+	b       *bridge
+	health  *healthChecker
+	chainID string // the DogecoinVM chain's ID on Metal, for links
+	vm      *vmChain
+	doge    *dogeChain
+	faucet  *faucet
 
 	mu       sync.RWMutex
 	snapshot *snapshot
@@ -165,6 +166,8 @@ func (srv *server) info(*http.Request) (any, error) {
 		"faucet":               srv.faucet.info(),
 		"dogecoinvmVersions":   addressVersions(srv.b.vmParams),
 		"dogecoinVersions":     addressVersions(srv.b.dogeParams),
+		"dogecoinExplorer":     explorerLinks(srv.b.dogeParams),
+		"chainID":              srv.chainID,
 	}, nil
 }
 
@@ -482,6 +485,7 @@ func cmdServe(args []string) error {
 	depositsPath := flags.String("deposits", "", "deposit address registry (default: deposits.json next to -signers)")
 	faucetKey := flags.String("faucet-key", "", "private key (WIF or hex) of the faucet's DogecoinVM address; empty disables the faucet")
 	faucetAmount := flags.String("faucet-amount", "100", "DOGE per faucet claim")
+	chainID := flags.String("chain-id", "", "the DogecoinVM chain's ID on Metal, shown on the page")
 	s.register(flags)
 	b := bridgeFlags(flags)
 	health := &healthChecker{b: b}
@@ -505,6 +509,7 @@ func cmdServe(args []string) error {
 	srv := &server{
 		b:             b,
 		health:        health,
+		chainID:       *chainID,
 		vm:            b.vm.(*vmChain),
 		doge:          b.doge.(*dogeChain),
 		registerLimit: newRateLimit(30, time.Hour),
@@ -546,6 +551,11 @@ func cmdServe(args []string) error {
 	mux.HandleFunc("GET /api/info", handle(srv.info))
 	mux.HandleFunc("GET /api/status", handle(srv.status))
 	mux.HandleFunc("GET /api/health", srv.healthHandler)
+	mux.HandleFunc("GET /api/blocks", handle(srv.blocksHandler))
+	mux.HandleFunc("GET /api/block/{id}", handle(srv.blockHandler))
+	mux.HandleFunc("GET /api/tx/{txid}", handle(srv.txHandler))
+	mux.HandleFunc("GET /api/activity", handle(srv.activityHandler))
+	mux.HandleFunc("GET /api/reserves", handle(srv.reservesHandler))
 	mux.HandleFunc("GET /api/address/{addr}", handle(srv.address))
 	mux.HandleFunc("GET /api/deposits/{addr}", handle(srv.deposits))
 	mux.HandleFunc("GET /api/pegout/{txid}", handle(srv.pegOut))
@@ -556,4 +566,9 @@ func cmdServe(args []string) error {
 	log.Printf("serving on http://%s", *listen)
 	server := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	return server.ListenAndServe()
+}
+
+func explorerLinks(p *chaincfg.Params) map[string]string {
+	tx, addr := dogecoinExplorer(p)
+	return map[string]string{"tx": tx, "address": addr}
 }

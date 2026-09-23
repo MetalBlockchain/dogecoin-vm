@@ -48,6 +48,7 @@ type bridge struct {
 }
 
 type deposit struct {
+	time          int64
 	outPoint      wire.OutPoint
 	value         int64
 	dest          destination
@@ -56,6 +57,7 @@ type deposit struct {
 }
 
 type pegOut struct {
+	time          int64
 	txid          chainhash.Hash
 	value         int64
 	dest          destination
@@ -206,7 +208,7 @@ func (b *bridge) load() (*pegState, error) {
 				continue // not final yet
 			}
 			dest, ok := parseDestinationTag(t.tx, tagPegOut)
-			p := pegOut{txid: t.tx.TxHash(), value: paidIn, dest: dest,
+			p := pegOut{time: t.time, txid: t.tx.TxHash(), value: paidIn, dest: dest,
 				valid: ok && paidIn >= b.minPegOut, confirmations: t.confirmations}
 			if p.valid {
 				s.pegOuts = append(s.pegOuts, p)
@@ -273,6 +275,7 @@ func (b *bridge) load() (*pegState, error) {
 		hash := t.tx.TxHash()
 		for i, out := range t.tx.TxOut {
 			d := deposit{
+				time:          t.time,
 				outPoint:      wire.OutPoint{Hash: hash, Index: uint32(i)},
 				value:         out.Value,
 				confirmations: t.confirmations,

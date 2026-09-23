@@ -1,0 +1,230 @@
+// The explorer: bridge activity, proof of reserves, DogecoinVM blocks, and
+// pages for a transaction, block or address. Pages are routed by the URL
+// hash (#/tx/<id>, #/block/<id>, #/address/<address>) so they can be linked.
+import * as chain from './chain.js';
+
+const $ = (id) => document.getElementById(id);
+let info = null;
+
+async function api(path) {
+  const res = await fetch(path);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+
+const tidy = (s) => chain.formatDoge(chain.parseDoge(String(s)));
+const short = (id) => `${id.slice(0, 8)}…${id.slice(-6)}`;
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') node.className = v;
+    else node.setAttribute(k, v);
+  }
+  for (const c of children) if (c !== null && c !== undefined) node.append(c);
+  return node;
+}
+
+function ago(unix) {
+  if (!unix) return '';
+  const s = Math.max(0, Math.round(Date.now() / 1000 - unix));
+  if (s < 90) return `${s}s ago`;
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  if (s < 129600) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} days ago`;
+}
+
+// Links: Dogecoin ids open on a public explorer, DogecoinVM ids in-page.
+function dogeTx(txid) {
+  const url = info.dogecoinExplorer.tx;
+  const text = el('code', {}, short(txid));
+  return url ? el('a', { href: url.replace('%s', txid), target: '_blank', rel: 'noopener', class: 'chain-doge' }, text) : text;
+}
+function dogeAddress(addr) {
+  const url = info.dogecoinExplorer.address;
+  const text = el('code', {}, addr);
+  return url ? el('a', { href: url.replace('%s', addr), target: '_blank', rel: 'noopener', class: 'chain-doge' }, text) : text;
+}
+const vmTx = (txid) => el('a', { href: `#/tx/${txid}`, class: 'chain-vm' }, el('code', {}, short(txid)));
+const vmAddress = (addr) => el('a', { href: `#/address/${addr}`, class: 'chain-vm' }, el('code', {}, addr));
+const vmBlock = (h) => el('a', { href: `#/block/${h}`, class: 'chain-vm' }, `#${Number(h).toLocaleString('en-US')}`);
+
+// --- home: activity, reserves, blocks --------------------------------------
+
+function renderMove(e) {
+  const done = e.status === 'credited' || e.status === 'paid';
+  const statusText = {
+    credited: `Credited ${e.credited ? tidy(e.credited) : ''} DOGE`,
+    paid: `Paid ${e.pays ? tidy(e.pays) : ''} DOGE`,
+    waiting: e.type === 'deposit'
+      ? `${Math.min(e.confirmations ?? 0, e.required ?? 0)} of ${e.required} confirmations`
+      : 'Waiting for the bridge',
+    held: 'Held for a refund',
+    refunded: 'Refunded',
+  }[e.status] || e.status;
+
+  let from;
+  let to;
+  if (e.type === 'deposit') {
+    from = el('div', { class: 'side side-doge' },
+      el('span', { class: 'side-label' }, 'Dogecoin'), dogeTx(e.dogecoinTxid));
+    to = el('div', { class: 'side side-vm' },
+      el('span', { class: 'side-label' }, 'DogecoinVM'),
+      e.creditTxid ? vmTx(e.creditTxid) : el('span', { class: 'pending' }, 'not yet'));
+  } else {
+    from = el('div', { class: 'side side-vm' },
+      el('span', { class: 'side-label' }, 'DogecoinVM'), vmTx(e.dogecoinvmTxid));
+    to = el('div', { class: 'side side-doge' },
+      el('span', { class: 'side-label' }, 'Dogecoin'),
+      e.dogecoinTxid ? dogeTx(e.dogecoinTxid) : el('span', { class: 'pending' }, 'not yet'));
+  }
+  return el('li', { class: `move move-${e.type}` },
+    el('div', { class: 'move-head' },
+      el('span', { class: 'move-kind' }, e.type === 'deposit' ? 'Deposit' : 'Withdrawal'),
+      el('span', { class: 'amount move-amount' }, e.amount ? `${tidy(e.amount)} DOGE` : ''),
+      el('span', { class: 'move-time' }, ago(e.time))),
+    el('div', { class: 'move-path' }, from, el('span', { class: 'arrow', 'aria-hidden': 'true' }, '→'), to),
+    el('p', { class: `move-status ${done ? 'status-done' : 'status-waiting'}` }, statusText));
+}
+
+async function refreshActivity() {
+  try {
+    const events = await api('/api/activity');
+    const list = $('activity');
+    list.replaceChildren(...(events.length ? events.map(renderMove)
+      : [el('li', { class: 'empty' }, 'Nothing has crossed the bridge yet.')]));
+  } catch { /* next poll */ }
+}
+
+async function refreshReserves() {
+  try {
+    const r = await api('/api/reserves');
+    $('res-locked').textContent = `${tidy(r.lockedOnDogecoin)} DOGE`;
+    $('res-circulating').textContent = `${tidy(r.circulating)} DOGE`;
+    const list = $('reserve-outputs');
+    list.replaceChildren(...r.dogecoinOutputs.map((o) =>
+      el('li', {}, dogeTx(o.txid), el('span', { class: 'amount' }, `${tidy(o.amount)} DOGE`))));
+    if (!r.dogecoinOutputs.length) list.append(el('li', { class: 'empty' }, 'No DOGE is locked yet.'));
+  } catch { /* next poll */ }
+}
+
+async function refreshBlocks() {
+  try {
+    const { blocks } = await api('/api/blocks');
+    $('blocks').replaceChildren(...blocks.slice(0, 8).map((b) =>
+      el('li', {}, vmBlock(b.height),
+        el('span', {}, `${b.txCount} transaction${b.txCount === 1 ? '' : 's'}`),
+        el('span', { class: 'move-time' }, ago(b.time)))));
+  } catch { /* next poll */ }
+}
+
+// --- pages ---------------------------------------------------------------------
+
+function page(title, ...body) {
+  const view = $('explorer-view');
+  view.replaceChildren(
+    el('p', {}, el('a', { href: '#' }, '← Back to the bridge')),
+    el('h2', {}, title), ...body);
+}
+
+function ioTable(rows) {
+  return el('ul', { class: 'io' }, ...rows.map((r) => el('li', {},
+    r.address ? vmAddress(r.address) : el('span', { class: 'muted' }, r.note === 'bridge message' ? 'Bridge message' : 'No address'),
+    r.note === 'peg reserve' ? el('span', { class: 'tag' }, 'peg reserve') : null,
+    el('span', { class: 'amount' }, `${tidy(r.value === '?' ? '0' : r.value)} DOGE`))));
+}
+
+async function showTx(txid) {
+  page('Transaction', el('p', {}, 'Loading…'));
+  try {
+    const t = await api(`/api/tx/${txid}`);
+    const other = t.dogecoinTxid ? el('p', {}, 'On Dogecoin: ', dogeTx(t.dogecoinTxid)) : null;
+    page('Transaction',
+      el('p', { class: `kind kind-${t.kind}` }, t.label),
+      el('dl', { class: 'facts' },
+        el('div', {}, el('dt', {}, 'ID'), el('dd', {}, el('code', {}, t.txid))),
+        el('div', {}, el('dt', {}, 'Status'), el('dd', {}, t.confirmations > 0 ? `In a block, final (${t.confirmations} confirmation${t.confirmations === 1 ? '' : 's'})` : 'In the mempool')),
+        t.time ? el('div', {}, el('dt', {}, 'Time'), el('dd', {}, new Date(t.time * 1000).toLocaleString())) : null,
+        t.fee ? el('div', {}, el('dt', {}, 'Fee'), el('dd', { class: 'amount' }, `${tidy(t.fee)} DOGE`)) : null),
+      other,
+      el('div', { class: 'io-grid' },
+        el('section', {}, el('h3', {}, 'From'), t.inputs.length ? ioTable(t.inputs) : el('p', { class: 'muted' }, 'Created by the block')),
+        el('section', {}, el('h3', {}, 'To'), ioTable(t.outputs))));
+  } catch (err) {
+    page('Transaction', el('p', { class: 'result error' }, err.message));
+  }
+}
+
+async function showBlock(id) {
+  page('Block', el('p', {}, 'Loading…'));
+  try {
+    const { block, transactions } = await api(`/api/block/${id}`);
+    page(`Block ${block.height.toLocaleString('en-US')}`,
+      el('dl', { class: 'facts' },
+        el('div', {}, el('dt', {}, 'Hash'), el('dd', {}, el('code', {}, block.hash))),
+        el('div', {}, el('dt', {}, 'Time'), el('dd', {}, new Date(block.time * 1000).toLocaleString())),
+        block.height > 0 ? el('div', {}, el('dt', {}, 'Previous'), el('dd', {}, vmBlock(block.height - 1))) : null),
+      el('h3', {}, 'Transactions'),
+      el('ol', { class: 'tx-list' }, ...transactions.map((t) =>
+        el('li', {}, vmTx(t.txid), el('span', {}, t.label)))));
+  } catch (err) {
+    page('Block', el('p', { class: 'result error' }, err.message));
+  }
+}
+
+async function showAddress(addr) {
+  page('Address', el('p', {}, 'Loading…'));
+  try {
+    const a = await api(`/api/address/${addr}`);
+    page('Address',
+      el('p', { class: 'address address-vm' }, a.address),
+      el('p', { class: 'balance' }, el('span', { class: 'amount' }, tidy(a.confirmed)), ' ', el('span', { class: 'unit' }, 'DOGE')),
+      el('h3', {}, 'Transactions'),
+      el('ol', { class: 'tx-list' }, ...(a.history.length ? a.history.map((h) =>
+        el('li', {}, vmTx(h.txid),
+          el('span', {}, chain.parseDoge(h.received) > 0n ? `+${tidy(h.received)} DOGE` : 'Sent'),
+          el('span', { class: 'move-time' }, h.confirmations > 0 ? '' : 'pending')))
+        : [el('li', { class: 'empty' }, 'No transactions.')])));
+  } catch (err) {
+    page('Address', el('p', { class: 'result error' }, err.message));
+  }
+}
+
+function route() {
+  const m = location.hash.match(/^#\/(tx|block|address)\/(.+)$/);
+  const explorer = $('explorer-view');
+  const home = [$('home'), $('home-lower')];
+  if (!m) {
+    explorer.hidden = true;
+    home.forEach((n) => { n.hidden = false; });
+    return;
+  }
+  explorer.hidden = false;
+  home.forEach((n) => { n.hidden = true; });
+  window.scrollTo(0, 0);
+  const id = decodeURIComponent(m[2]);
+  ({ tx: showTx, block: showBlock, address: showAddress })[m[1]](id);
+}
+
+// Search takes a txid (64 hex), a block height, or a DogecoinVM address.
+function search(q) {
+  q = q.trim();
+  if (/^[0-9a-f]{64}$/i.test(q)) location.hash = `#/tx/${q}`;
+  else if (/^\d+$/.test(q)) location.hash = `#/block/${q}`;
+  else if (q) location.hash = `#/address/${q}`;
+}
+
+export function startExplorer(networkInfo) {
+  info = networkInfo;
+  $('search-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    search($('search').value);
+    $('search').value = '';
+  });
+  window.addEventListener('hashchange', route);
+  route();
+  const refresh = () => { refreshActivity(); refreshReserves(); refreshBlocks(); };
+  refresh();
+  setInterval(refresh, 15000);
+}

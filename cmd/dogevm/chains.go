@@ -16,6 +16,7 @@ import (
 type chainTx struct {
 	tx            *wire.MsgTx
 	confirmations int64
+	time          int64 // unix seconds: block time, or when first seen
 }
 
 // utxo is an unspent output.
@@ -87,6 +88,7 @@ func (c *vmChain) addressTxs(address btcutil.Address) ([]chainTx, error) {
 		var page []struct {
 			Hex           string `json:"hex"`
 			Confirmations int64  `json:"confirmations"`
+			Time          int64  `json:"time"`
 		}
 		err := c.rpc.call(&page, "searchrawtransactions", address.EncodeAddress(), 1, skip, pageSize)
 		if isRPCCode(err, errNoAddressInfo) {
@@ -100,7 +102,7 @@ func (c *vmChain) addressTxs(address btcutil.Address) ([]chainTx, error) {
 			if err != nil {
 				return nil, err
 			}
-			txs = append(txs, chainTx{tx: tx, confirmations: r.Confirmations})
+			txs = append(txs, chainTx{tx: tx, confirmations: r.Confirmations, time: r.Time})
 		}
 		if len(page) < pageSize {
 			return txs, nil
@@ -196,6 +198,7 @@ func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
 		var t struct {
 			Hex           string `json:"hex"`
 			Confirmations int64  `json:"confirmations"`
+			Time          int64  `json:"time"`
 		}
 		if err := c.rpc.call(&t, "gettransaction", e.TxID, true); err != nil {
 			return nil, err
@@ -205,7 +208,7 @@ func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
 			return nil, err
 		}
 		if touches(tx, scripts, c) {
-			txs = append(txs, chainTx{tx: tx, confirmations: t.Confirmations})
+			txs = append(txs, chainTx{tx: tx, confirmations: t.Confirmations, time: t.Time})
 		}
 	}
 	return txs, nil

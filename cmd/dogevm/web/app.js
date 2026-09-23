@@ -1,4 +1,5 @@
 import * as chain from './chain.js';
+import { startExplorer } from './explorer.js';
 
 const $ = (id) => document.getElementById(id);
 const KEY_STORE = 'dogevm.key';
@@ -367,6 +368,7 @@ async function start() {
   }
   renderKey();
   refreshStatus();
+  startExplorer(info);
   setInterval(() => {
     refreshStatus();
     refreshWallet();

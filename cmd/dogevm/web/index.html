@@ -30,13 +30,19 @@
       <img class="brand-coin" src="dogecoin.svg" alt="" width="64" height="64">
       <h1>DogecoinVM <span class="masthead-sub" id="network-name">bridge</span></h1>
     </div>
+    <form class="search" id="search-form" role="search">
+      <label for="search" class="visually-hidden">Search DogecoinVM</label>
+      <input id="search" autocomplete="off" spellcheck="false" placeholder="Search a transaction, block or address">
+    </form>
     <dl class="heights" aria-live="polite">
       <div class="height height-doge"><dt>Dogecoin block</dt><dd id="doge-height">…</dd></div>
       <div class="height height-vm"><dt>DogecoinVM block</dt><dd id="vm-height">…</dd></div>
     </dl>
   </header>
 
-  <main class="layout">
+  <main class="explorer-view" id="explorer-view" hidden></main>
+
+  <main class="layout" id="home">
     <aside class="peg" aria-labelledby="peg-title">
       <h2 id="peg-title">The peg</h2>
       <p class="peg-lede">Every DOGE on DogecoinVM is backed by DOGE locked on Dogecoin. Equal bars mean the peg is fully backed.</p>
@@ -166,6 +172,29 @@
       </div>
     </section>
   </main>
+
+  <div class="lower" id="home-lower">
+    <section class="board activity" aria-labelledby="activity-title">
+      <h2 id="activity-title">Bridge activity</h2>
+      <p class="board-lede">Every move across the bridge, with the transaction on each chain. Dogecoin transactions open on a public Dogecoin explorer.</p>
+      <ol class="moves" id="activity"><li class="empty">Nothing has crossed the bridge yet.</li></ol>
+    </section>
+
+    <section class="board reserves" aria-labelledby="reserves-title">
+      <h2 id="reserves-title">Proof of reserves</h2>
+      <p class="board-lede">The DOGE backing DogecoinVM, output by output on Dogecoin. Each one can be checked on a public explorer.</p>
+      <dl class="reserve-totals">
+        <div><dt>Locked on Dogecoin</dt><dd class="amount" id="res-locked">…</dd></div>
+        <div><dt>Circulating on DogecoinVM</dt><dd class="amount" id="res-circulating">…</dd></div>
+      </dl>
+      <ol class="outputs" id="reserve-outputs"></ol>
+    </section>
+
+    <section class="board blocks" aria-labelledby="blocks-title">
+      <h2 id="blocks-title">Latest DogecoinVM blocks</h2>
+      <ol class="block-list" id="blocks"></ol>
+    </section>
+  </div>
 
   <footer class="footer">
     <p>DogecoinVM runs on Metal Blockchain. The bridge is run by a set of signers, who hold the DOGE locked on Dogecoin. <a href="https://github.com/paulgnz/dogecoin-vm">Source and docs</a>.</p>
