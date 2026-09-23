@@ -311,7 +311,7 @@ function setKey(newKey, mode = 'store') {
 function renderKey() {
   const has = key !== null;
   const locked = !has && store.get(PASSKEY_STORE) !== null;
-  $('locked').hidden = !locked;
+  $('wallet-locked').hidden = !locked;
   $('no-key').hidden = has || locked;
   $('has-key').hidden = !has;
   renderPasskey();

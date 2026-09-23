@@ -158,3 +158,17 @@ func TestEmbeddedImportsResolve(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, checked, 5)
 }
+
+// TestPageIDsUnique checks no two elements of the page share an id: the page
+// finds elements by id, and a duplicate once hid the wallet's unlock button
+// behind an unrelated figure.
+func TestPageIDsUnique(t *testing.T) {
+	page, err := fs.ReadFile(webFiles, "web/index.html")
+	require.NoError(t, err)
+	seen := map[string]bool{}
+	for _, m := range regexp.MustCompile(`\sid="([^"]+)"`).FindAllStringSubmatch(string(page), -1) {
+		require.False(t, seen[m[1]], "id %q is used twice in index.html", m[1])
+		seen[m[1]] = true
+	}
+	require.Greater(t, len(seen), 50)
+}
