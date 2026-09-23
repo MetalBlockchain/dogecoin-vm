@@ -66,7 +66,7 @@ td code, li code, p code { font-family: var(--mono); font-size: 0.86em; backgrou
 .hero-art { position: relative; width: 14rem; aspect-ratio: 1; }
 .doge-art { width: 100%; height: 100%; display: block; object-fit: contain; }
 .wow { position: absolute; font: 700 1rem/1 "Comic Neue", "Comic Sans MS", "Chalkboard SE", cursive; white-space: nowrap; }
-.wow-1 { top: 4%; left: -30%; color: #c2185b; transform: rotate(-8deg); }
+.wow-1 { top: -2%; left: -6%; color: #c2185b; transform: rotate(-8deg); }
 .wow-2 { top: 42%; right: -14%; color: #2e7d32; transform: rotate(6deg); }
 .wow-3 { bottom: 2%; left: -8%; color: #1565c0; transform: rotate(-4deg); }
 .wow-4 { top: 2%; right: -2%; color: #ef6c00; font-size: 1.25rem; transform: rotate(10deg); }
