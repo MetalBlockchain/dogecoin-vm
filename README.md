@@ -61,13 +61,23 @@ The peg is federated: the signers are trusted. See [docs/BRIDGE.md](docs/BRIDGE.
 
 The signers can run separately, each with one key on its own machine, checking every transaction against its own view of both chains before signing. A compromised bridge process can then delay transfers but can't move locked DOGE. See [docs/SIGNERS.md](docs/SIGNERS.md).
 
-## Roadmap
+## Status and roadmap
 
-1. ~~Dogecoin chain parameters~~ — done
-2. ~~Snowman block lifecycle~~ — done
-3. ~~Dogecoin fee and dust policy; disable SegWit and Taproot~~ — done
-4. Two-way peg: consensus peg reserve, wallet and bridge CLI, audit — done for development; distributed signing, Warp/ICM messaging and a public testnet to follow
-5. RPC responses shaped like Dogecoin Core's
+The peg is proven end to end on mainnet. On 23 September 2026 the bridge
+completed its first round trip:
+
+| Step | Chain | Transaction |
+| --- | --- | --- |
+| Deposit, 1 DOGE | Dogecoin | [`74e053f6…19ea11b9`](https://blockchair.com/dogecoin/transaction/74e053f6b3c1bd3a9947dddbc42cf54dd9761f7d7cdc6a1ea30947b119ea11b9) |
+| Credit, 0.99 DOGE | DogecoinVM | [`39a6c47e…1d8475`](https://metaldoge.com/explorer#/tx/39a6c47ee4ee60c68f19b963c40911730663498c78aff055a92576d1317d8475) |
+| Withdrawal, 5 DOGE | DogecoinVM | [`4a447aff…6c3852`](https://metaldoge.com/explorer#/tx/4a447affd54af5dca7feb45195e3e479bd7a265fb078b31d11f4d218d66c3852) |
+| Payout, 4.9 DOGE | Dogecoin | [`8be21486…ec9737`](https://blockchair.com/dogecoin/transaction/8be21486441207524403742b3c0c9023b5764fb4e1f12ef0e9f493d19aec9737) |
+
+Next is removing single points of failure: moving the bridge onto separate
+signers, bringing in independent operators, and more validators. Then an
+external audit, and later crediting deposits on Dogecoin proofs rather than
+signatures. The full roadmap is at
+[metaldoge.com/roadmap](https://metaldoge.com/roadmap).
 
 ## Building and testing
 

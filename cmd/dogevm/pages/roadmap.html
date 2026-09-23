@@ -21,8 +21,23 @@
   <p class="meta">Status as of 23 September 2026 · Source: <a href="https://github.com/paulgnz/dogecoin-vm">github.com/paulgnz/dogecoin-vm</a> · Live: <a href="https://metaldoge.com">metaldoge.com</a></p>
 
   <div class="headline">
-    <p><strong>Where it stands.</strong> The chain, bridge, web wallet and explorer are live on Metal Blockchain mainnet with real DOGE, limited by beta caps. A first 1 DOGE deposit is on Dogecoin and waiting to be credited. The bridge's own Dogecoin node is still downloading Dogecoin's history, and deposits are credited once it catches up. That deposit, plus a withdrawal back to Dogecoin, is the end-to-end proof this roadmap starts from. The software to run the signers as independent parties, and a setup ceremony for bringing them in, are built and tested ahead of Phase 2.</p>
+    <p><strong>Where it stands.</strong> DogecoinVM is live on Metal Blockchain mainnet with real DOGE, limited by beta caps, and the bridge has completed its first round trip: DOGE moved from Dogecoin to DogecoinVM and back, with every step on chain. The software for independent signers, and the ceremony that brings them in, are built and staged with the live keys. Moving the bridge onto them is next.</p>
   </div>
+
+  <h2 id="the-first-round-trip">The first round trip</h2>
+  <p>23 September 2026. Dogecoin transactions open on a public Dogecoin explorer, DogecoinVM ones in this site's explorer.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Step</th><th>Chain</th><th>Transaction</th><th>Amount</th></tr></thead>
+    <tbody>
+      <tr><td>Deposit to a personal deposit address</td><td>Dogecoin</td><td><a href="https://blockchair.com/dogecoin/transaction/74e053f6b3c1bd3a9947dddbc42cf54dd9761f7d7cdc6a1ea30947b119ea11b9"><code>74e053f6…ea11b9</code></a></td><td>1 DOGE</td></tr>
+      <tr><td>Credit, after 20 confirmations and the 0.01 DOGE bridge fee</td><td>DogecoinVM</td><td><a href="/explorer#/tx/39a6c47ee4ee60c68f19b963c40911730663498c78aff055a92576d1317d8475"><code>39a6c47e…7d8475</code></a></td><td>0.99 DOGE</td></tr>
+      <tr><td>Withdrawal to the bridge, naming a Dogecoin address</td><td>DogecoinVM</td><td><a href="/explorer#/tx/4a447affd54af5dca7feb45195e3e479bd7a265fb078b31d11f4d218d66c3852"><code>4a447aff…6c3852</code></a></td><td>5 DOGE</td></tr>
+      <tr><td>Payout, after the 0.1 DOGE Dogecoin fee, about a minute later</td><td>Dogecoin</td><td><a href="https://blockchair.com/dogecoin/transaction/8be21486441207524403742b3c0c9023b5764fb4e1f12ef0e9f493d19aec9737"><code>8be21486…ec9737</code></a></td><td>4.9 DOGE</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The wallet's one-click move, from its Dogecoin balance to its deposit address after review, worked the same evening (<a href="https://blockchair.com/dogecoin/transaction/0c7de3cee105e2e3a045122080f82469a418cc481edf447b52e5e5d4317b9f68"><code>0c7de3ce…7b9f68</code></a>). Proof of reserves matched throughout: DOGE locked on Dogecoin equalled DOGE circulating on DogecoinVM plus deposits waiting to be credited.</p>
 
   <h2>What is running</h2>
   <div class="table-wrap">
@@ -32,13 +47,12 @@
       <tr><td>DogecoinVM L1</td><td>Dogecoin's transaction and script rules (legacy, pre-SegWit) and Dogecoin 1.14 fee and dust policy, with Snowman consensus: a transaction is final once it is in a block, in seconds.</td><td class="state"><span class="chip live">Live</span></td></tr>
       <tr><td>Peg reserve</td><td>DOGE is created only in the chain's reserve blocks, which consensus enforces. That supply is locked to the peg signers and released only against DOGE locked on Dogecoin.</td><td class="state"><span class="chip live">Live</span></td></tr>
       <tr><td>Bridge</td><td>Watches both chains. It credits deposits after 20 Dogecoin confirmations and pays out withdrawals once they are final on DogecoinVM. It stops moving funds if the solvency check fails.</td><td class="state"><span class="chip live">Live</span></td></tr>
-      <tr><td>Web wallet</td><td>One key, one address on both networks: Dogecoin and DogecoinVM balances side by side, and a one-click move between them. Keys stay in the browser, optionally encrypted to a passkey, and every payment is shown for review, read from the transaction itself, before it's signed there. The page checks the deposit address and every coin it spends itself, rather than trusting the server. It installs as an app on Mac, iPhone and Android. Dogecoin balances switch on when the bridge's Dogecoin node finishes syncing.</td><td class="state"><span class="chip live">Live</span></td></tr>
+      <tr><td>Web wallet</td><td>One key, one address on both networks: Dogecoin and DogecoinVM balances side by side, and a one-click move between them. Keys stay in the browser, optionally encrypted to a passkey, and every payment is shown for review, read from the transaction itself, before it's signed there. The page checks the deposit address and every coin it spends itself, rather than trusting the server. It installs as an app on Mac, iPhone and Android.</td><td class="state"><span class="chip live">Live</span></td></tr>
       <tr><td>Explorer</td><td>Shows bridge activity with the transaction on each chain, proof of reserves output by output, and DogecoinVM blocks, transactions and addresses.</td><td class="state"><span class="chip live">Live</span></td></tr>
       <tr><td>Monitoring</td><td>Checks the peg, overdue transfers, both nodes and the validator's fee balance every minute, and sends Telegram alerts.</td><td class="state"><span class="chip live">Live</span></td></tr>
-      <tr><td>Separate signers</td><td>A signer service for each key holder, and <code>dogevm signer-setup</code>, the ceremony that brings new signers in. The live bridge keeps signing from a single operator until independent operators are in place.</td><td class="state"><span class="chip wait">Built, not live</span></td></tr>
+      <tr><td>Separate signers</td><td>A signer service for each key holder, and <code>dogevm signer-setup</code>, the ceremony that brings new signers in. Staged on the server with the live keys, without changing the peg address; the bridge moves onto them next, and independent operators follow.</td><td class="state"><span class="chip wait">Built, staged</span></td></tr>
       <tr><td>macOS wallet</td><td>A native Mac app for both networks: review every payment before it's signed, Touch ID for each signature, the key kept encrypted to the Mac's Secure Enclave, and signed automatic updates. Signed and notarized by Apple for download outside the App Store.</td><td class="state"><span class="chip live">Live</span></td></tr>
-      <tr><td>Dogecoin node</td><td>The bridge's own Dogecoin Core node, downloading Dogecoin's history.</td><td class="state"><span class="chip wait">Syncing</span></td></tr>
-      <tr><td>First round trip</td><td>1 DOGE in, then a withdrawal back out to Dogecoin.</td><td class="state"><span class="chip wait">Waiting on sync</span></td></tr>
+      <tr><td>Dogecoin node</td><td>The bridge's own Dogecoin Core node, with a full transaction index, which the bridge and the wallet's Dogecoin balances read.</td><td class="state"><span class="chip live">Live</span></td></tr>
     </tbody>
   </table>
   </div>
@@ -153,20 +167,21 @@
         <li>Web wallet, explorer and proof of reserves at metaldoge.com; the L1 created and converted on Metal mainnet.</li>
       </ul>
     </li>
-    <li class="phase now">
-      <div class="phase-head"><h3>Prove the round trip</h3><span class="chip wait">In progress</span></div>
+    <li class="phase done">
+      <div class="phase-head"><h3>Prove the round trip</h3><span class="chip live">Done</span></div>
       <ul>
-        <li>Finish syncing the Dogecoin node, credit the first deposit and complete a withdrawal back to Dogecoin.</li>
-        <li>Add further small deposits and withdrawals from separate wallets, including a held deposit and its refund.</li>
-        <li>Enforce HTTPS on the site, take off-server backups of bridge state and the deposit registry, and test a restore.</li>
+        <li>The bridge's Dogecoin node synced; the first deposit credited and a withdrawal paid back to Dogecoin, on 23 September 2026 (<a href="#the-first-round-trip">transactions above</a>).</li>
+        <li>The wallet's one-click move from its Dogecoin balance, reviewed and signed in the browser.</li>
+        <li>HTTPS enforced, daily encrypted off-server backups of bridge state and the deposit registry, and a restore tested against the live keys.</li>
       </ul>
-      <p class="gate"><strong>Done when</strong> each direction has transaction IDs on both chains, visible in the explorer, and proof of reserves matches.</p>
+      <p class="gate"><strong>Done:</strong> each direction has transaction IDs on both chains, visible in the explorer, and proof of reserves matches.</p>
     </li>
-    <li class="phase">
-      <div class="phase-head"><h3>Remove single points of failure</h3><span class="chip wait">Tooling built</span></div>
+    <li class="phase now">
+      <div class="phase-head"><h3>Remove single points of failure</h3><span class="chip wait">In progress</span></div>
       <ul>
         <li><span class="step-tag">Built</span><strong>Signer service.</strong> A bridge process that holds no keys, and a signer service per key holder that checks every transaction against its own nodes before signing, with a signing log and a daily limit.</li>
         <li><span class="step-tag">Built</span><strong>Setup ceremony</strong> (<code>dogevm signer-setup</code>): cards, a signer set with a fingerprint, service files and health checks. The existing keys can be imported, so the peg address and the funds stay where they are.</li>
+        <li><span class="step-tag">Built</span><strong>Staged with the live keys.</strong> Each key in its own signer service and a coordinator that holds none, with the peg address unchanged. Next: move the live bridge onto them.</li>
         <li><span class="step-tag todo">Next</span><strong>Independent operators.</strong> At least two people or organisations besides us, each running their own Dogecoin and DogecoinVM nodes and a signer, brought in through the ceremony. Then grow from 2-of-3 to 3-of-5.</li>
         <li><span class="step-tag todo">Next</span><strong>Key rotation.</strong> Move the locked DOGE and the reserve to a new signer set made entirely by the new operators, retiring the beta's keys.</li>
         <li><span class="step-tag todo">Next</span>Hardware-backed storage for signer keys.</li>
@@ -179,6 +194,7 @@
       <ul>
         <li>External security audit of the consensus changes, bridge and wallet signing, then fix what it finds.</li>
         <li>Have signers cross-check Dogecoin through more than one node.</li>
+        <li>More transfers from separate wallets, including a deposit over the beta limit, held, and its refund.</li>
         <li><span class="step-tag">Built</span>An emergency pause that stops all signing, and a written runbook for incidents, refunds and restoring from the daily encrypted backups. Next: rehearse it once, and a public bug bounty.</li>
         <li><strong>Bonded signers.</strong> Each signer locks collateral that is forfeited if they sign anything the rules don't allow. Theft stays possible in principle, but it becomes costly.</li>
         <li><strong>Delays on large withdrawals.</strong> Withdrawals above a set size wait a few hours before they're paid, giving the monitor and the other signers time to pause the bridge if anything looks wrong.</li>
