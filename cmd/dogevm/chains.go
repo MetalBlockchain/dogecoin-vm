@@ -28,11 +28,11 @@ type utxo struct {
 // chain is what the bridge and wallet need from either ledger.
 type chain interface {
 	// txsFor returns every transaction, confirmed or in the mempool, that
-	// pays to or spends from address.
-	txsFor(address btcutil.Address) ([]chainTx, error)
-	// unspent returns address's unspent outputs with at least minConf
+	// pays to or spends from any of addresses.
+	txsFor(addresses []btcutil.Address) ([]chainTx, error)
+	// unspent returns the addresses' unspent outputs with at least minConf
 	// confirmations.
-	unspent(address btcutil.Address, minConf int64) ([]utxo, error)
+	unspent(addresses []btcutil.Address, minConf int64) ([]utxo, error)
 	// send broadcasts tx.
 	send(tx *wire.MsgTx) (chainhash.Hash, error)
 }
@@ -61,7 +61,25 @@ type vmChain struct {
 	rpc *rpcClient
 }
 
-func (c *vmChain) txsFor(address btcutil.Address) ([]chainTx, error) {
+func (c *vmChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
+	seen := map[chainhash.Hash]bool{}
+	var txs []chainTx
+	for _, address := range addresses {
+		found, err := c.addressTxs(address)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range found {
+			if hash := t.tx.TxHash(); !seen[hash] {
+				seen[hash] = true
+				txs = append(txs, t)
+			}
+		}
+	}
+	return txs, nil
+}
+
+func (c *vmChain) addressTxs(address btcutil.Address) ([]chainTx, error) {
 	const pageSize = 500
 	var txs []chainTx
 	for skip := 0; ; skip += pageSize {
@@ -89,12 +107,12 @@ func (c *vmChain) txsFor(address btcutil.Address) ([]chainTx, error) {
 	}
 }
 
-func (c *vmChain) unspent(address btcutil.Address, minConf int64) ([]utxo, error) {
-	txs, err := c.txsFor(address)
+func (c *vmChain) unspent(addresses []btcutil.Address, minConf int64) ([]utxo, error) {
+	txs, err := c.txsFor(addresses)
 	if err != nil {
 		return nil, err
 	}
-	script := destinationScript(address)
+	scripts := scriptSet(addresses)
 
 	var utxos []utxo
 	for _, t := range txs {
@@ -103,7 +121,7 @@ func (c *vmChain) unspent(address btcutil.Address, minConf int64) ([]utxo, error
 		}
 		hash := t.tx.TxHash()
 		for i, out := range t.tx.TxOut {
-			if !bytes.Equal(out.PkScript, script) {
+			if !scripts[string(out.PkScript)] {
 				continue
 			}
 			// gettxout returns null once the output is spent, including
@@ -155,7 +173,8 @@ func (c *dogeChain) watch(address btcutil.Address, rescan bool) error {
 	return c.rpc.call(nil, "importaddress", address.EncodeAddress(), "dogevm", rescan)
 }
 
-func (c *dogeChain) txsFor(address btcutil.Address) ([]chainTx, error) {
+func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
+	scripts := scriptSet(addresses)
 	var entries []struct {
 		TxID    string `json:"txid"`
 		Address string `json:"address"`
@@ -184,18 +203,18 @@ func (c *dogeChain) txsFor(address btcutil.Address) ([]chainTx, error) {
 		if err != nil {
 			return nil, err
 		}
-		if touches(tx, destinationScript(address), c) {
+		if touches(tx, scripts, c) {
 			txs = append(txs, chainTx{tx: tx, confirmations: t.Confirmations})
 		}
 	}
 	return txs, nil
 }
 
-// touches reports whether tx pays to script or spends an output paying to
-// it.
-func touches(tx *wire.MsgTx, script []byte, c *dogeChain) bool {
+// touches reports whether tx pays to one of scripts or spends an output
+// paying to one.
+func touches(tx *wire.MsgTx, scripts map[string]bool, c *dogeChain) bool {
 	for _, out := range tx.TxOut {
-		if bytes.Equal(out.PkScript, script) {
+		if scripts[string(out.PkScript)] {
 			return true
 		}
 	}
@@ -208,14 +227,18 @@ func touches(tx *wire.MsgTx, script []byte, c *dogeChain) bool {
 		}
 		prevTx, err := decodeTx(prevHex)
 		if err == nil && int(in.PreviousOutPoint.Index) < len(prevTx.TxOut) &&
-			bytes.Equal(prevTx.TxOut[in.PreviousOutPoint.Index].PkScript, script) {
+			scripts[string(prevTx.TxOut[in.PreviousOutPoint.Index].PkScript)] {
 			return true
 		}
 	}
 	return false
 }
 
-func (c *dogeChain) unspent(address btcutil.Address, minConf int64) ([]utxo, error) {
+func (c *dogeChain) unspent(addresses []btcutil.Address, minConf int64) ([]utxo, error) {
+	encoded := make([]string, len(addresses))
+	for i, a := range addresses {
+		encoded[i] = a.EncodeAddress()
+	}
 	var entries []struct {
 		TxID          string  `json:"txid"`
 		Vout          uint32  `json:"vout"`
@@ -223,7 +246,7 @@ func (c *dogeChain) unspent(address btcutil.Address, minConf int64) ([]utxo, err
 		ScriptPubKey  string  `json:"scriptPubKey"`
 		Confirmations int64   `json:"confirmations"`
 	}
-	err := c.rpc.call(&entries, "listunspent", minConf, 9_999_999, []string{address.EncodeAddress()})
+	err := c.rpc.call(&entries, "listunspent", minConf, 9_999_999, encoded)
 	if err != nil {
 		return nil, err
 	}
@@ -250,6 +273,15 @@ func (c *dogeChain) unspent(address btcutil.Address, minConf int64) ([]utxo, err
 
 func (c *dogeChain) send(tx *wire.MsgTx) (chainhash.Hash, error) {
 	return sendRaw(c.rpc, tx)
+}
+
+// scriptSet returns the output scripts paying to addresses, as map keys.
+func scriptSet(addresses []btcutil.Address) map[string]bool {
+	scripts := make(map[string]bool, len(addresses))
+	for _, a := range addresses {
+		scripts[string(destinationScript(a))] = true
+	}
+	return scripts
 }
 
 // destinationScript returns the output script paying to address.

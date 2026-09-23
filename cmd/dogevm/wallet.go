@@ -98,7 +98,7 @@ func payFromKey(c chain, params *chaincfg.Params, key *btcec.PrivateKey,
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
-	utxos, err := c.unspent(from, 1)
+	utxos, err := c.unspent([]btcutil.Address{from}, 1)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
@@ -146,7 +146,7 @@ func payFromKey(c chain, params *chaincfg.Params, key *btcec.PrivateKey,
 
 // balance sums address's unspent outputs.
 func balance(c chain, address btcutil.Address) (confirmed, pending int64, err error) {
-	utxos, err := c.unspent(address, 0)
+	utxos, err := c.unspent([]btcutil.Address{address}, 0)
 	if err != nil {
 		return 0, 0, err
 	}

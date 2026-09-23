@@ -10,6 +10,7 @@ import (
 
 	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
 	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/btcvm/btcd/txscript"
 	"github.com/MetalBlockchain/btcvm/btcd/wire"
 )
 
@@ -39,16 +40,16 @@ func (c *fakeChain) spent(op wire.OutPoint) bool {
 	return false
 }
 
-func (c *fakeChain) txsFor(address btcutil.Address) ([]chainTx, error) {
-	script := destinationScript(address)
+func (c *fakeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
+	scripts := scriptSet(addresses)
 	var out []chainTx
 	for _, t := range c.txs {
 		match := false
 		for _, o := range t.tx.TxOut {
-			match = match || bytes.Equal(o.PkScript, script)
+			match = match || scripts[string(o.PkScript)]
 		}
 		for _, in := range t.tx.TxIn {
-			if prev, ok := c.output(in.PreviousOutPoint); ok && bytes.Equal(prev.PkScript, script) {
+			if prev, ok := c.output(in.PreviousOutPoint); ok && scripts[string(prev.PkScript)] {
 				match = true
 			}
 		}
@@ -59,8 +60,8 @@ func (c *fakeChain) txsFor(address btcutil.Address) ([]chainTx, error) {
 	return out, nil
 }
 
-func (c *fakeChain) unspent(address btcutil.Address, minConf int64) ([]utxo, error) {
-	script := destinationScript(address)
+func (c *fakeChain) unspent(addresses []btcutil.Address, minConf int64) ([]utxo, error) {
+	scripts := scriptSet(addresses)
 	var out []utxo
 	for _, t := range c.txs {
 		if t.confirmations < minConf {
@@ -69,7 +70,7 @@ func (c *fakeChain) unspent(address btcutil.Address, minConf int64) ([]utxo, err
 		hash := t.tx.TxHash()
 		for i, o := range t.tx.TxOut {
 			op := wire.OutPoint{Hash: hash, Index: uint32(i)}
-			if bytes.Equal(o.PkScript, script) && !c.spent(op) {
+			if scripts[string(o.PkScript)] && !c.spent(op) {
 				out = append(out, utxo{outPoint: op, value: o.Value, pkScript: o.PkScript, confirmations: t.confirmations})
 			}
 		}
@@ -79,12 +80,21 @@ func (c *fakeChain) unspent(address btcutil.Address, minConf int64) ([]utxo, err
 
 func (c *fakeChain) send(tx *wire.MsgTx) (chainhash.Hash, error) {
 	var in, out int64
-	for _, txIn := range tx.TxIn {
+	for i, txIn := range tx.TxIn {
 		prev, ok := c.output(txIn.PreviousOutPoint)
 		if !ok || c.spent(txIn.PreviousOutPoint) {
 			return chainhash.Hash{}, fmt.Errorf("input %v missing or spent", txIn.PreviousOutPoint)
 		}
 		in += prev.Value
+		// Run the real script engine, so signing bugs fail the tests.
+		vm, err := txscript.NewEngine(prev.PkScript, tx, i, txscript.StandardVerifyFlags,
+			nil, nil, prev.Value, txscript.NewCannedPrevOutputFetcher(prev.PkScript, prev.Value))
+		if err != nil {
+			return chainhash.Hash{}, err
+		}
+		if err := vm.Execute(); err != nil {
+			return chainhash.Hash{}, fmt.Errorf("input %d does not verify: %w", i, err)
+		}
 	}
 	for _, o := range tx.TxOut {
 		out += o.Value
@@ -130,6 +140,7 @@ func newHarness(t *testing.T) *harness {
 		minPegOut:            2 * doge,
 		logf:                 t.Logf,
 	}
+	h.b.registry = &depositRegistry{path: t.TempDir() + "/deposits.json"}
 	var err2 error
 	h.b.vmParams, err2 = dogevmParams("testnet")
 	require.NoError(t, err2)
@@ -296,7 +307,7 @@ func TestBridgeHaltsWhenInsolvent(t *testing.T) {
 
 	// Reserve released with nothing locked on Dogecoin, as if a signer key
 	// were compromised.
-	reserve, err := h.vm.unspent(mustAddr(h.b.vmReserveAddress()), 1)
+	reserve, err := h.vm.unspent([]btcutil.Address{mustAddr(h.b.vmReserveAddress())}, 1)
 	require.NoError(t, err)
 	theft := wire.NewMsgTx(1)
 	theft.AddTxIn(wire.NewTxIn(&reserve[0].outPoint, nil, nil))
@@ -353,4 +364,71 @@ func TestParseDoge(t *testing.T) {
 func trimZeros(s string) string {
 	s = string(bytes.TrimRight([]byte(s), "0"))
 	return string(bytes.TrimSuffix([]byte(s), []byte(".")))
+}
+
+// personalDeposit pays value to dest's personal deposit address, with no
+// OP_RETURN, as any Dogecoin wallet would.
+func (h *harness) personalDeposit(value int64, dest destination, confirmations int64) *wire.MsgTx {
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+	tx.AddTxOut(wire.NewTxOut(value, p2shScript(h.b.signers.depositRedeemScript(dest))))
+	h.doge.add(tx, confirmations)
+	return tx
+}
+
+func TestPersonalDepositAddress(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	alice, bob := h.user(1), h.user(2)
+
+	// Each destination gets its own address, distinct from the peg address.
+	aliceAddr, err := h.b.signers.depositAddress(alice, h.b.dogeParams)
+	require.NoError(err)
+	bobAddr, err := h.b.signers.depositAddress(bob, h.b.dogeParams)
+	require.NoError(err)
+	pegAddr, _ := h.b.dogePegAddress()
+	require.NotEqual(aliceAddr.EncodeAddress(), bobAddr.EncodeAddress())
+	require.NotEqual(pegAddr.EncodeAddress(), aliceAddr.EncodeAddress())
+
+	// Unregistered, the bridge does not watch it.
+	h.personalDeposit(100*doge, alice, 6)
+	require.Empty(h.step())
+
+	added, err := h.b.registry.add(alice)
+	require.NoError(err)
+	require.True(added)
+	added, err = h.b.registry.add(alice)
+	require.NoError(err)
+	require.False(added, "registering twice is a no-op")
+
+	require.NotEmpty(h.step())
+	require.Equal(int64(100*doge-doge/100), paidTo(h.vm, alice))
+	h.vm.mine()
+	require.Empty(h.step())
+}
+
+// TestPegOutSpendsPersonalDeposit checks that the signers can spend a
+// personal deposit output: fakeChain runs the script engine on it.
+func TestPegOutSpendsPersonalDeposit(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	alice, aliceOnDoge := h.user(1), h.user(2)
+	_, err := h.b.registry.add(alice)
+	require.NoError(err)
+
+	h.personalDeposit(100*doge, alice, 6)
+	require.NotEmpty(h.step())
+	h.vm.mine()
+
+	h.pegOut(60*doge, aliceOnDoge)
+	did, err := h.b.step()
+	require.NoError(err)
+	require.NotEmpty(did)
+	require.Equal(int64(59*doge), paidTo(h.doge, aliceOnDoge))
+
+	h.doge.mine()
+	a := h.audit()
+	require.True(a.solvent(), "%+v", a)
+	require.Equal(int64(40*doge), a.Circulating)
+	require.Equal(int64(40*doge), a.Locked)
 }

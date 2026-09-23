@@ -112,47 +112,76 @@ func (s *signerSet) address(params *chaincfg.Params) (*btcutil.AddressScriptHash
 }
 
 func (s *signerSet) pkScript() []byte {
-	addr, _ := s.address(&dogecoinMainNet)
-	script, _ := txscript.PayToAddrScript(addr)
-	return script
+	return p2shScript(s.redeemScript)
 }
 
 func (s *signerSet) destination() destination {
-	addr, _ := s.address(&dogecoinMainNet)
-	return destination{kind: destP2SH, hash: *addr.Hash160()}
+	return destination{kind: destP2SH, hash: hash160Of(s.redeemScript)}
 }
 
-// sign signs every input of tx, all of which must spend peg outputs, with
-// the private keys available.
-func (s *signerSet) sign(tx *wire.MsgTx) error {
-	if len(s.privKeys) < s.Required {
-		return fmt.Errorf("have %d private keys, need %d to sign", len(s.privKeys), s.Required)
+// depositRedeemScript is the redeem script of dest's personal deposit
+// address: <kind || hash160> OP_DROP followed by the peg multisig. Only the
+// signers can spend it, exactly as with the peg address, but each DogecoinVM
+// address gets its own Dogecoin address, so deposits need no OP_RETURN and
+// any wallet can make them.
+func (s *signerSet) depositRedeemScript(dest destination) []byte {
+	script := make([]byte, 0, 2+21+len(s.redeemScript))
+	script = append(script, txscript.OP_DATA_21, dest.kind)
+	script = append(script, dest.hash[:]...)
+	script = append(script, txscript.OP_DROP)
+	return append(script, s.redeemScript...)
+}
+
+func (s *signerSet) depositAddress(dest destination, params *chaincfg.Params) (*btcutil.AddressScriptHash, error) {
+	return btcutil.NewAddressScriptHash(s.depositRedeemScript(dest), params)
+}
+
+func hash160Of(script []byte) [20]byte {
+	var h [20]byte
+	copy(h[:], btcutil.Hash160(script))
+	return h
+}
+
+func p2shScript(redeemScript []byte) []byte {
+	return destination{kind: destP2SH, hash: hash160Of(redeemScript)}.pkScript()
+}
+
+// sign signs every input of tx. redeemScripts[i] is the redeem script of
+// the peg output input i spends: the peg multisig or a deposit script.
+func (s *signerSet) sign(tx *wire.MsgTx, redeemScripts [][]byte) error {
+	if len(redeemScripts) != len(tx.TxIn) {
+		return fmt.Errorf("have %d redeem scripts for %d inputs", len(redeemScripts), len(tx.TxIn))
 	}
-	keys := map[string]*btcec.PrivateKey{}
-	for _, key := range s.privKeys {
-		addr, err := btcutil.NewAddressPubKey(key.PubKey().SerializeCompressed(), &dogecoinMainNet)
+
+	// CHECKMULTISIG needs signatures in public key order.
+	var signers []*btcec.PrivateKey
+	for _, pub := range s.pubKeys {
+		for _, key := range s.privKeys {
+			if key.PubKey().IsEqual(pub) {
+				signers = append(signers, key)
+				break
+			}
+		}
+		if len(signers) == s.Required {
+			break
+		}
+	}
+	if len(signers) < s.Required {
+		return fmt.Errorf("have %d of the signer private keys, need %d", len(signers), s.Required)
+	}
+
+	for i, redeem := range redeemScripts {
+		b := txscript.NewScriptBuilder().AddOp(txscript.OP_0) // CHECKMULTISIG's extra pop
+		for _, key := range signers {
+			sig, err := txscript.RawTxInSignature(tx, i, redeem, txscript.SigHashAll, key)
+			if err != nil {
+				return fmt.Errorf("signing input %d: %w", i, err)
+			}
+			b.AddData(sig)
+		}
+		sigScript, err := b.AddData(redeem).Script()
 		if err != nil {
 			return err
-		}
-		keys[addr.EncodeAddress()] = key
-	}
-	lookupKey := txscript.KeyClosure(func(addr btcutil.Address) (*btcec.PrivateKey, bool, error) {
-		key, ok := keys[addr.EncodeAddress()]
-		if !ok {
-			return nil, false, errors.New("not a local signer")
-		}
-		return key, true, nil
-	})
-	lookupScript := txscript.ScriptClosure(func(btcutil.Address) ([]byte, error) {
-		return s.redeemScript, nil
-	})
-
-	pkScript := s.pkScript()
-	for i := range tx.TxIn {
-		sigScript, err := txscript.SignTxOutput(&dogecoinMainNet, tx, i, pkScript,
-			txscript.SigHashAll, lookupKey, lookupScript, nil)
-		if err != nil {
-			return fmt.Errorf("signing input %d: %w", i, err)
 		}
 		tx.TxIn[i].SignatureScript = sigScript
 	}

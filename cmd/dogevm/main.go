@@ -13,10 +13,12 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
@@ -31,6 +33,8 @@ Wallet (DogecoinVM):
   dogevm send -key KEY -to ADDR -amount DOGE  send DOGE on DogecoinVM
 
 Peg (users):
+  dogevm deposit-address -signers FILE -to VMADDR
+      personal Dogecoin address that credits VMADDR; send to it from any wallet
   dogevm peg-in -signers FILE -to VMADDR -amount DOGE
       deposit from the Dogecoin Core wallet at DOGECOIN_RPC to the peg,
       credited to VMADDR on DogecoinVM
@@ -42,6 +46,10 @@ Bridge (peg signers):
       create a signer set, and print the peg addresses and genesis config
   dogevm bridge -signers FILE [-once]         run the bridge
   dogevm audit -signers FILE                  check the peg is fully backed
+  dogevm serve -signers FILE                  web wallet and bridge API
+
+Personal deposit addresses are recorded in -deposits (default deposits.json
+next to the signers file) so the bridge knows to watch them.
 
 Run "dogevm COMMAND -h" for a command's flags. Connection settings come from
 the DOGEVM_* and DOGECOIN_* environment variables; see the package docs.
@@ -96,14 +104,16 @@ func main() {
 	}
 	cmd, args := os.Args[1], os.Args[2:]
 	commands := map[string]func([]string) error{
-		"keygen":  cmdKeygen,
-		"balance": cmdBalance,
-		"send":    cmdSend,
-		"peg-in":  cmdPegIn,
-		"peg-out": cmdPegOut,
-		"signers": cmdSigners,
-		"bridge":  cmdBridge,
-		"audit":   cmdAudit,
+		"keygen":          cmdKeygen,
+		"balance":         cmdBalance,
+		"send":            cmdSend,
+		"peg-in":          cmdPegIn,
+		"deposit-address": cmdDepositAddress,
+		"serve":           cmdServe,
+		"peg-out":         cmdPegOut,
+		"signers":         cmdSigners,
+		"bridge":          cmdBridge,
+		"audit":           cmdAudit,
 	}
 	run, ok := commands[cmd]
 	if !ok {
@@ -349,6 +359,15 @@ func bridgeFlags(fs *flag.FlagSet) *bridge {
 	return b
 }
 
+// registryFor returns the deposit registry at path, or next to the signers
+// file if path is empty.
+func registryFor(path, signersPath string) *depositRegistry {
+	if path == "" {
+		path = filepath.Join(filepath.Dir(signersPath), "deposits.json")
+	}
+	return &depositRegistry{path: path}
+}
+
 // connect points b at the chains and signer set.
 func (b *bridge) connect(s *settings, signers *signerSet) {
 	b.signers = signers
@@ -357,18 +376,83 @@ func (b *bridge) connect(s *settings, signers *signerSet) {
 	b.vmParams, b.dogeParams = s.vmParams, s.dogeParams
 }
 
-// watchPeg makes Dogecoin Core track the peg address.
+// watchPeg makes Dogecoin Core track the peg address and every registered
+// deposit address.
 func watchPeg(b *bridge, rescan bool) error {
-	pegAddr, err := b.dogePegAddress()
+	addrs, _, err := b.dogeWatchSet(&pegState{})
 	if err != nil {
 		return err
 	}
-	return b.doge.(*dogeChain).watch(pegAddr, rescan)
+	for _, addr := range addrs {
+		if err := b.doge.(*dogeChain).watch(addr, rescan); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// registerDeposit records dest's personal deposit address and has Dogecoin
+// Core watch it.
+func registerDeposit(b *bridge, dest destination) (btcutil.Address, error) {
+	addr, err := b.signers.depositAddress(dest, b.dogeParams)
+	if err != nil {
+		return nil, err
+	}
+	added, err := b.registry.add(dest)
+	if err != nil {
+		return nil, err
+	}
+	if added {
+		// Nothing can have been sent to a new address, so no rescan.
+		if err := b.doge.(*dogeChain).watch(addr, false); err != nil {
+			return nil, err
+		}
+	}
+	return addr, nil
+}
+
+func cmdDepositAddress(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("deposit-address", flag.ExitOnError)
+	signersPath := fs.String("signers", "", "peg signer set file (public keys are enough)")
+	depositsPath := fs.String("deposits", "", "deposit address registry (default: deposits.json next to -signers)")
+	to := fs.String("to", "", "DogecoinVM address to credit")
+	if err := parseFlags(fs, &s, args); err != nil {
+		return err
+	}
+	if err := required(map[string]string{"signers": *signersPath, "to": *to}); err != nil {
+		return err
+	}
+	signers, err := readSignerSet(*signersPath)
+	if err != nil {
+		return err
+	}
+	b := &bridge{registry: registryFor(*depositsPath, *signersPath)}
+	b.connect(&s, signers)
+	destAddr, err := btcutil.DecodeAddress(*to, s.vmParams)
+	if err != nil {
+		return fmt.Errorf("-to must be a DogecoinVM %s address: %w", s.vmNetwork, err)
+	}
+	dest, err := destinationOf(destAddr)
+	if err != nil {
+		return err
+	}
+	addr, err := registerDeposit(b, dest)
+	if err != nil {
+		return err
+	}
+	printJSON(map[string]string{
+		"depositAddress": addr.EncodeAddress(),
+		"creditTo":       destAddr.EncodeAddress(),
+		"redeemScript":   hex.EncodeToString(signers.depositRedeemScript(dest)),
+	})
+	return nil
 }
 
 func cmdBridge(args []string) error {
 	var s settings
 	fs := flag.NewFlagSet("bridge", flag.ExitOnError)
+	depositsPath := fs.String("deposits", "", "deposit address registry (default: deposits.json next to -signers)")
 	signersPath := fs.String("signers", "", "peg signer set file")
 	once := fs.Bool("once", false, "process what is pending, then exit")
 	interval := fs.Duration("interval", 10*time.Second, "time between polls")
@@ -389,6 +473,7 @@ func cmdBridge(args []string) error {
 		return err
 	}
 	b.connect(&s, signers)
+	b.registry = registryFor(*depositsPath, *signersPath)
 	if err := watchPeg(b, *rescan); err != nil {
 		return fmt.Errorf("importing the peg address into Dogecoin Core: %w", err)
 	}
@@ -418,6 +503,7 @@ func cmdBridge(args []string) error {
 func cmdAudit(args []string) error {
 	var s settings
 	fs := flag.NewFlagSet("audit", flag.ExitOnError)
+	depositsPath := fs.String("deposits", "", "deposit address registry (default: deposits.json next to -signers)")
 	signersPath := fs.String("signers", "", "peg signer set file (public keys are enough)")
 	s.register(fs)
 	b := bridgeFlags(fs)
@@ -435,6 +521,7 @@ func cmdAudit(args []string) error {
 		return err
 	}
 	b.connect(&s, signers)
+	b.registry = registryFor(*depositsPath, *signersPath)
 	if err := watchPeg(b, false); err != nil {
 		return err
 	}
