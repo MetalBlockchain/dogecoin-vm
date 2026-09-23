@@ -687,9 +687,18 @@ func cmdServe(args []string) error {
 		faucetAddr, _ := p2pkhAddress(key, s.vmParams)
 		log.Printf("faucet: %s DOGE per claim from %s", formatDoge(amount), faucetAddr.EncodeAddress())
 	}
-	if err := watchPeg(b, false); err != nil {
-		return fmt.Errorf("importing peg addresses into Dogecoin Core: %w", err)
-	}
+	// Watching the peg addresses waits on Dogecoin Core, which can be slow to
+	// answer while it syncs; the site must not wait with it.
+	go func() {
+		for {
+			err := watchPeg(b, false)
+			if err == nil {
+				return
+			}
+			log.Printf("importing peg addresses into Dogecoin Core (will retry): %v", err)
+			time.Sleep(time.Minute)
+		}
+	}()
 
 	go func() {
 		for {
