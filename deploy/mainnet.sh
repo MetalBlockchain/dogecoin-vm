@@ -133,6 +133,12 @@ UNIT
   cat >/etc/caddy/Caddyfile <<CADDY
 $DOMAIN {
 	header Strict-Transport-Security "max-age=31536000"
+	# The macOS wallet's DMGs and signed update feed (dogecoin-vm-wallet's
+	# publish-update.sh uploads them).
+	handle_path /download/* {
+		root * /var/www/metaldoge-downloads
+		file_server
+	}
 	handle /rpc {
 		rewrite * /ext/bc/$chain/rpc
 		reverse_proxy 127.0.0.1:9660 {
