@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ type server struct {
 	vm      *vmChain
 	doge    *dogeChain
 	faucet  *faucet
+	dogeIdx *dogeIndex // Dogecoin balances for the wallet; nil if disabled
 
 	mu       sync.RWMutex
 	snapshot *snapshot
@@ -176,6 +178,7 @@ func (srv *server) info(*http.Request) (any, error) {
 		"maxDeposit":           formatDoge(srv.b.maxDeposit),
 		"maxCirculating":       formatDoge(srv.b.maxCirculating),
 		"faucet":               srv.faucet.info(),
+		"dogeWallet":           srv.dogeIdx != nil,
 		"dogecoinvmVersions":   addressVersions(srv.b.vmParams),
 		"dogecoinVersions":     addressVersions(srv.b.dogeParams),
 		"chainID":              srv.chainID,
@@ -633,6 +636,7 @@ func cmdServe(args []string) error {
 	faucetKey := flags.String("faucet-key", "", "private key (WIF or hex) of the faucet's DogecoinVM address; empty disables the faucet")
 	faucetAmount := flags.String("faucet-amount", "100", "DOGE per faucet claim")
 	chainID := flags.String("chain-id", "", "the DogecoinVM chain's ID on Metal, shown on the page")
+	dogeIndexPath := flags.String("doge-index", "", "directory for the wallet's Dogecoin address index (default: dogeindex next to -signers; \"off\" disables Dogecoin balances)")
 	s.register(flags)
 	b := bridgeFlags(flags)
 	health := &healthChecker{b: b}
@@ -693,6 +697,17 @@ func cmdServe(args []string) error {
 		}
 	}()
 	go srv.watchSupply()
+	if *dogeIndexPath != "off" {
+		if *dogeIndexPath == "" {
+			*dogeIndexPath = filepath.Join(filepath.Dir(*signersPath), "dogeindex")
+		}
+		idx, err := openDogeIndex(*dogeIndexPath, srv.doge)
+		if err != nil {
+			return fmt.Errorf("opening the Dogecoin index: %w", err)
+		}
+		srv.dogeIdx = idx
+		go idx.run(make(chan struct{}))
+	}
 
 	static, err := fs.Sub(webFiles, "web")
 	if err != nil {
@@ -715,6 +730,11 @@ func cmdServe(args []string) error {
 	mux.HandleFunc("GET /api/rawtx/{txid}", handle(srv.rawTx))
 	mux.HandleFunc("POST /api/deposit-address", handle(srv.depositAddress))
 	mux.HandleFunc("POST /api/faucet", handle(srv.faucetClaim))
+	mux.HandleFunc("POST /api/doge/watch", handle(srv.dogeWatch))
+	mux.HandleFunc("GET /api/doge/address/{addr}", handle(srv.dogeAddressHandler))
+	mux.HandleFunc("POST /api/doge/import", handle(srv.limited(srv.dogeImport)))
+	mux.HandleFunc("GET /api/doge/rawtx/{txid}", handle(srv.limited(srv.dogeRawTx)))
+	mux.HandleFunc("POST /api/doge/tx", handle(srv.dogeBroadcast))
 
 	log.Printf("serving on http://%s", *listen)
 	server := &http.Server{
