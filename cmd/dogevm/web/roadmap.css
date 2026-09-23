@@ -16,8 +16,10 @@
   --sans: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
+/* Light unless the viewer picks dark, or their system setting, like every
+   other page. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root[data-theme="system"] {
     --bg: #0d1524; --surface: #15213a; --sunk: #0f192d; --ink: #e7ecf2; --ink-soft: #a3afc0;
     --rule: #2a3a57; --coin: #e2c46d; --coin-wash: rgba(212,171,69,.14); --vm: #7fd0c7;
     --vm-wash: rgba(79,179,169,.14); --plan: #b7badf; --plan-wash: rgba(150,155,210,.14);
@@ -70,7 +72,7 @@ td code, li code, p code { font-family: var(--mono); font-size: 0.86em; backgrou
 .wow-2 { top: 42%; right: -14%; color: #2e7d32; transform: rotate(6deg); }
 .wow-3 { bottom: 2%; left: -8%; color: #1565c0; transform: rotate(-4deg); }
 .wow-4 { top: 2%; right: -2%; color: #ef6c00; font-size: 1.25rem; transform: rotate(10deg); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wow-1 { color: #f48fb1; } :root:not([data-theme="light"]) .wow-2 { color: #a5d6a7; } :root:not([data-theme="light"]) .wow-3 { color: #90caf9; } :root:not([data-theme="light"]) .wow-4 { color: #ffcc80; } }
+@media (prefers-color-scheme: dark) { :root[data-theme="system"] .wow-1 { color: #f48fb1; } :root[data-theme="system"] .wow-2 { color: #a5d6a7; } :root[data-theme="system"] .wow-3 { color: #90caf9; } :root[data-theme="system"] .wow-4 { color: #ffcc80; } }
 :root[data-theme="dark"] .wow-1 { color: #f48fb1; } :root[data-theme="dark"] .wow-2 { color: #a5d6a7; } :root[data-theme="dark"] .wow-3 { color: #90caf9; } :root[data-theme="dark"] .wow-4 { color: #ffcc80; }
 @media (max-width: 40rem) {
   .hero { grid-template-columns: 1fr; }
@@ -137,11 +139,11 @@ pre.mermaid, .diagram { background: #ffffff; border: 1px solid var(--rule); padd
   h3 { break-after: avoid; }
   .headline, .flow section, .keys section, .phase, tr, .ids, .diagram, pre.mermaid { break-inside: avoid; }
   a { color: inherit; }
-  footer { margin-top: 1.25rem; break-before: avoid; }
+  .site-footer { margin-top: 1.25rem; break-before: avoid; }
   .phase { padding-bottom: 1.5rem; }
 }
-footer { margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); color: var(--ink-soft); font-size: 0.9rem; }
 
 /* The public page: images instead of inline SVG, for the site's content
    security policy. */
 .diagram img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.note { margin-top: 3rem; color: var(--ink-soft); font-size: 0.95rem; }

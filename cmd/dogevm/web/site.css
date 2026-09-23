@@ -80,6 +80,17 @@
 .site-footer p { margin: 0; max-width: none; }
 .site-footer nav { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; }
 .site-footer a { color: var(--ink-soft); }
+/* Styled here in full, so it looks the same on pages without app.css. */
+.site-footer .theme-toggle {
+  font: 500 0.9rem var(--sans);
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--ink-soft);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.site-footer .theme-toggle:hover { color: var(--ink); border-color: var(--ink); }
 
 /* Content pages */
 
