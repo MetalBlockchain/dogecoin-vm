@@ -22,10 +22,13 @@
   <header class="site-header">
     <a class="site-brand" href="/"><img src="dogecoin.svg" alt="" width="32" height="32">DogecoinVM</a>
     <nav class="site-nav" aria-label="Site">
-      {{- range .Nav}}
-      <a {{if .CTA}}class="nav-cta" {{end}}href="{{.Path}}"{{if eq .Path $.Path}} aria-current="page"{{end}}>{{.Label}}{{if .CTA}}<span class="nav-more">&nbsp;for Mac</span>{{end}}</a>
-      {{- end}}
+      {{- range .Nav}}{{if not .CTA}}
+      <a href="{{.Path}}"{{if eq .Path $.Path}} aria-current="page"{{end}}>{{.Label}}</a>
+      {{- end}}{{end}}
     </nav>
+    {{- range .Nav}}{{if .CTA}}
+    <a class="nav-cta" href="{{.Path}}"{{if eq .Path $.Path}} aria-current="page"{{end}}>{{.Label}}<span class="nav-more">&nbsp;for Mac</span></a>
+    {{- end}}{{end}}
   </header>
   <span id="content" tabindex="-1"></span>
 

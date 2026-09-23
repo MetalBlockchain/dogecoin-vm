@@ -29,17 +29,19 @@ code { font-family: var(--mono); font-size: 0.9em; }
 }
 .skip-link:focus { top: 0.75rem; }
 
+/* Brand on the left; the menu and the download button on the right. On a
+   phone the button moves up beside the brand and the menu gets its own row. */
 .site-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem 1.5rem;
+  gap: 0.5rem 1.5rem;
   max-width: 72rem;
   margin: 0 auto;
   padding: 1rem 1.5rem;
 }
 .site-brand {
+  margin-right: auto;
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -51,7 +53,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
 }
 .site-brand img { width: 2rem; height: 2rem; }
 .site-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.35rem; }
-.site-nav a {
+.site-nav a, .nav-cta {
   padding: 0.5rem 0.7rem;
   border-radius: 3px;
   color: var(--ink-soft);
@@ -63,19 +65,19 @@ code { font-family: var(--mono); font-size: 0.9em; }
 }
 .site-nav a:hover { color: var(--ink); background: var(--surface-sunk); }
 .site-nav a[aria-current="page"] { color: var(--ink); box-shadow: inset 0 -3px 0 var(--coin); }
-.site-nav .nav-cta {
-  margin-left: 0.35rem;
+.nav-cta {
+  margin-left: -1rem; /* sits closer to the menu than the header gap */
   background: var(--ink);
   color: var(--bg);
 }
-.site-nav .nav-cta:hover { background: var(--ink); color: var(--bg); opacity: 0.9; }
-.site-nav .nav-cta[aria-current="page"] { color: var(--bg); box-shadow: inset 0 -3px 0 var(--coin); }
+.nav-cta:hover { opacity: 0.9; }
+.nav-cta[aria-current="page"] { box-shadow: inset 0 -3px 0 var(--coin); }
 .nav-cta svg { width: 1em; height: 1em; margin-right: 0.35rem; }
 @media (max-width: 40rem) {
   .site-header { padding: 0.75rem 1rem; }
-  .site-nav { width: 100%; }
-  .site-nav a { padding: 0.45rem 0.55rem; }
-  .site-nav .nav-cta { margin-left: auto; }
+  .site-nav { order: 1; flex-wrap: nowrap; justify-content: space-between; gap: 0; width: calc(100% + 0.8rem); margin: 0 -0.4rem; }
+  .site-nav a { padding: 0.45rem 0.4rem; }
+  .nav-cta { margin-left: 0; }
   .nav-more { display: none; }
 }
 
