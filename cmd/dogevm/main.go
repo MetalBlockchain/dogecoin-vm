@@ -15,6 +15,7 @@ package main
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -55,6 +56,7 @@ Bridge (peg signers):
       return a held deposit, less the Dogecoin fee, to its sender (or -to)
   dogevm monitor -signers FILE [-webhook URL]  alert when a health check fails
   dogevm serve -signers FILE                  web wallet and bridge API
+  dogevm signer-setup STEP                    set up separate signers: init, coordinator, assemble, join, check
   dogevm signer-key -out FILE                 new key for one separate signer; prints its public key
   dogevm signer -signers FILE -key-file FILE  run one separate signer (see docs/SIGNERS.md)
 
@@ -128,6 +130,7 @@ func main() {
 		"monitor":         cmdMonitor,
 		"signer":          cmdSigner,
 		"signer-key":      cmdSignerKey,
+		"signer-setup":    cmdSignerSetup,
 	}
 	run, ok := commands[cmd]
 	if !ok {
@@ -380,7 +383,9 @@ func bridgeFlags(fs *flag.FlagSet) *bridge {
 	fs.Int64Var(&b.minPegOut, "min-peg-out", 2*koinuPerDoge, "smallest peg-out paid, in koinu")
 	fs.Int64Var(&b.maxDeposit, "max-deposit", 0, "largest deposit credited, in koinu; larger ones are held for refund (0: no cap)")
 	fs.Int64Var(&b.maxCirculating, "max-circulating", 0, "most DOGE, in koinu, the bridge lets circulate on DogecoinVM (0: no cap)")
-	fs.StringVar(&b.cosignersPath, "cosigners", "", "JSON list of remote signers, [{\"url\": ..., \"token\": ...}] (keep out of the repository)")
+	fs.StringVar(&b.cosignersPath, "cosigners", "", "JSON list of remote signers, [{\"url\": ...}] (from dogevm signer-setup assemble)")
+	fs.StringVar(&b.coordinatorKeyPath, "coordinator-key-file", "", "the coordinator key, to sign requests to the signers (from dogevm signer-setup coordinator)")
+	b.flags = fs
 	return b
 }
 
@@ -399,13 +404,62 @@ func (b *bridge) connect(s *settings, signers *signerSet) error {
 	b.vm = s.vmChain()
 	b.doge = &dogeChain{rpc: s.dogeRPCClient()}
 	b.vmParams, b.dogeParams = s.vmParams, s.dogeParams
+	if n := signers.Networks; n != nil && (n.Dogecoin != s.dogeNet || n.DogecoinVM != s.vmNetwork) {
+		return fmt.Errorf("the signer set is for Dogecoin %s and DogecoinVM %s, not %s and %s",
+			n.Dogecoin, n.DogecoinVM, s.dogeNet, s.vmNetwork)
+	}
+	if err := b.applyPolicy(signers.Policy); err != nil {
+		return err
+	}
 	if b.cosignersPath != "" {
 		var err error
 		if b.cosigners, err = readCosigners(b.cosignersPath); err != nil {
 			return err
 		}
 	}
+	if b.coordinatorKeyPath != "" {
+		key, err := readKeyFile(b.coordinatorKeyPath)
+		if err != nil {
+			return err
+		}
+		if signers.coordKey == nil || !signers.coordKey.IsEqual(key.PubKey()) {
+			return errors.New("-coordinator-key-file is not the coordinator key the signer set names")
+		}
+		for _, r := range b.cosigners {
+			r.auth = key
+		}
+	}
 	return nil
+}
+
+// applyPolicy adopts the policy the signers agreed to. A policy flag given
+// explicitly must agree with it.
+func (b *bridge) applyPolicy(p *pegPolicy) error {
+	if p == nil {
+		return nil
+	}
+	fields := map[string]*int64{
+		"confirmations": &b.depositConfirmations, "vm-fee": &b.vmFee, "doge-fee": &b.dogeFee,
+		"min-deposit": &b.minDeposit, "min-peg-out": &b.minPegOut,
+		"max-deposit": &b.maxDeposit, "max-circulating": &b.maxCirculating,
+	}
+	agreed := map[string]int64{
+		"confirmations": p.Confirmations, "vm-fee": p.VMFee, "doge-fee": p.DogeFee,
+		"min-deposit": p.MinDeposit, "min-peg-out": p.MinPegOut,
+		"max-deposit": p.MaxDeposit, "max-circulating": p.MaxCirculating,
+	}
+	var err error
+	if b.flags != nil {
+		b.flags.Visit(func(f *flag.Flag) {
+			if want, ok := agreed[f.Name]; ok && *fields[f.Name] != want && err == nil {
+				err = fmt.Errorf("-%s=%d disagrees with the signer set's policy (%d)", f.Name, *fields[f.Name], want)
+			}
+		})
+	}
+	for name, v := range agreed {
+		*fields[name] = v
+	}
+	return err
 }
 
 // watchPeg makes Dogecoin Core track the peg address and every registered

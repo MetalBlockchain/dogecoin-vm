@@ -13,21 +13,25 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
 	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
 	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
 	"github.com/paulgnz/dogecoin-vm/btcd/wire"
@@ -145,7 +149,21 @@ func (b *bridge) authorize(p *proposal) error {
 // remoteSigner is a "dogevm signer" the coordinator asks for signatures.
 type remoteSigner struct {
 	URL   string `json:"url"`
-	Token string `json:"token"`
+	Token string `json:"token,omitempty"` // optional, for signers run with -token-file
+
+	auth *btcec.PrivateKey // the coordinator key, if the set names one
+}
+
+// Requests to signers are signed with the coordinator key, over the method,
+// path, time and body. A signer accepts them for requestSkew either side of
+// its clock; a replay in that window is harmless, as signing is idempotent.
+const requestSkew = 5 * time.Minute
+
+func requestDigest(method, path string, unix int64, body []byte) []byte {
+	bodySum := sha256.Sum256(body)
+	msg := fmt.Sprintf("dogevm coordinator request v1\n%s\n%s\n%d\n%x", method, path, unix, bodySum)
+	sum := sha256.Sum256([]byte(msg))
+	return sum[:]
 }
 
 // signerClient is shared by every remote signer; http.Client is safe for
@@ -188,6 +206,12 @@ func (r *remoteSigner) do(method, path string, body []byte, result any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if r.auth != nil {
+		now := time.Now().Unix()
+		sig := ecdsa.Sign(r.auth, requestDigest(method, path, now, body))
+		req.Header.Set("X-Dogevm-Time", strconv.FormatInt(now, 10))
+		req.Header.Set("X-Dogevm-Signature", hex.EncodeToString(sig.Serialize()))
+	}
 	if r.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+r.Token)
 	}
@@ -267,6 +291,9 @@ type cosigner struct {
 	// maxDaily caps the DOGE, in koinu, this signer approves moving in any
 	// 24 hours. Zero: no cap.
 	maxDaily int64
+	// open accepts unauthenticated requests: only on loopback, where the
+	// coordinator runs on the same machine.
+	open bool
 
 	mu sync.Mutex // one proposal at a time
 }
@@ -279,18 +306,53 @@ func (c *cosigner) handler() http.Handler {
 	return mux
 }
 
+// authenticate checks a request carries the token, if this signer has one,
+// and the coordinator's signature, if the signer set names a coordinator
+// key. It returns the body.
+func (c *cosigner) authenticate(r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if c.token != "" {
+		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(c.token)) != 1 {
+			return nil, errors.New("unauthorized")
+		}
+	}
+	if coord := c.b.signers.coordKey; coord != nil {
+		unix, err := strconv.ParseInt(r.Header.Get("X-Dogevm-Time"), 10, 64)
+		if err != nil {
+			return nil, errors.New("unauthorized: not signed by the coordinator")
+		}
+		if d := time.Since(time.Unix(unix, 0)); d > requestSkew || d < -requestSkew {
+			return nil, errors.New("unauthorized: request time is too far from this signer's clock")
+		}
+		raw, err := hex.DecodeString(r.Header.Get("X-Dogevm-Signature"))
+		if err != nil {
+			return nil, errors.New("unauthorized: not signed by the coordinator")
+		}
+		sig, err := ecdsa.ParseDERSignature(raw)
+		if err != nil || !sig.Verify(requestDigest(r.Method, r.URL.Path, unix, body), coord) {
+			return nil, errors.New("unauthorized: not signed by the coordinator")
+		}
+	}
+	if c.token == "" && c.b.signers.coordKey == nil && !c.open {
+		return nil, errors.New("unauthorized: this signer has neither a token nor a coordinator key")
+	}
+	return body, nil
+}
+
 func (c *cosigner) authed(fn func(*http.Request) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if c.token != "" {
-			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if subtle.ConstantTimeCompare([]byte(got), []byte(c.token)) != 1 {
-				w.WriteHeader(http.StatusUnauthorized)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
-				return
-			}
+		body, err := c.authenticate(r)
+		if err != nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		c.mu.Lock()
 		result, err := fn(r)
 		c.mu.Unlock()
@@ -841,8 +903,15 @@ func cmdSigner(args []string) error {
 	if err != nil {
 		return err
 	}
-	if ip := net.ParseIP(host); c.token == "" && (ip == nil || !ip.IsLoopback()) {
-		return errors.New("listening beyond this machine needs -token-file")
+	loopback := false
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		loopback = true
+	}
+	switch {
+	case c.token == "" && signers.coordKey == nil && !loopback:
+		return errors.New("listening beyond this machine needs a coordinator key in the signer set, or -token-file")
+	case c.token == "" && signers.coordKey == nil:
+		c.open = true
 	}
 	b.logf("signer %s listening on %s", hex.EncodeToString(key.PubKey().SerializeCompressed()), *listen)
 	srv := &http.Server{

@@ -1,0 +1,222 @@
+package main
+
+import (
+	"bufio"
+	"encoding/hex"
+	"flag"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+)
+
+func ecdsaSign(key *btcec.PrivateKey, hash []byte) []byte {
+	return ecdsa.Sign(key, hash).Serialize()
+}
+
+// answering makes signer-setup read its answers from input, as if typed at
+// a terminal.
+func answering(t *testing.T, input string) {
+	t.Helper()
+	orig := newPrompter
+	newPrompter = func(yes bool) *prompter {
+		return &prompter{in: bufio.NewReader(strings.NewReader(input)), out: io.Discard, interactive: !yes}
+	}
+	t.Cleanup(func() { newPrompter = orig })
+}
+
+// ceremony runs signer-setup for the harness's three keys: the first
+// imported interactively by pasting it, the others from files, one as a
+// WIF. It returns the coordinator key file, the set and each signer's dir.
+func ceremony(t *testing.T, h *harness) (coordKey string, set *signerSet, dirs []string) {
+	require := require.New(t)
+	root := t.TempDir()
+	var cards []string
+	for i, key := range h.b.signers.privKeys {
+		dir := filepath.Join(root, "signer"+strconv.Itoa(i))
+		dirs = append(dirs, dir)
+		url := "https://signer" + strconv.Itoa(i) + ".example:9700"
+		switch i {
+		case 0:
+			// Interactive: name, URL, "import", the pasted key, "y".
+			answering(t, strings.Join([]string{"Signer Zero", url, "import", hex.EncodeToString(key.Serialize()), "y", ""}, "\n"))
+			require.NoError(setupInit([]string{"-dir", dir}))
+		default:
+			keyFile := filepath.Join(root, "import"+strconv.Itoa(i))
+			secret := hex.EncodeToString(key.Serialize())
+			if i == 2 {
+				wif, err := btcutil.NewWIF(key, &dogecoinMainNet, true)
+				require.NoError(err)
+				secret = wif.String()
+			}
+			require.NoError(os.WriteFile(keyFile, []byte(secret), 0o600))
+			answering(t, "")
+			require.NoError(setupInit([]string{"-yes", "-dir", dir, "-name", "Signer " + strconv.Itoa(i), "-url", url, "-import-key-file", keyFile}))
+		}
+		cards = append(cards, filepath.Join(dir, cardFileName))
+		imported, err := readKeyFile(filepath.Join(dir, keyFileName))
+		require.NoError(err)
+		require.True(imported.PubKey().IsEqual(key.PubKey()))
+	}
+
+	answering(t, "")
+	coordDir := filepath.Join(root, "coordinator")
+	require.NoError(setupCoordinator([]string{"-yes", "-dir", coordDir}))
+	coordKey = filepath.Join(coordDir, coordKeyName)
+	coord, err := readKeyFile(coordKey)
+	require.NoError(err)
+
+	setPath := filepath.Join(root, "signers.json")
+	assembleArgs := []string{"-yes", "-required", "2", "-doge-network", "regtest", "-vm-network", "testnet",
+		"-coordinator-key", hex.EncodeToString(coord.PubKey().SerializeCompressed()),
+		"-out", setPath, "-cosigners-out", filepath.Join(root, "cosigners.json")}
+	require.NoError(setupAssemble(append(assembleArgs, cards...)))
+	set, err = readSignerSet(setPath)
+	require.NoError(err)
+	require.Empty(set.PrivateKeys)
+	require.Equal(h.b.signers.PublicKeys, set.PublicKeys, "same keys, same order: the same peg address")
+
+	for i, dir := range dirs {
+		if i == 0 {
+			// Interactive: confirm the fingerprint, then a 500 DOGE daily limit.
+			answering(t, "y\n500\n")
+			require.NoError(setupJoin([]string{"-dir", dir, "-signers", setPath}))
+		} else {
+			answering(t, "")
+			require.NoError(setupJoin([]string{"-yes", "-dir", dir, "-signers", setPath, "-fingerprint", set.fingerprint()}))
+		}
+		env, err := os.Stat(filepath.Join(dir, envFileName))
+		require.NoError(err)
+		require.Equal(os.FileMode(0o600), env.Mode().Perm())
+		unit, err := os.ReadFile(filepath.Join(dir, unitFileName))
+		require.NoError(err)
+		require.Contains(string(unit), "-key-file "+filepath.Join(dir, keyFileName))
+		if i == 0 {
+			require.Contains(string(unit), "-max-daily 50000000000")
+		}
+	}
+	return coordKey, set, dirs
+}
+
+func TestSignerCeremony(t *testing.T) {
+	require := require.New(t)
+	h := &cosignHarness{harness: newHarness(t)}
+	coordKeyPath, set, dirs := ceremony(t, h.harness)
+
+	// The coordinator: the agreed set, no keys, requests signed.
+	coord, err := readKeyFile(coordKeyPath)
+	require.NoError(err)
+	h.b.signers = set
+	require.NoError(h.b.applyPolicy(set.Policy))
+	for _, dir := range dirs {
+		own := *h.b
+		own.signers, err = readSignerSet(filepath.Join(dir, setFileName))
+		require.NoError(err)
+		own.registry = &depositRegistry{path: filepath.Join(dir, "deposits.json")}
+		key, err := readKeyFile(filepath.Join(dir, keyFileName))
+		require.NoError(err)
+		log, err := openSigningLog(filepath.Join(dir, signingLogKey))
+		require.NoError(err)
+		c := &cosigner{b: &own, key: key, log: log}
+		srv := httptest.NewServer(c.handler())
+		t.Cleanup(srv.Close)
+		h.signers = append(h.signers, c)
+		h.servers = append(h.servers, srv)
+		h.b.cosigners = append(h.b.cosigners, &remoteSigner{URL: srv.URL, auth: coord})
+	}
+
+	alice, aliceOnDoge := h.user(1), h.user(2)
+	_, err = registerDeposit(h.b, alice)
+	require.NoError(err)
+	h.personalDeposit(100*doge, alice, 6)
+	require.NotEmpty(h.step())
+	require.Equal(int64(100*doge-doge/100), paidTo(h.vm, alice))
+	h.vm.mine()
+	h.pegOut(60*doge, aliceOnDoge)
+	require.NotEmpty(h.step())
+	require.Equal(int64(59*doge), paidTo(h.doge, aliceOnDoge))
+
+	// Requests not signed by the coordinator key are refused.
+	var status map[string]any
+	unsigned := &remoteSigner{URL: h.servers[0].URL}
+	require.ErrorContains(unsigned.status(&status), "not signed by the coordinator")
+	impostor := &remoteSigner{URL: h.servers[0].URL, auth: h.signers[1].key}
+	require.ErrorContains(impostor.status(&status), "not signed by the coordinator")
+	require.NoError(h.b.cosigners[0].status(&status))
+
+	// So are stale ones.
+	req, _ := http.NewRequest(http.MethodGet, h.servers[0].URL+"/v1/status", nil)
+	old := time.Now().Add(-time.Hour).Unix()
+	req.Header.Set("X-Dogevm-Time", strconv.FormatInt(old, 10))
+	req.Header.Set("X-Dogevm-Signature", hex.EncodeToString(ecdsaSign(coord, requestDigest("GET", "/v1/status", old, nil))))
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(err)
+	resp.Body.Close()
+	require.Equal(http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestCeremonyRefusesMistakes(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	_, set, dirs := ceremony(t, h)
+	setPath := filepath.Join(filepath.Dir(dirs[0]), "signers.json")
+	answering(t, "")
+
+	// A fingerprint that doesn't match.
+	err := setupJoin([]string{"-yes", "-dir", dirs[1], "-signers", setPath, "-fingerprint", "0000-0000-0000-0000-0000"})
+	require.ErrorContains(err, "do not join")
+	// No fingerprint at all, without a terminal.
+	err = setupJoin([]string{"-yes", "-dir", dirs[1], "-signers", setPath})
+	require.ErrorContains(err, "-fingerprint is required")
+
+	// Interactively declining the fingerprint writes nothing new.
+	answering(t, "n\n")
+	err = setupJoin([]string{"-dir", dirs[1], "-signers", setPath})
+	require.ErrorContains(err, "not confirmed")
+
+	// A card whose name was changed after it was signed.
+	answering(t, "")
+	card, err := readCard(filepath.Join(dirs[0], cardFileName))
+	require.NoError(err)
+	card.Name = "Someone Else"
+	require.ErrorContains(card.verify(), "does not match")
+
+	// A second init on the same machine.
+	err = setupInit([]string{"-yes", "-dir", dirs[0], "-name", "x", "-url", "https://x.example"})
+	require.ErrorContains(err, "already has a signer key")
+
+	// Keys the peg can't use.
+	_, err = parsePrivateKey("5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ") // secretscan:allow (textbook uncompressed WIF)
+	require.ErrorContains(err, "uncompressed")
+	_, err = parsePrivateKey("abcd")
+	require.Error(err)
+
+	// The agreed policy wins; a flag that disagrees with it is an error.
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	b := bridgeFlags(fs)
+	require.NoError(fs.Parse([]string{"-vm-fee", "7"}))
+	require.ErrorContains(b.applyPolicy(set.Policy), "-vm-fee=7 disagrees")
+	fs = flag.NewFlagSet("t", flag.ContinueOnError)
+	b = bridgeFlags(fs)
+	require.NoError(fs.Parse(nil))
+	require.NoError(b.applyPolicy(set.Policy))
+	require.Equal(set.Policy.VMFee, b.vmFee)
+
+	// Interactive init that makes a new key, with the defaults.
+	dir := filepath.Join(t.TempDir(), "fresh")
+	answering(t, strings.Join([]string{"Fresh Signer", "https://fresh.example:9700", "new", ""}, "\n"))
+	require.NoError(setupInit([]string{"-dir", dir}))
+	_, err = readKeyFile(filepath.Join(dir, keyFileName))
+	require.NoError(err)
+}

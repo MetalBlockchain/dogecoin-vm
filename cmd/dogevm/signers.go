@@ -2,11 +2,13 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
 	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
@@ -28,9 +30,58 @@ type signerSet struct {
 	// PrivateKeys holds hex private keys this process may sign with.
 	PrivateKeys []string `json:"privateKeys,omitempty"`
 
+	// Set by a signer ceremony (dogevm signer-setup); absent in older sets.
+	// Networks, Operators, CoordinatorKey and Policy are what every signer
+	// agrees to, and the fingerprint covers them.
+	Networks       *setNetworks   `json:"networks,omitempty"`
+	Operators      []operatorCard `json:"operators,omitempty"`
+	CoordinatorKey string         `json:"coordinatorKey,omitempty"` // hex; signs every request to the signers
+	Policy         *pegPolicy     `json:"policy,omitempty"`
+
 	redeemScript []byte
 	pubKeys      []*btcec.PublicKey
 	privKeys     []*btcec.PrivateKey
+	coordKey     *btcec.PublicKey
+}
+
+type setNetworks struct {
+	Dogecoin   string `json:"dogecoin"`
+	DogecoinVM string `json:"dogecoinvm"`
+}
+
+// pegPolicy is the bridge's policy, in koinu. Signers rebuild transactions
+// with it, so coordinator and signers must agree on it exactly.
+type pegPolicy struct {
+	Confirmations  int64 `json:"confirmations"`
+	VMFee          int64 `json:"vmFee"`
+	DogeFee        int64 `json:"dogeFee"`
+	MinDeposit     int64 `json:"minDeposit"`
+	MinPegOut      int64 `json:"minPegOut"`
+	MaxDeposit     int64 `json:"maxDeposit"`
+	MaxCirculating int64 `json:"maxCirculating"`
+}
+
+// fingerprint identifies everything the signers agree to. Each signer reads
+// it out to the others over a separate channel before joining.
+func (s *signerSet) fingerprint() string {
+	agreed, _ := json.Marshal(struct {
+		Required       int            `json:"required"`
+		PublicKeys     []string       `json:"publicKeys"`
+		Networks       *setNetworks   `json:"networks"`
+		Operators      []operatorCard `json:"operators"`
+		CoordinatorKey string         `json:"coordinatorKey"`
+		Policy         *pegPolicy     `json:"policy"`
+	}{s.Required, s.PublicKeys, s.Networks, s.Operators, s.CoordinatorKey, s.Policy})
+	sum := sha256.Sum256(agreed)
+	h := hex.EncodeToString(sum[:10])
+	return strings.Join([]string{h[0:4], h[4:8], h[8:12], h[12:16], h[16:20]}, "-")
+}
+
+// publicCopy is the set without private keys.
+func (s *signerSet) publicCopy() *signerSet {
+	c := *s
+	c.PrivateKeys, c.privKeys = nil, nil
+	return &c
 }
 
 func newSignerSet(required, total int) (*signerSet, error) {
@@ -97,6 +148,15 @@ func (s *signerSet) load() error {
 		}
 		key, _ := btcec.PrivKeyFromBytes(raw)
 		s.privKeys = append(s.privKeys, key)
+	}
+	if s.CoordinatorKey != "" {
+		raw, err := hex.DecodeString(s.CoordinatorKey)
+		if err != nil {
+			return fmt.Errorf("coordinator key: %w", err)
+		}
+		if s.coordKey, err = btcec.ParsePubKey(raw); err != nil {
+			return fmt.Errorf("coordinator key: %w", err)
+		}
 	}
 	if s.Required < 1 || s.Required > len(addrs) {
 		return fmt.Errorf("required signatures %d out of range for %d keys", s.Required, len(addrs))

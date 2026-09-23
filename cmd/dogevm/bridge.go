@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"sort"
 
@@ -28,12 +29,14 @@ type bridge struct {
 	signers *signerSet
 	// cosigners are remote signers, each holding one key, asked to sign
 	// what this process cannot sign with the keys in signers.
-	cosigners     []*remoteSigner
-	cosignersPath string
-	registry      *depositRegistry // personal deposit addresses; may be nil
-	vm, doge      chain
-	vmParams      *chaincfg.Params
-	dogeParams    *chaincfg.Params
+	cosigners          []*remoteSigner
+	cosignersPath      string
+	coordinatorKeyPath string
+	flags              *flag.FlagSet    // the policy flags, if from bridgeFlags
+	registry           *depositRegistry // personal deposit addresses; may be nil
+	vm, doge           chain
+	vmParams           *chaincfg.Params
+	dogeParams         *chaincfg.Params
 
 	depositConfirmations int64
 	vmFee                int64 // deducted from each credit to pay the VM fee

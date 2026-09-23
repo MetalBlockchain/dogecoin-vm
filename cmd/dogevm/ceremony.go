@@ -1,0 +1,754 @@
+package main
+
+// dogevm signer-setup: the ceremony that sets up separate signers. Only
+// public information changes hands:
+//
+//  1. Each operator, on their own machine:  signer-setup init
+//     makes (or imports) their key and a signer card: name, URL, public key
+//     and a signature proving they hold the key.
+//  2. The coordinator:                        signer-setup coordinator
+//     makes the coordinator key, which signs every request to the signers.
+//  3. The coordinator, with every card:       signer-setup assemble
+//     builds the signer set (keys, networks, coordinator key, policy) and
+//     prints its fingerprint.
+//  4. Each operator:                          signer-setup join
+//     checks the set, confirms its fingerprint with the others over a
+//     separate channel, and writes the service files.
+//  5. Anyone, any time:                       signer-setup check
+//
+// Every step runs interactively in a terminal, or from flags alone (-yes)
+// for scripts and agents. Private keys are only ever read from a hidden
+// prompt, a file or stdin: never from a flag, which would land in shell
+// history and the process list.
+
+import (
+	"bufio"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"golang.org/x/term"
+
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+)
+
+// operatorCard introduces one signer. It holds nothing secret.
+type operatorCard struct {
+	Name      string `json:"name"`
+	URL       string `json:"url"` // where the coordinator reaches the signer
+	PublicKey string `json:"publicKey"`
+	Proof     string `json:"proof"` // signature over the rest, by the key
+}
+
+func (c operatorCard) digest() []byte {
+	sum := sha256.Sum256([]byte("dogevm signer card v1\n" + c.Name + "\n" + c.URL + "\n" + c.PublicKey))
+	return sum[:]
+}
+
+func makeCard(name, signerURL string, key *btcec.PrivateKey) operatorCard {
+	c := operatorCard{Name: name, URL: signerURL, PublicKey: hex.EncodeToString(key.PubKey().SerializeCompressed())}
+	c.Proof = hex.EncodeToString(ecdsa.Sign(key, c.digest()).Serialize())
+	return c
+}
+
+// verify checks the card's proof: whoever made it holds the key.
+func (c operatorCard) verify() error {
+	raw, err := hex.DecodeString(c.PublicKey)
+	if err != nil {
+		return fmt.Errorf("card %q: %w", c.Name, err)
+	}
+	pub, err := btcec.ParsePubKey(raw)
+	if err != nil {
+		return fmt.Errorf("card %q: %w", c.Name, err)
+	}
+	sigRaw, err := hex.DecodeString(c.Proof)
+	if err != nil {
+		return fmt.Errorf("card %q: %w", c.Name, err)
+	}
+	sig, err := ecdsa.ParseDERSignature(sigRaw)
+	if err != nil || !sig.Verify(c.digest(), pub) {
+		return fmt.Errorf("card %q: the proof does not match its key", c.Name)
+	}
+	return nil
+}
+
+// --- prompting ---------------------------------------------------------------
+
+// prompter asks questions in a terminal. With interactive false, every
+// answer must come from a flag, and asking fails.
+type prompter struct {
+	in          *bufio.Reader
+	out         io.Writer
+	interactive bool
+	// hidden reads a line without echoing it; nil reads a plain line.
+	hidden func() ([]byte, error)
+}
+
+// newPrompter is a variable so tests can answer the questions.
+var newPrompter = terminalPrompter
+
+func terminalPrompter(yes bool) *prompter {
+	p := &prompter{in: bufio.NewReader(os.Stdin), out: os.Stderr}
+	fd := int(os.Stdin.Fd())
+	if !yes && term.IsTerminal(fd) {
+		p.interactive = true
+		p.hidden = func() ([]byte, error) { return term.ReadPassword(fd) }
+	}
+	return p
+}
+
+func (p *prompter) line() (string, error) {
+	s, err := p.in.ReadString('\n')
+	if err != nil && (err != io.EOF || s == "") {
+		return "", err
+	}
+	return strings.TrimSpace(s), nil
+}
+
+// value returns current if set, else asks, offering def.
+func (p *prompter) value(current *string, flagName, question, def string) error {
+	if *current != "" {
+		return nil
+	}
+	if !p.interactive {
+		if def != "" {
+			*current = def
+			return nil
+		}
+		return fmt.Errorf("-%s is required", flagName)
+	}
+	if def != "" {
+		fmt.Fprintf(p.out, "%s [%s]: ", question, def)
+	} else {
+		fmt.Fprintf(p.out, "%s: ", question)
+	}
+	answer, err := p.line()
+	if err != nil {
+		return err
+	}
+	if answer == "" {
+		answer = def
+	}
+	if answer == "" {
+		return fmt.Errorf("%s is required", strings.ToLower(question))
+	}
+	*current = answer
+	return nil
+}
+
+// confirm asks a yes/no question; without a terminal, yes decides.
+func (p *prompter) confirm(question string, yes bool) (bool, error) {
+	if !p.interactive {
+		return yes, nil
+	}
+	fmt.Fprintf(p.out, "%s [y/N]: ", question)
+	answer, err := p.line()
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes"), nil
+}
+
+// secret reads a line without echo.
+func (p *prompter) secret(question string) (string, error) {
+	fmt.Fprintf(p.out, "%s: ", question)
+	if p.hidden == nil {
+		return p.line()
+	}
+	raw, err := p.hidden()
+	fmt.Fprintln(p.out)
+	return strings.TrimSpace(string(raw)), err
+}
+
+// parsePrivateKey reads a key as 64 hex characters or a compressed-key WIF
+// for any network.
+func parsePrivateKey(s string) (*btcec.PrivateKey, error) {
+	s = strings.TrimSpace(s)
+	if raw, err := hex.DecodeString(s); err == nil {
+		if len(raw) != 32 {
+			return nil, errors.New("a hex private key is 64 characters")
+		}
+		key, _ := btcec.PrivKeyFromBytes(raw)
+		return key, nil
+	}
+	wif, err := btcutil.DecodeWIF(s)
+	if err != nil {
+		return nil, errors.New("not a hex private key or a WIF")
+	}
+	if !wif.CompressPubKey {
+		return nil, errors.New("this WIF is for an uncompressed key, which the peg does not use")
+	}
+	return wif.PrivKey, nil
+}
+
+// writeNew writes a file that must not already exist.
+func writeNew(path string, data []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+func readCard(path string) (operatorCard, error) {
+	var c operatorCard
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return c, err
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return c, fmt.Errorf("%s: %w", path, err)
+	}
+	return c, nil
+}
+
+// --- steps -------------------------------------------------------------------
+
+const setupUsage = `dogevm signer-setup: set up separate peg signers (see docs/SIGNERS.md)
+
+  signer-setup init         each operator: make or import a key, and a signer card
+  signer-setup coordinator  the coordinator: make the key that signs requests
+  signer-setup assemble     the coordinator: build the signer set from every card
+  signer-setup join         each operator: check the set and write service files
+  signer-setup check        check a signer's setup
+
+Each step asks questions in a terminal. With -yes it takes everything from
+flags instead, for scripts and agents. Run "dogevm signer-setup STEP -h".
+`
+
+func cmdSignerSetup(args []string) error {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, setupUsage)
+		return errors.New("which step?")
+	}
+	steps := map[string]func([]string) error{
+		"init":        setupInit,
+		"coordinator": setupCoordinator,
+		"assemble":    setupAssemble,
+		"join":        setupJoin,
+		"check":       setupCheck,
+	}
+	step, ok := steps[args[0]]
+	if !ok {
+		fmt.Fprint(os.Stderr, setupUsage)
+		return fmt.Errorf("unknown step %q", args[0])
+	}
+	return step(args[1:])
+}
+
+// Files in a signer's directory.
+const (
+	keyFileName   = "signer.key"
+	cardFileName  = "card.json"
+	setFileName   = "signers.json"
+	envFileName   = "signer.env"
+	unitFileName  = "dogevm-signer.service"
+	coordKeyName  = "coordinator.key"
+	signingLogKey = "signing-log.json"
+)
+
+func setupInit(args []string) error {
+	fs := flag.NewFlagSet("signer-setup init", flag.ExitOnError)
+	dir := fs.String("dir", "", "directory for this signer's files (default /var/lib/dogevm-signer)")
+	name := fs.String("name", "", "your name or organisation, shown to the other signers")
+	signerURL := fs.String("url", "", "URL the coordinator will reach this signer at, e.g. https://signer.example.com:9700")
+	importFile := fs.String("import-key-file", "", "import an existing private key (hex or WIF) from this file, instead of making one")
+	importStdin := fs.Bool("import-key-stdin", false, "import an existing private key (hex or WIF) from stdin, instead of making one")
+	yes := fs.Bool("yes", false, "no questions: take everything from flags (for scripts and agents)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	p := newPrompter(*yes)
+	if err := p.value(dir, "dir", "Directory for this signer's files", "/var/lib/dogevm-signer"); err != nil {
+		return err
+	}
+	if err := p.value(name, "name", "Your name or organisation, shown to the other signers", ""); err != nil {
+		return err
+	}
+	if err := p.value(signerURL, "url", "URL the coordinator will reach this signer at", ""); err != nil {
+		return err
+	}
+	if u, err := url.Parse(*signerURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return fmt.Errorf("%q is not an http(s) URL", *signerURL)
+	}
+	keyPath := filepath.Join(*dir, keyFileName)
+	if _, err := os.Stat(keyPath); err == nil {
+		return fmt.Errorf("%s already exists; this machine already has a signer key", keyPath)
+	}
+
+	var key *btcec.PrivateKey
+	switch {
+	case *importFile != "":
+		raw, err := os.ReadFile(*importFile)
+		if err != nil {
+			return err
+		}
+		if key, err = parsePrivateKey(string(raw)); err != nil {
+			return err
+		}
+	case *importStdin:
+		raw, err := io.ReadAll(io.LimitReader(os.Stdin, 4096))
+		if err != nil {
+			return err
+		}
+		if key, err = parsePrivateKey(string(raw)); err != nil {
+			return err
+		}
+	case p.interactive:
+		fmt.Fprintln(p.out, "\nA signer key can be made here, which is safest: it never exists anywhere else.")
+		fmt.Fprintln(p.out, "Or import one you already hold, for example when moving an existing signer.")
+		choice := ""
+		if err := p.value(&choice, "", "Make a new key or import one? (new/import)", "new"); err != nil {
+			return err
+		}
+		if strings.HasPrefix(strings.ToLower(choice), "i") {
+			pasted, err := p.secret("Paste the private key, as hex or WIF (it is not shown)")
+			if err != nil {
+				return err
+			}
+			if key, err = parsePrivateKey(pasted); err != nil {
+				return err
+			}
+			fmt.Fprintf(p.out, "That key's public key is %s\n", hex.EncodeToString(key.PubKey().SerializeCompressed()))
+			if ok, err := p.confirm("Is that the public key you expected?", false); err != nil || !ok {
+				return errors.New("stopped: the key was not what you expected; nothing was written")
+			}
+		}
+	}
+	if key == nil {
+		var secret [32]byte
+		if _, err := rand.Read(secret[:]); err != nil {
+			return err
+		}
+		key, _ = btcec.PrivKeyFromBytes(secret[:])
+	}
+
+	if err := os.MkdirAll(*dir, 0o700); err != nil {
+		return err
+	}
+	if err := writeNew(keyPath, []byte(hex.EncodeToString(key.Serialize())+"\n"), 0o600); err != nil {
+		return err
+	}
+	card := makeCard(*name, *signerURL, key)
+	raw, _ := json.MarshalIndent(card, "", "  ")
+	cardPath := filepath.Join(*dir, cardFileName)
+	if err := writeNew(cardPath, append(raw, '\n'), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(p.out, "\nKey written to %s. It never leaves this machine. Back it up offline.\n", keyPath)
+	fmt.Fprintf(p.out, "Send %s to the coordinator. It holds no secrets.\n", cardPath)
+	printJSON(map[string]string{"keyFile": keyPath, "card": cardPath, "publicKey": card.PublicKey})
+	return nil
+}
+
+func setupCoordinator(args []string) error {
+	fs := flag.NewFlagSet("signer-setup coordinator", flag.ExitOnError)
+	dir := fs.String("dir", "", "directory for the coordinator key (default /var/lib/dogevm)")
+	yes := fs.Bool("yes", false, "no questions: take everything from flags")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	p := newPrompter(*yes)
+	if err := p.value(dir, "dir", "Directory for the coordinator key", "/var/lib/dogevm"); err != nil {
+		return err
+	}
+	path := filepath.Join(*dir, coordKeyName)
+	var secret [32]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		return err
+	}
+	key, _ := btcec.PrivKeyFromBytes(secret[:])
+	if err := os.MkdirAll(*dir, 0o700); err != nil {
+		return err
+	}
+	if err := writeNew(path, []byte(hex.EncodeToString(secret[:])+"\n"), 0o600); err != nil {
+		return err
+	}
+	pub := hex.EncodeToString(key.PubKey().SerializeCompressed())
+	fmt.Fprintf(p.out, "Coordinator key written to %s. Pass its public key to signer-setup assemble.\n", path)
+	printJSON(map[string]string{"keyFile": path, "coordinatorKey": pub})
+	return nil
+}
+
+func setupAssemble(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("signer-setup assemble", flag.ExitOnError)
+	req := fs.Int("required", 0, "signatures required to move funds")
+	coordKey := fs.String("coordinator-key", "", "the coordinator's public key (from signer-setup coordinator)")
+	out := fs.String("out", "signers.json", "file to write the signer set to")
+	cosignersOut := fs.String("cosigners-out", "cosigners.json", "file to write the coordinator's list of signers to")
+	yes := fs.Bool("yes", false, "no questions: take everything from flags")
+	s.register(fs)
+	b := bridgeFlags(fs)
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "usage: dogevm signer-setup assemble [flags] CARD.json...")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := s.resolve(); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		return errors.New("pass every signer's card.json")
+	}
+	p := newPrompter(*yes)
+
+	set := &signerSet{
+		Networks:       &setNetworks{Dogecoin: s.dogeNet, DogecoinVM: s.vmNetwork},
+		CoordinatorKey: *coordKey,
+		Policy: &pegPolicy{
+			Confirmations: b.depositConfirmations, VMFee: b.vmFee, DogeFee: b.dogeFee,
+			MinDeposit: b.minDeposit, MinPegOut: b.minPegOut,
+			MaxDeposit: b.maxDeposit, MaxCirculating: b.maxCirculating,
+		},
+	}
+	seen := map[string]bool{}
+	var cosigners []*remoteSigner
+	for _, path := range fs.Args() {
+		card, err := readCard(path)
+		if err != nil {
+			return err
+		}
+		if err := card.verify(); err != nil {
+			return err
+		}
+		if seen[card.PublicKey] {
+			return fmt.Errorf("%s: the same key appears twice", path)
+		}
+		seen[card.PublicKey] = true
+		set.Operators = append(set.Operators, card)
+		set.PublicKeys = append(set.PublicKeys, card.PublicKey)
+		cosigners = append(cosigners, &remoteSigner{URL: card.URL})
+	}
+	if *req == 0 && p.interactive {
+		def := fmt.Sprint(len(set.PublicKeys)/2 + 1)
+		answer := ""
+		if err := p.value(&answer, "required", fmt.Sprintf("Signatures required, of %d", len(set.PublicKeys)), def); err != nil {
+			return err
+		}
+		fmt.Sscanf(answer, "%d", req)
+	}
+	set.Required = *req
+	if set.Required < 2 && len(set.PublicKeys) > 1 {
+		return errors.New("-required must be at least 2 for separate signers to mean anything")
+	}
+	if set.CoordinatorKey == "" {
+		if err := p.value(&set.CoordinatorKey, "coordinator-key", "The coordinator's public key", ""); err != nil {
+			return err
+		}
+	}
+	if err := set.load(); err != nil {
+		return err
+	}
+	if seen[set.CoordinatorKey] {
+		return errors.New("the coordinator key must not be a signer key")
+	}
+
+	vmAddr, _ := set.address(s.vmParams)
+	dogeAddr, _ := set.address(s.dogeParams)
+	summary := map[string]any{
+		"fingerprint":        set.fingerprint(),
+		"required":           fmt.Sprintf("%d of %d", set.Required, len(set.PublicKeys)),
+		"dogecoinPegAddress": dogeAddr.EncodeAddress(),
+		"dogecoinvmReserve":  vmAddr.EncodeAddress(),
+		"signerSet":          *out,
+		"cosigners":          *cosignersOut,
+	}
+	if ok, err := p.confirm(fmt.Sprintf("Write a %d-of-%d signer set with fingerprint %s?", set.Required, len(set.PublicKeys), set.fingerprint()), true); err != nil || !ok {
+		return errors.New("stopped; nothing was written")
+	}
+	if err := writeSetFile(*out, set); err != nil {
+		return err
+	}
+	raw, _ := json.MarshalIndent(cosigners, "", "  ")
+	if err := writeNew(*cosignersOut, append(raw, '\n'), 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(p.out, "Send %s to every signer, and read out the fingerprint %s to each of them over a separate channel.\n", *out, set.fingerprint())
+	printJSON(summary)
+	return nil
+}
+
+func writeSetFile(path string, set *signerSet) error {
+	raw, err := json.MarshalIndent(set.publicCopy(), "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeNew(path, append(raw, '\n'), 0o644)
+}
+
+func setupJoin(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("signer-setup join", flag.ExitOnError)
+	dir := fs.String("dir", "", "this signer's directory, from signer-setup init (default /var/lib/dogevm-signer)")
+	setPath := fs.String("signers", "", "the signer set from the coordinator")
+	fingerprint := fs.String("fingerprint", "", "the fingerprint the other signers confirmed (required with -yes)")
+	listen := fs.String("listen", "0.0.0.0:9700", "address the signer serves on")
+	maxDaily := fs.String("max-daily", "", "most DOGE this signer approves moving in 24 hours (0: no limit)")
+	bin := fs.String("bin", "/usr/local/bin/dogevm", "path of the dogevm binary, for the service file")
+	user := fs.String("user", "dogevm-signer", "system user the service runs as")
+	yes := fs.Bool("yes", false, "no questions: take everything from flags")
+	s.register(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	p := newPrompter(*yes)
+	if err := p.value(dir, "dir", "This signer's directory", "/var/lib/dogevm-signer"); err != nil {
+		return err
+	}
+	if err := p.value(setPath, "signers", "Path of the signer set the coordinator sent", ""); err != nil {
+		return err
+	}
+	set, err := readSignerSet(*setPath)
+	if err != nil {
+		return err
+	}
+	if len(set.PrivateKeys) > 0 {
+		return errors.New("this signer set holds private keys; ask the coordinator for the public one")
+	}
+	if set.Networks == nil || set.Policy == nil || set.coordKey == nil || len(set.Operators) != len(set.PublicKeys) {
+		return errors.New("this signer set was not made by signer-setup assemble")
+	}
+	s.dogeNet, s.vmNetwork = set.Networks.Dogecoin, set.Networks.DogecoinVM
+	if err := s.resolve(); err != nil {
+		return err
+	}
+	for i, card := range set.Operators {
+		if err := card.verify(); err != nil {
+			return err
+		}
+		if card.PublicKey != set.PublicKeys[i] {
+			return fmt.Errorf("operator %q does not match public key %d", card.Name, i)
+		}
+	}
+	key, err := readKeyFile(filepath.Join(*dir, keyFileName))
+	if err != nil {
+		return err
+	}
+	me := set.indexOf(key.PubKey())
+	if me < 0 {
+		return errors.New("this signer's key is not in the set")
+	}
+
+	vmAddr, _ := set.address(s.vmParams)
+	dogeAddr, _ := set.address(s.dogeParams)
+	pol := set.Policy
+	fmt.Fprintf(p.out, "\nSigner set: %d of %d, Dogecoin %s, DogecoinVM %s\n", set.Required, len(set.PublicKeys), s.dogeNet, s.vmNetwork)
+	for i, c := range set.Operators {
+		marker := "  "
+		if i == me {
+			marker = "* "
+		}
+		fmt.Fprintf(p.out, "  %s%-24s %s  %s…\n", marker, c.Name, c.URL, c.PublicKey[:16])
+	}
+	fmt.Fprintf(p.out, "Coordinator key:  %s…\n", set.CoordinatorKey[:16])
+	fmt.Fprintf(p.out, "Peg address:      %s (Dogecoin)\n", dogeAddr.EncodeAddress())
+	fmt.Fprintf(p.out, "Reserve:          %s (DogecoinVM)\n", vmAddr.EncodeAddress())
+	fmt.Fprintf(p.out, "Policy:           %d confirmations; fees %s + %s DOGE; deposits %s–%s DOGE; at most %s DOGE circulating\n",
+		pol.Confirmations, formatDoge(pol.VMFee), formatDoge(pol.DogeFee), formatDoge(pol.MinDeposit),
+		capText(pol.MaxDeposit), capText(pol.MaxCirculating))
+	fmt.Fprintf(p.out, "Fingerprint:      %s\n\n", set.fingerprint())
+
+	switch {
+	case *fingerprint != "":
+		if *fingerprint != set.fingerprint() {
+			return fmt.Errorf("the set's fingerprint is %s, not %s: do not join", set.fingerprint(), *fingerprint)
+		}
+	case p.interactive:
+		fmt.Fprintln(p.out, "Confirm this fingerprint with the coordinator and the other signers over a")
+		fmt.Fprintln(p.out, "separate channel (a call, not the channel the file came over).")
+		if ok, err := p.confirm("Does everyone see the same fingerprint?", false); err != nil || !ok {
+			return errors.New("stopped: fingerprint not confirmed; nothing was written")
+		}
+	default:
+		return errors.New("-fingerprint is required with -yes: pass the fingerprint the other signers confirmed")
+	}
+
+	if *maxDaily == "" && p.interactive {
+		if err := p.value(maxDaily, "max-daily", "Most DOGE this signer approves moving in 24 hours (0: no limit)", "0"); err != nil {
+			return err
+		}
+	}
+	if *maxDaily == "" {
+		*maxDaily = "0"
+	}
+	daily, err := parseDoge(*maxDaily)
+	if err != nil {
+		return fmt.Errorf("-max-daily: %w", err)
+	}
+
+	raw, _ := json.MarshalIndent(set.publicCopy(), "", "  ")
+	installed := filepath.Join(*dir, setFileName)
+	if err := os.WriteFile(installed, append(raw, '\n'), 0o644); err != nil {
+		return err
+	}
+	envPath := filepath.Join(*dir, envFileName)
+	if _, err := os.Stat(envPath); errors.Is(err, os.ErrNotExist) {
+		env := fmt.Sprintf(`# Connection settings for this signer's own nodes. Holds passwords: mode 0600,
+# never commit it.
+DOGEVM_NETWORK=%s
+DOGEVM_RPC=http://127.0.0.1:9650/ext/bc/CHAIN_ID/rpc
+DOGEVM_RPC_USER=
+DOGEVM_RPC_PASS=
+DOGECOIN_NETWORK=%s
+DOGECOIN_RPC=http://127.0.0.1:22555
+DOGECOIN_RPC_USER=
+DOGECOIN_RPC_PASS=
+`, s.vmNetwork, s.dogeNet)
+		if err := writeNew(envPath, []byte(env), 0o600); err != nil {
+			return err
+		}
+	}
+	unit := fmt.Sprintf(`[Unit]
+Description=DogecoinVM peg signer (%s)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=%s
+EnvironmentFile=%s
+ExecStart=%s signer -signers %s -key-file %s -listen %s -log %s -deposits %s -max-daily %d
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=%s
+
+[Install]
+WantedBy=multi-user.target
+`, set.Operators[me].Name, *user, envPath, *bin, installed, filepath.Join(*dir, keyFileName), *listen,
+		filepath.Join(*dir, signingLogKey), filepath.Join(*dir, "deposits.json"), daily, *dir)
+	unitPath := filepath.Join(*dir, unitFileName)
+	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(p.out, `Joined. Next:
+  1. Fill in %s with this signer's own Dogecoin Core and DogecoinVM nodes.
+  2. Install the service:  sudo cp %s /etc/systemd/system/ && sudo systemctl enable --now dogevm-signer
+  3. Check everything:     dogevm signer-setup check -dir %s
+  4. Tell the coordinator you are up.
+`, envPath, unitPath, *dir)
+	printJSON(map[string]string{"fingerprint": set.fingerprint(), "signerSet": installed, "env": envPath, "service": unitPath})
+	return nil
+}
+
+func capText(v int64) string {
+	if v == 0 {
+		return "no limit"
+	}
+	return formatDoge(v)
+}
+
+// checkResult is one line of signer-setup check.
+type checkResult struct {
+	Check  string `json:"check"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail"`
+}
+
+func setupCheck(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("signer-setup check", flag.ExitOnError)
+	dir := fs.String("dir", "/var/lib/dogevm-signer", "this signer's directory")
+	signerURL := fs.String("url", "", "also check the signer answers at this URL (default: from its card)")
+	s.register(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	var results []checkResult
+	add := func(name string, err error, ok string) {
+		if err != nil {
+			results = append(results, checkResult{name, false, err.Error()})
+		} else {
+			results = append(results, checkResult{name, true, ok})
+		}
+	}
+
+	key, keyErr := readKeyFile(filepath.Join(*dir, keyFileName))
+	add("key file", keyErr, "present, readable only by its owner")
+	set, setErr := readSignerSet(filepath.Join(*dir, setFileName))
+	if setErr == nil && len(set.PrivateKeys) > 0 {
+		setErr = errors.New("the installed signer set holds private keys")
+	}
+	if setErr == nil {
+		add("signer set", nil, fmt.Sprintf("%d of %d, fingerprint %s", set.Required, len(set.PublicKeys), set.fingerprint()))
+	} else {
+		add("signer set", setErr, "")
+	}
+	if keyErr == nil && setErr == nil {
+		if set.indexOf(key.PubKey()) < 0 {
+			add("membership", errors.New("this signer's key is not in the set"), "")
+		} else {
+			add("membership", nil, "this signer's key is in the set")
+		}
+	}
+	if setErr == nil && set.Networks != nil {
+		s.dogeNet, s.vmNetwork = set.Networks.Dogecoin, set.Networks.DogecoinVM
+	}
+	if info, err := os.Stat(filepath.Join(*dir, envFileName)); err == nil && info.Mode().Perm()&0o077 != 0 {
+		add("env file", fmt.Errorf("%s is readable by other users; chmod 600 it", envFileName), "")
+	}
+	if err := s.resolve(); err == nil {
+		var height int64
+		add("DogecoinVM node", s.vmChain().rpc.call(&height, "getblockcount"), fmt.Sprintf("answering at %s", s.vmRPC))
+		var chainInfo struct {
+			Blocks  int64 `json:"blocks"`
+			Headers int64 `json:"headers"`
+		}
+		err := s.dogeRPCClient().call(&chainInfo, "getblockchaininfo")
+		if err == nil && chainInfo.Blocks < chainInfo.Headers-6 {
+			err = fmt.Errorf("still syncing: block %d of %d", chainInfo.Blocks, chainInfo.Headers)
+		}
+		add("Dogecoin node", err, fmt.Sprintf("synced to block %d", chainInfo.Blocks))
+	}
+	if *signerURL == "" {
+		if card, err := readCard(filepath.Join(*dir, cardFileName)); err == nil {
+			*signerURL = card.URL
+		}
+	}
+	if *signerURL != "" && keyErr == nil {
+		// Unauthenticated, the signer should refuse; any answer shows it is up.
+		r := &remoteSigner{URL: strings.TrimRight(*signerURL, "/")}
+		err := r.status(&map[string]any{})
+		switch {
+		case err == nil:
+			add("signer service", errors.New("answered without authentication"), "")
+		case strings.Contains(err.Error(), "unauthorized"):
+			add("signer service", nil, "answering at "+*signerURL+", and refusing unsigned requests")
+		default:
+			add("signer service", err, "")
+		}
+	}
+
+	printJSON(results)
+	for _, r := range results {
+		if !r.OK {
+			return errors.New("a check failed")
+		}
+	}
+	return nil
+}

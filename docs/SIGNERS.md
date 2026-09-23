@@ -45,49 +45,75 @@ Each signer runs `dogevm signer` with one key. For every proposal it:
 A compromised coordinator can therefore delay transfers but can't move
 locked DOGE. That would take `Required` signers.
 
-## Running a signer
+## The setup ceremony
 
-Each operator does this on their own machine.
+`dogevm signer-setup` walks everyone through setup. Only public information
+changes hands: no private key, token or password is ever sent to anyone.
+Every step asks its questions in a terminal. With `-yes` it takes everything
+from flags instead, for scripts and agents, and refuses rather than guesses
+when something is missing.
 
-1. **Make a key.** Share only the public key it prints.
+| Who | Step | What it does |
+| --- | --- | --- |
+| Each operator | `signer-setup init` | Makes a key on this machine, or imports one (pasted at a hidden prompt, or read with `-import-key-file` or `-import-key-stdin`, never from a flag). Writes a **signer card**: name, URL, public key, and a signature proving the operator holds the key. |
+| Coordinator | `signer-setup coordinator` | Makes the coordinator key, which signs every request to the signers. |
+| Coordinator | `signer-setup assemble CARD...` | Checks every card and builds the **signer set**: the keys, how many must sign, the networks, the coordinator key and the bridge policy (confirmations, fees, caps). Prints its **fingerprint**. |
+| Each operator | `signer-setup join` | Shows the set and its fingerprint, which each operator confirms with the others over a separate channel. Then writes the service file and a settings file for the operator's own nodes. |
+| Anyone | `signer-setup check` | Checks the key file, set membership, both nodes (and that Dogecoin is synced), and that the signer service is up and refusing unsigned requests. |
 
-   ```sh
-   dogevm signer-key -out /var/lib/dogevm-signer/signer.key
-   ```
+A typical run:
 
-   The key file is mode 0600 and must never leave the machine or be
-   committed. The repository's hooks and CI refuse it; see [Secrets](#secrets).
+```sh
+# Each operator, on their own machine
+dogevm signer-setup init            # asks: name, URL, make a key or import one
+# → sends /var/lib/dogevm-signer/card.json to the coordinator
 
-2. **Build the signer set.** One person builds it from all the public keys
-   and gives the same file to everyone. It holds no private keys.
+# The coordinator
+dogevm signer-setup coordinator
+dogevm signer-setup assemble -required 2 -coordinator-key PUB \
+  -doge-network mainnet -vm-network mainnet \
+  -confirmations 20 -max-deposit 10000000000 -max-circulating 100000000000 \
+  alice.json bob.json carol.json
+# → sends signers.json to every operator, and reads the fingerprint out on a call
 
-   ```sh
-   dogevm signers -required 2 -public-keys PUB1,PUB2,PUB3 -out signers.json
-   ```
+# Each operator
+dogevm signer-setup join -signers signers.json   # confirm the fingerprint, set a daily limit
+#   then fill in signer.env with this machine's own node settings
+sudo cp /var/lib/dogevm-signer/dogevm-signer.service /etc/systemd/system/
+sudo systemctl enable --now dogevm-signer
+dogevm signer-setup check
+```
 
-3. **Run nodes.** Run a Dogecoin Core node (`-txindex`, with a wallet for
-   watch-only addresses) and a DogecoinVM node. Signers that share the
-   coordinator's nodes are only as independent as those nodes.
+For an agent or script, the same steps take flags. For example:
 
-4. **Start the signer.** Its policy flags must match the coordinator's:
-   `-confirmations`, `-vm-fee`, `-doge-fee`, `-min-deposit`, `-min-peg-out`,
-   `-max-deposit` and `-max-circulating`. Otherwise it rebuilds different
-   transactions and refuses to sign.
+```sh
+dogevm signer-setup init -yes -dir /var/lib/dogevm-signer -name "Example Pool" \
+  -url https://signer.example.com:9700            # makes a new key
+dogevm signer-setup join -yes -dir /var/lib/dogevm-signer -signers signers.json \
+  -fingerprint 3f9a-02bc-7d41-e0a8-55c1 -max-daily 500
+```
 
-   ```sh
-   dogevm signer -signers signers.json -key-file /var/lib/dogevm-signer/signer.key \
-     -listen 10.0.0.2:9700 -token-file /var/lib/dogevm-signer/token \
-     -max-daily 50000000000 -confirmations 20 -max-deposit 10000000000 ...
-   ```
+Without a terminal, `join` needs `-fingerprint`, and it must be the one the
+other signers read out. An agent can't confirm a fingerprint for itself.
 
-   Listening on anything but loopback requires `-token-file`. Put the signer
-   behind TLS or a private network (WireGuard, or an SSH tunnel). The token
-   only keeps out strangers: the signer trusts nothing the coordinator says
-   that it can't check.
+### What each operator runs
 
-5. **Back up the signing log** (`-log`, which defaults to `signing-log.json`
-   next to the key). If the log is lost, the signer falls back on what the
-   chains show.
+- **The key**, which never leaves the machine. Back it up offline.
+- **A Dogecoin Core node** (`-txindex`, with a wallet for watch-only
+  addresses) and **a DogecoinVM node**. These are what make the signer
+  independent: it checks everything against its own nodes. A signer that
+  uses someone else's node trusts that node's operator.
+- **The signer service** from `join`. It serves on port 9700. Requests must
+  be signed by the coordinator key and be no more than 5 minutes old. The
+  requests and answers carry only public data, so TLS is good practice but
+  not what keeps funds safe.
+- **The signing log** (`signing-log.json`). Back it up. If it is lost, the
+  signer falls back on what the chains show.
+
+The policy is part of the signer set, so the coordinator and every signer
+use the same one. A policy flag that disagrees with it is an error.
+Changing the policy, such as raising a cap, means a new set that every
+operator joins again.
 
 ### Refunds
 
@@ -104,40 +130,33 @@ Each operator adds the line after checking the refund themselves. Then
 
 ## Running the coordinator
 
-The coordinator runs the bridge as usual, with a signer set that holds public
-keys only, plus a list of signers:
+The coordinator runs the bridge with the set, the list of signers from
+`assemble`, and its key:
 
 ```sh
-dogevm bridge -signers signers.json -cosigners /var/lib/dogevm/cosigners.json ...
+dogevm bridge -signers signers.json -cosigners cosigners.json \
+  -coordinator-key-file /var/lib/dogevm/coordinator.key ...
 ```
 
-The list looks like this:
-
-```json
-[
-  {"url": "https://signer1.internal:9700", "token": "…"},
-  {"url": "https://signer2.internal:9700", "token": "…"},
-  {"url": "https://signer3.internal:9700", "token": "…"}
-]
-```
-
-`cosigners.json` holds tokens, so it stays with the deployment. When the web
-wallet registers a personal deposit address, the coordinator tells every
-signer straight away, so their nodes watch the address before anything is
-sent to it. A signer that misses one picks it up from the next proposal that
-involves it. If a deposit had already arrived by then, that signer's node
-needs a rescan: restart it once with `dogevm signer -rescan`.
+When the web wallet registers a personal deposit address, the coordinator
+tells every signer straight away, so their nodes watch the address before
+anything is sent to it. A signer that misses one picks it up from the next
+proposal that involves it. If a deposit had already arrived by then, that
+signer's node needs a rescan: restart it once with `dogevm signer -rescan`.
 
 ## Moving an existing deployment
 
 To separate a deployment whose keys sit together in one signer set, without
 changing the peg address:
 
-1. Split the private keys into one key file per signer, on the machine that
-   holds the set, and move each file to its signer's machine over SSH.
-2. Replace the set everywhere with a public-keys-only copy, then delete every
-   remaining copy of the combined set, including backups.
-3. Start the signers, then restart the bridge with `-cosigners`.
+1. Give each operator one of the existing keys over a secure channel. Each
+   runs `signer-setup init` and pastes the key at the hidden prompt, or uses
+   `-import-key-file`. Keep the cards in the old set's key order, so the
+   peg address stays the same.
+2. Run `assemble` and `join` as above, then delete every copy of the old
+   combined set, including backups.
+3. Start the signers, then restart the bridge with the new set,
+   `-cosigners` and `-coordinator-key-file`.
 
 Keys that were once stored together were exposed together. The stronger
 step is to rotate: make new keys on each signer's machine and move the
