@@ -23,7 +23,7 @@ Follow the prompts to:
 
 **Output:**
 ```
-Private Key (WIF): L44GYYv2EbWi7m1rJKLCAMsKTTNavWE22iRyBCANLfBu2VcYU9qs
+Private Key (WIF): <your private key; never share or commit it>
 Addresses:
   P2PKH (Legacy): 1NbKzrXqNYuNc9FBAoBjEi86P2nDKwbNDa
 ```

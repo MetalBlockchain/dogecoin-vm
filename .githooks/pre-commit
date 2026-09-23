@@ -1,0 +1,9 @@
+#!/bin/sh
+# Refuse commits that contain private keys, tokens or passwords.
+# Installed with: make hooks (git config core.hooksPath .githooks)
+cd "$(git rev-parse --show-toplevel)" || exit 1
+if ! command -v go >/dev/null 2>&1; then
+	echo "pre-commit: Go is needed to scan for secrets; not committing." >&2
+	exit 1
+fi
+exec go run ./scripts/secretscan staged

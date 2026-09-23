@@ -1,3 +1,22 @@
 build
 .btcvm/logs
 metal_network_runner.pid
+
+# Secrets. Never commit these; scripts/secretscan and .githooks enforce it.
+signers*.json
+cosigners*.json
+signing-log*.json
+faucet.json
+deposits.json
+p-chain-key.json
+*.key
+*.pem
+*.p12
+*.wif
+.env
+.env.*
+*.env
+telegram-token
+telegram-chat
+rpc-password
+secrets/

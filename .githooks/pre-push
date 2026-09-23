@@ -1,0 +1,10 @@
+#!/bin/sh
+# Refuse pushes whose commits contain private keys, tokens or passwords.
+# Every commit being pushed is scanned, so a secret added and later removed
+# is still caught. Installed with: make hooks
+cd "$(git rev-parse --show-toplevel)" || exit 1
+if ! command -v go >/dev/null 2>&1; then
+	echo "pre-push: Go is needed to scan for secrets; not pushing." >&2
+	exit 1
+fi
+exec go run ./scripts/secretscan push

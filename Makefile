@@ -2,7 +2,7 @@ SHELL := /usr/bin/env bash
 
 CURRENT_DIR := $(shell pwd)
 
-.PHONY: cleanup run_local build
+.PHONY: cleanup run_local build hooks secretscan
 
 run_local: build
 	@rm -f node1_logs.log node2_logs.log node3_logs.log node4_logs.log node5_logs.log
@@ -53,3 +53,12 @@ cleanup:
 
 build:
 	./scripts/build.sh ${CURRENT_DIR}/../metalgo/build/plugins/kMtihm7W3KssmcJb9mzwZfC6gkiPrJhWaa5KMLHdEB9R8Q4pp
+
+# Install the git hooks that refuse commits and pushes containing secrets.
+hooks:
+	git config core.hooksPath .githooks
+	@echo "git hooks installed: commits and pushes are scanned for secrets"
+
+# Scan every commit on every branch for secrets.
+secretscan:
+	go run ./scripts/secretscan history
