@@ -213,6 +213,17 @@ async function refreshStatus() {
     $('circulating-fill').style.width = `${pct(circulating)}%`;
     $('pending-in').textContent = tidy(a.pendingPegIns);
     $('pending-out').textContent = tidy(a.pendingPegOuts);
+    // Dogecoin's supply, from the bridge's own node, once it has caught up.
+    const supply = s.dogecoinSupply;
+    $('doge-supply').hidden = !supply;
+    if (supply) {
+      const total = BigInt(supply.amount);
+      $('supply-total').textContent = total.toLocaleString('en-US');
+      $('supply-total').title = `At Dogecoin block ${supply.height.toLocaleString('en-US')}`;
+      const share = total > 0n ? Number(circulating) / Number(total * chain.KOINU) * 100 : 0;
+      $('supply-share').textContent = share === 0 ? '0%'
+        : share < 0.0001 ? 'under 0.0001%' : `${share.toPrecision(2)}%`;
+    }
     let verdict;
     let cls = 'peg-verdict';
     if (!a.solvent) {

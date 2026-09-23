@@ -263,6 +263,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .peg-pending div { display: flex; justify-content: space-between; gap: 1rem; }
 .peg-pending dt { color: var(--panel-soft); }
 .peg-pending dd { margin: 0; }
+.peg-supply { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--panel-track); }
 .peg-signers { color: var(--panel-soft); font-size: var(--step--1); margin: 1.25rem 0 0; overflow-wrap: anywhere; }
 
 /* Surfaces */

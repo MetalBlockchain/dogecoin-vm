@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
@@ -41,6 +42,8 @@ type server struct {
 
 	mu       sync.RWMutex
 	snapshot *snapshot
+
+	supply atomic.Pointer[dogeSupply]
 
 	cacheMu  sync.Mutex
 	prevOuts map[wire.OutPoint]*wire.TxOut
@@ -214,6 +217,9 @@ func (srv *server) status(*http.Request) (any, error) {
 		},
 		"updated": snap.updated.UTC().Format(time.RFC3339),
 	}
+	if supply := srv.supply.Load(); supply != nil {
+		out["dogecoinSupply"] = supply
+	}
 	if snap.err != "" {
 		out["error"] = snap.err
 	} else {
@@ -307,6 +313,41 @@ func (srv *server) address(r *http.Request) (any, error) {
 		"utxos":     outs,
 		"history":   history,
 	}, nil
+}
+
+// dogeSupply is all the DOGE in existence, as the bridge's Dogecoin node
+// counts it.
+type dogeSupply struct {
+	Amount string `json:"amount"` // whole DOGE
+	Height int64  `json:"height"`
+}
+
+// watchSupply reads Dogecoin's supply from the node's UTXO set once an hour,
+// once the node has caught up; before that the figure would be for the past.
+// Summing the UTXO set takes minutes, so it gets its own long timeout.
+func (srv *server) watchSupply() {
+	d := srv.doge.rpc
+	rpc := newRPCClient(d.url, d.user, d.pass)
+	rpc.http.Timeout = 30 * time.Minute
+	for {
+		if snap := srv.current(); snap != nil && snap.dogeSync.Headers > 0 && snap.dogeHeight >= snap.dogeSync.Headers-6 {
+			var info struct {
+				Height      int64       `json:"height"`
+				TotalAmount json.Number `json:"total_amount"`
+			}
+			if err := rpc.call(&info, "gettxoutsetinfo"); err != nil {
+				log.Printf("dogecoin supply: %v", err)
+			} else {
+				// Over 10^11 DOGE is more koinu than an int64 holds, so keep
+				// whole DOGE as text.
+				whole, _, _ := strings.Cut(info.TotalAmount.String(), ".")
+				srv.supply.Store(&dogeSupply{Amount: whole, Height: info.Height})
+				time.Sleep(time.Hour)
+				continue
+			}
+		}
+		time.Sleep(time.Minute)
+	}
 }
 
 // limited runs fn once a slot among srv.heavy is free, or fails fast if the
@@ -646,6 +687,7 @@ func cmdServe(args []string) error {
 			time.Sleep(15 * time.Second)
 		}
 	}()
+	go srv.watchSupply()
 
 	static, err := fs.Sub(webFiles, "web")
 	if err != nil {
