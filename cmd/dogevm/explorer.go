@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
 	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
 	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
 	"github.com/paulgnz/dogecoin-vm/btcd/wire"
@@ -15,18 +14,6 @@ import (
 // The explorer API: DogecoinVM blocks and transactions, with bridge
 // transactions described in plain words, the bridge's activity across both
 // chains, and the outputs on Dogecoin that back the peg.
-
-// dogecoinExplorer returns URL patterns (with %s for the id) of a public
-// Dogecoin explorer for the network, or empty strings if there is none.
-func dogecoinExplorer(p *chaincfg.Params) (tx, address string) {
-	switch p.Name {
-	case "mainnet":
-		return "https://blockchair.com/dogecoin/transaction/%s", "https://blockchair.com/dogecoin/address/%s"
-	case "testnet":
-		return "https://sochain.com/tx/DOGETEST/%s", "https://sochain.com/address/DOGETEST/%s"
-	}
-	return "", ""
-}
 
 // ioView is one input or output of a transaction.
 type ioView struct {
@@ -58,9 +45,15 @@ func (srv *server) outputAddress(script []byte) string {
 	return addrs[0].EncodeAddress()
 }
 
-// describe fills in what a transaction does, from its tags and outputs.
-func (srv *server) describe(v *txView, tx *wire.MsgTx) {
+// describe fills in what a transaction does. A bridge tag alone proves
+// nothing, since anyone can write one: a credit must spend the peg reserve,
+// which only the signers can do, and a withdrawal must pay into it.
+func (srv *server) describe(v *txView, tx *wire.MsgTx, spendsReserve bool) {
 	reserve := srv.b.signers.pkScript()
+	paysReserve := false
+	for _, out := range tx.TxOut {
+		paysReserve = paysReserve || bytes.Equal(out.PkScript, reserve)
+	}
 	snap := srv.current()
 	switch {
 	case isCoinbase(tx):
@@ -72,13 +65,13 @@ func (srv *server) describe(v *txView, tx *wire.MsgTx) {
 			}
 		}
 	default:
-		if deposit, ok := parseRelease(tx); ok {
+		if deposit, ok := parseRelease(tx); ok && spendsReserve {
 			v.Kind = "credit"
 			v.Label = "Credit for a deposit on Dogecoin, released from the peg reserve"
 			v.DogecoinTxID = deposit.Hash.String()
 			return
 		}
-		if dest, ok := parseDestinationTag(tx, tagPegOut); ok {
+		if dest, ok := parseDestinationTag(tx, tagPegOut); ok && paysReserve && !spendsReserve {
 			addr, _ := dest.address(srv.b.dogeParams)
 			v.Kind = "withdrawal"
 			v.Label = "Withdrawal to " + addr.EncodeAddress() + " on Dogecoin"
@@ -92,8 +85,38 @@ func (srv *server) describe(v *txView, tx *wire.MsgTx) {
 			}
 			return
 		}
+		if _, _, ok := opReturnData(tx); ok {
+			v.Kind, v.Label = "transfer", "Transfer on DogecoinVM with an unverified bridge message"
+			return
+		}
 		v.Kind, v.Label = "transfer", "Transfer on DogecoinVM"
 	}
+}
+
+// prevOut returns the output op spends, from a cache: outputs never change.
+func (srv *server) prevOut(op wire.OutPoint) (*wire.TxOut, bool) {
+	srv.cacheMu.Lock()
+	out, ok := srv.prevOuts[op]
+	srv.cacheMu.Unlock()
+	if ok {
+		return out, true
+	}
+	var prevHex string
+	if err := srv.vm.rpc.call(&prevHex, "getrawtransaction", op.Hash.String(), 0); err != nil {
+		return nil, false
+	}
+	prev, err := decodeTx(prevHex)
+	if err != nil || int(op.Index) >= len(prev.TxOut) {
+		return nil, false
+	}
+	out = prev.TxOut[op.Index]
+	srv.cacheMu.Lock()
+	if len(srv.prevOuts) > 50_000 {
+		srv.prevOuts = map[wire.OutPoint]*wire.TxOut{}
+	}
+	srv.prevOuts[op] = out
+	srv.cacheMu.Unlock()
+	return out, true
 }
 
 // txDetail fetches and describes a DogecoinVM transaction.
@@ -118,19 +141,19 @@ func (srv *server) txDetail(txid string) (*txView, error) {
 	}
 
 	var in, out int64
+	allKnown, spendsReserve := true, false
 	if !isCoinbase(tx) {
 		for _, txIn := range tx.TxIn {
-			var prevHex string
-			io := ioView{Value: "?"}
-			if err := srv.vm.rpc.call(&prevHex, "getrawtransaction", txIn.PreviousOutPoint.Hash.String(), 0); err == nil {
-				if prev, err := decodeTx(prevHex); err == nil && int(txIn.PreviousOutPoint.Index) < len(prev.TxOut) {
-					prevOut := prev.TxOut[txIn.PreviousOutPoint.Index]
-					io = ioView{Address: srv.outputAddress(prevOut.PkScript), Value: formatDoge(prevOut.Value)}
-					if bytes.Equal(prevOut.PkScript, srv.b.signers.pkScript()) {
-						io.Note = "peg reserve"
-					}
-					in += prevOut.Value
+			io := ioView{Note: "unknown"}
+			if prevOut, ok := srv.prevOut(txIn.PreviousOutPoint); ok {
+				io = ioView{Address: srv.outputAddress(prevOut.PkScript), Value: formatDoge(prevOut.Value)}
+				if bytes.Equal(prevOut.PkScript, srv.b.signers.pkScript()) {
+					io.Note = "peg reserve"
+					spendsReserve = true
 				}
+				in += prevOut.Value
+			} else {
+				allKnown = false
 			}
 			v.Inputs = append(v.Inputs, io)
 		}
@@ -146,10 +169,10 @@ func (srv *server) txDetail(txid string) (*txView, error) {
 		}
 		v.Outputs = append(v.Outputs, io)
 	}
-	if !isCoinbase(tx) && in >= out {
+	if !isCoinbase(tx) && allKnown && in >= out {
 		v.Fee = formatDoge(in - out)
 	}
-	srv.describe(v, tx)
+	srv.describe(v, tx, spendsReserve)
 	return v, nil
 }
 
@@ -227,6 +250,12 @@ func (srv *server) blockHandler(r *http.Request) (any, error) {
 		return nil, err
 	}
 	txs := []*txView{}
+	total := len(b.TxIDs)
+	// Describing a transaction costs an RPC per input; cap the work a
+	// single request can cause.
+	if len(b.TxIDs) > 50 {
+		b.TxIDs = b.TxIDs[:50]
+	}
 	for _, txid := range b.TxIDs {
 		v, err := srv.txDetail(txid)
 		if err != nil {
@@ -234,7 +263,7 @@ func (srv *server) blockHandler(r *http.Request) (any, error) {
 		}
 		txs = append(txs, v)
 	}
-	return map[string]any{"block": b, "transactions": txs}, nil
+	return map[string]any{"block": b, "transactions": txs, "txCount": total}, nil
 }
 
 // activity is the bridge's moves across both chains, newest first.

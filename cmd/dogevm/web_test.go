@@ -9,13 +9,16 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
 	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 // TestWebChainMatchesGo runs the web wallet's chain.js under Node and checks
@@ -48,18 +51,37 @@ func TestWebChainMatchesGo(t *testing.T) {
 	// DVMO tag, as the Withdraw tab does.
 	fromScript := destinationScript(vmAddr)
 	dogeDest := destination{kind: destP2PKH, hash: [20]byte{9}}
+
+	// The transaction that created the UTXO; the page fetches it to check
+	// the UTXO's value.
+	prev := wire.NewMsgTx(1)
+	prev.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: 7}, []byte{0x51}, nil))
+	for i := 0; i < 3; i++ {
+		prev.AddTxOut(wire.NewTxOut(koinuPerDoge, []byte{0x51}))
+	}
+	prev.AddTxOut(wire.NewTxOut(500*koinuPerDoge, fromScript))
+	other := wire.NewMsgTx(1)
+	other.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: 8}, []byte{0x51}, nil))
+	for i := 0; i < 4; i++ {
+		other.AddTxOut(wire.NewTxOut(5000*koinuPerDoge, fromScript))
+	}
+	uncompressed, err := btcutil.NewWIF(key, dogeParams, false)
+	require.NoError(err)
 	input := map[string]any{
 		"keyHex":       hex.EncodeToString(key.Serialize()),
 		"vmVersions":   addressVersions(vmParams),
 		"dogeVersions": addressVersions(dogeParams),
 		"signers":      map[string]any{"required": signers.Required, "publicKeys": signers.PublicKeys},
 		"utxo": map[string]any{
-			"txid": "11" + hex.EncodeToString(make([]byte, 31)), "vout": 3,
-			"value": 500 * koinuPerDoge, "script": hex.EncodeToString(fromScript), "confirmations": 1,
+			"txid": prev.TxHash().String(), "vout": 3,
+			"value": strconv.FormatInt(500*koinuPerDoge, 10), "script": hex.EncodeToString(fromScript), "confirmations": 1,
 		},
-		"toScript": hex.EncodeToString(signers.pkScript()),
-		"amount":   120 * koinuPerDoge,
-		"data":     hex.EncodeToString(encodeDestination(tagPegOut, dogeDest)),
+		"rawTxs":          map[string]string{prev.TxHash().String(): encodeTx(prev)},
+		"otherTx":         encodeTx(other),
+		"uncompressedWIF": uncompressed.String(),
+		"toScript":        hex.EncodeToString(signers.pkScript()),
+		"amount":          120 * koinuPerDoge,
+		"data":            hex.EncodeToString(encodeDestination(tagPegOut, dogeDest)),
 	}
 	raw, err := json.Marshal(input)
 	require.NoError(err)
@@ -70,6 +92,7 @@ func TestWebChainMatchesGo(t *testing.T) {
 	require.NoError(err, "%s", out)
 	var got struct {
 		VMAddress, DogeAddress, VMWIF, DogeWIF, KeyFromWIF, DepositAddress, TxHex string
+		TxID, InflatedHex, Refused, Uncompressed                                  string
 	}
 	require.NoError(json.Unmarshal(out, &got), "%s", out)
 
@@ -101,6 +124,11 @@ func TestWebChainMatchesGo(t *testing.T) {
 	fee := int64(500*koinuPerDoge) - tx.TxOut[0].Value - tx.TxOut[2].Value
 	require.Greater(fee, int64(0))
 	require.LessOrEqual(fee, int64(koinuPerDoge)) // well under 1 DOGE
+
+	require.Equal(tx.TxHash().String(), got.TxID)
+	require.Equal(got.TxHex, got.InflatedHex, "an overstated UTXO value changed the transaction")
+	require.Contains(got.Refused, "wrong transaction")
+	require.Contains(got.Uncompressed, "uncompressed")
 }
 
 // TestEmbeddedImportsResolve checks that every relative module import in the

@@ -7,13 +7,28 @@ const input = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const key = chain.unhex(input.keyHex);
 const dest = chain.keyDestination(key);
 
-const payment = await chain.buildPayment({
+const pay = (utxo, rawTxs) => chain.buildPayment({
   key,
-  utxos: [input.utxo],
+  utxos: [utxo],
+  getRawTx: async (txid) => rawTxs[txid],
   script: chain.unhex(input.toScript),
   amount: BigInt(input.amount),
   data: input.data ? chain.unhex(input.data) : undefined,
 });
+const payment = await pay(input.utxo, input.rawTxs);
+
+// A server that overstates the UTXO's value must not change what is signed:
+// the value comes from the verified previous transaction.
+const inflated = await pay({ ...input.utxo, value: String(BigInt(input.utxo.value) * 10n) }, input.rawTxs);
+
+// A server that sends a different transaction for the txid is refused.
+const refused = await pay(input.utxo, { [input.utxo.txid]: input.otherTx })
+  .then(() => '', (err) => err.message);
+
+// An uncompressed-key WIF is refused.
+const uncompressed = (() => {
+  try { chain.parseKey(input.uncompressedWIF); return ''; } catch (err) { return err.message; }
+})();
 
 console.log(JSON.stringify({
   vmAddress: chain.encodeAddress(dest, input.vmVersions),
@@ -23,4 +38,8 @@ console.log(JSON.stringify({
   keyFromWIF: chain.hex(chain.parseKey(chain.wif(key, input.dogeVersions))),
   depositAddress: chain.depositAddress(dest, input.signers, input.dogeVersions),
   txHex: payment.hex,
+  txid: payment.txid,
+  inflatedHex: inflated.hex,
+  refused,
+  uncompressed,
 }));

@@ -19,10 +19,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="app.css">
-  <script>
-    // Apply a saved theme before first paint, so the page does not flash.
-    try { const t = localStorage.getItem('dogevm.theme'); if (t === 'dark' || t === 'system') document.documentElement.dataset.theme = t; } catch {}
-  </script>
+  <script src="theme.js"></script>
   <script type="module" src="app.js"></script>
 </head>
 <body>
@@ -33,7 +30,7 @@
       <img class="brand-coin" src="dogecoin.svg" alt="" width="64" height="64">
       <h1>DogecoinVM <span class="masthead-sub" id="network-name">bridge</span></h1>
     </div>
-    <dl class="heights" aria-live="polite">
+    <dl class="heights">
       <div class="height height-doge"><dt id="doge-height-label">Dogecoin block</dt><dd id="doge-height">…</dd><span class="sync-meter" id="sync-meter" hidden><span id="sync-fill"></span></span><span class="sync-of" id="sync-of" hidden></span></div>
       <div class="height height-vm"><dt>DogecoinVM block</dt><dd id="vm-height">…</dd></div>
     </dl>
@@ -53,7 +50,7 @@
   <main class="layout" id="home">
     <aside class="peg" aria-labelledby="peg-title">
       <h2 id="peg-title">The peg</h2>
-      <p class="peg-lede">Every DOGE on DogecoinVM is backed by DOGE locked on Dogecoin. Equal bars mean the peg is fully backed.</p>
+      <p class="peg-lede">Every DOGE on DogecoinVM is backed by DOGE locked on Dogecoin. The peg is fully backed while the locked bar is at least as long as the circulating one.</p>
       <div class="gauge" id="gauge">
         <div class="gauge-row gauge-doge">
           <span class="gauge-label">Locked on Dogecoin</span>
@@ -87,14 +84,15 @@
         <div id="no-key">
           <h2>Start with a key</h2>
           <p>Your key stays in this browser and nowhere else. Back it up once you have it: if this browser's data is cleared, the key and its DOGE are gone.</p>
+          <p class="result" id="wallet-start" aria-live="polite">Loading the bridge…</p>
           <div class="actions">
-            <button class="primary" id="create-key">Create a new key</button>
+            <button class="primary" id="create-key" disabled>Create a new key</button>
           </div>
           <form id="import-form" class="stack">
             <label for="import-key">Or import a key you already have (WIF or hex)</label>
             <div class="inline">
               <input id="import-key" autocomplete="off" spellcheck="false" placeholder="c…, 9… or 64 hex characters">
-              <button type="submit">Import key</button>
+              <button type="submit" id="import-submit" disabled>Import key</button>
             </div>
           </form>
         </div>
@@ -102,10 +100,11 @@
         <div id="has-key" hidden>
           <div class="account">
             <p class="account-label">Your DogecoinVM address</p>
-            <p class="address address-vm"><span id="my-address"></span> <button class="copy" data-copy="my-address">Copy</button></p>
+            <p class="address address-vm"><span id="my-address"></span> <button class="copy" data-copy="my-address" aria-label="Copy your DogecoinVM address">Copy</button></p>
             <p class="balance"><span class="amount" id="balance">…</span> <span class="unit">DOGE</span></p>
             <p class="balance-pending" id="balance-pending"></p>
           </div>
+          <p class="notice" id="key-warning" role="alert" hidden></p>
 
           <form id="send-form" class="stack">
             <h2>Send DOGE on DogecoinVM</h2>
@@ -122,11 +121,10 @@
             <ol id="history"></ol>
           </section>
 
-          <details class="key-details">
+          <details class="key-details" id="key-details">
             <summary>Show or remove your key</summary>
             <p>Back this up to use the same key elsewhere, for example with <code>dogevm</code>. The Dogecoin encoding imports into Dogecoin Core.</p>
-            <p class="secret">DogecoinVM: <code id="wif-vm"></code></p>
-            <p class="secret">Dogecoin: <code id="wif-doge"></code></p>
+            <p class="secret" id="secrets" hidden>DogecoinVM: <code id="wif-vm"></code><br>Dogecoin: <code id="wif-doge"></code></p>
             <button class="danger" id="forget-key">Remove key from this browser</button>
           </details>
         </div>
@@ -143,8 +141,8 @@
             <div id="deposit-qr" class="qr" aria-hidden="true"></div>
             <div>
               <p class="account-label">Your Dogecoin deposit address</p>
-              <p class="address address-doge"><span id="deposit-address">…</span> <button class="copy" data-copy="deposit-address">Copy</button></p>
-              <p class="verified" id="deposit-verified"></p>
+              <p class="address address-doge"><span id="deposit-address">…</span> <button class="copy" data-copy="deposit-address" aria-label="Copy your Dogecoin deposit address">Copy</button></p>
+              <p class="verified" id="deposit-verified" aria-live="polite"></p>
             </div>
           </div>
           <h3>Your deposits</h3>

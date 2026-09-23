@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
 	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
 	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 // all: includes files starting with _, such as noble-hashes/_md.js.
@@ -39,6 +41,13 @@ type server struct {
 
 	mu       sync.RWMutex
 	snapshot *snapshot
+
+	cacheMu  sync.Mutex
+	prevOuts map[wire.OutPoint]*wire.TxOut
+
+	// heavy bounds concurrent explorer requests, each of which can make
+	// many RPC calls.
+	heavy chan struct{}
 
 	registerLimit *rateLimit
 }
@@ -166,7 +175,6 @@ func (srv *server) info(*http.Request) (any, error) {
 		"faucet":               srv.faucet.info(),
 		"dogecoinvmVersions":   addressVersions(srv.b.vmParams),
 		"dogecoinVersions":     addressVersions(srv.b.dogeParams),
-		"dogecoinExplorer":     explorerLinks(srv.b.dogeParams),
 		"chainID":              srv.chainID,
 	}, nil
 }
@@ -256,25 +264,40 @@ func (srv *server) address(r *http.Request) (any, error) {
 		} else {
 			pending += u.value
 		}
+		// Values are strings so JavaScript never rounds them.
 		outs = append(outs, map[string]any{
 			"txid": u.outPoint.Hash.String(), "vout": u.outPoint.Index,
-			"value": u.value, "script": hex.EncodeToString(u.pkScript),
+			"value": strconv.FormatInt(u.value, 10), "script": hex.EncodeToString(u.pkScript),
 			"confirmations": u.confirmations,
 		})
 	}
 
-	script := destinationScript(addr)
+	// The address's outputs across its history, so each transaction's net
+	// effect counts what it spent from the address, not just what it paid in.
+	script := string(destinationScript(addr))
+	owned := map[wire.OutPoint]int64{}
+	for _, t := range txs {
+		hash := t.tx.TxHash()
+		for i, out := range t.tx.TxOut {
+			if string(out.PkScript) == script {
+				owned[wire.OutPoint{Hash: hash, Index: uint32(i)}] = out.Value
+			}
+		}
+	}
 	history := []map[string]any{}
 	for i := len(txs) - 1; i >= 0 && len(history) < 50; i-- {
-		var received int64
-		for _, out := range txs[i].tx.TxOut {
-			if string(out.PkScript) == string(script) {
-				received += out.Value
+		var in, out int64
+		for _, txIn := range txs[i].tx.TxIn {
+			in += owned[txIn.PreviousOutPoint]
+		}
+		for _, o := range txs[i].tx.TxOut {
+			if string(o.PkScript) == script {
+				out += o.Value
 			}
 		}
 		history = append(history, map[string]any{
 			"txid": txs[i].tx.TxHash().String(), "confirmations": txs[i].confirmations,
-			"received": formatDoge(received),
+			"net": formatSigned(out - in), "time": txs[i].time,
 		})
 	}
 	return map[string]any{
@@ -284,6 +307,56 @@ func (srv *server) address(r *http.Request) (any, error) {
 		"utxos":     outs,
 		"history":   history,
 	}, nil
+}
+
+// limited runs fn once a slot among srv.heavy is free, or fails fast if the
+// server is saturated.
+func (srv *server) limited(fn func(*http.Request) (any, error)) func(*http.Request) (any, error) {
+	return func(r *http.Request) (any, error) {
+		select {
+		case srv.heavy <- struct{}{}:
+			defer func() { <-srv.heavy }()
+			return fn(r)
+		case <-time.After(10 * time.Second):
+			return nil, &apiError{http.StatusServiceUnavailable, "busy; try again shortly"}
+		}
+	}
+}
+
+// rawTx returns a DogecoinVM transaction's bytes, so the wallet can check the
+// value of each output it spends against the transaction's own ID.
+func (srv *server) rawTx(r *http.Request) (any, error) {
+	if _, err := chainhash.NewHashFromStr(r.PathValue("txid")); err != nil {
+		return nil, badRequest("invalid txid")
+	}
+	var hexTx string
+	if err := srv.vm.rpc.call(&hexTx, "getrawtransaction", r.PathValue("txid"), 0); err != nil {
+		return nil, &apiError{http.StatusNotFound, "no such transaction on DogecoinVM"}
+	}
+	return map[string]string{"hex": hexTx}, nil
+}
+
+func formatSigned(koinu int64) string {
+	if koinu < 0 {
+		return "-" + formatDoge(-koinu)
+	}
+	return formatDoge(koinu)
+}
+
+// securityHeaders sets the headers a wallet page should have: scripts and
+// connections only from this origin, no framing, no content sniffing.
+func securityHeaders(next http.Handler) http.Handler {
+	const csp = "default-src 'self'; script-src 'self'; connect-src 'self'; " +
+		"style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; " +
+		"img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", csp)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("X-Frame-Options", "DENY")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (srv *server) broadcast(r *http.Request) (any, error) {
@@ -339,20 +412,50 @@ func (srv *server) deposits(r *http.Request) (any, error) {
 	if snap == nil || snap.state == nil {
 		return out, nil
 	}
-	for _, d := range snap.state.deposits {
-		if d.dest != dest {
-			continue
-		}
+	s := snap.state
+	add := func(d deposit, status, reason string) {
 		entry := map[string]any{
 			"txid": d.outPoint.Hash.String(), "vout": d.outPoint.Index,
 			"amount": formatDoge(d.value), "confirmations": d.confirmations,
-			"required": srv.b.depositConfirmations,
+			"required": srv.b.depositConfirmations, "status": status,
 		}
-		if release, ok := snap.state.released[d.outPoint]; ok {
+		if reason != "" {
+			entry["reason"] = reason
+		}
+		if release, ok := s.released[d.outPoint]; ok {
+			entry["status"] = "credited"
 			entry["creditTxid"] = release.String()
 			entry["credited"] = formatDoge(d.value - srv.b.vmFee)
 		}
+		if refund, ok := s.refunded[d.outPoint]; ok {
+			entry["status"] = "refunded"
+			entry["refundTxid"] = refund.String()
+		}
 		out = append(out, entry)
+	}
+	for _, d := range s.deposits {
+		if d.dest != dest {
+			continue
+		}
+		status := "confirming"
+		if d.confirmations >= srv.b.depositConfirmations {
+			status = "waiting_for_capacity" // the bridge credits within a poll unless the cap blocks it
+			if srv.b.maxCirculating == 0 || s.reserveCreated-s.reserveUnspent+d.value <= srv.b.maxCirculating {
+				status = "crediting"
+			}
+		}
+		add(d, status, "")
+	}
+	// Held and refunded deposits to a personal address still name it.
+	for _, d := range s.held {
+		if d.dest == dest && d.dest != (destination{}) {
+			add(d, "held", srv.b.holdReason(d))
+		}
+	}
+	for _, d := range s.settled {
+		if d.dest == dest && d.dest != (destination{}) {
+			add(d, "refunded", "")
+		}
 	}
 	return out, nil
 }
@@ -513,6 +616,8 @@ func cmdServe(args []string) error {
 		vm:            b.vm.(*vmChain),
 		doge:          b.doge.(*dogeChain),
 		registerLimit: newRateLimit(30, time.Hour),
+		prevOuts:      map[wire.OutPoint]*wire.TxOut{},
+		heavy:         make(chan struct{}, 8),
 	}
 	if *faucetKey != "" {
 		key, err := parseKey(*faucetKey)
@@ -551,24 +656,24 @@ func cmdServe(args []string) error {
 	mux.HandleFunc("GET /api/info", handle(srv.info))
 	mux.HandleFunc("GET /api/status", handle(srv.status))
 	mux.HandleFunc("GET /api/health", srv.healthHandler)
-	mux.HandleFunc("GET /api/blocks", handle(srv.blocksHandler))
-	mux.HandleFunc("GET /api/block/{id}", handle(srv.blockHandler))
-	mux.HandleFunc("GET /api/tx/{txid}", handle(srv.txHandler))
+	mux.HandleFunc("GET /api/blocks", handle(srv.limited(srv.blocksHandler)))
+	mux.HandleFunc("GET /api/block/{id}", handle(srv.limited(srv.blockHandler)))
+	mux.HandleFunc("GET /api/tx/{txid}", handle(srv.limited(srv.txHandler)))
 	mux.HandleFunc("GET /api/activity", handle(srv.activityHandler))
 	mux.HandleFunc("GET /api/reserves", handle(srv.reservesHandler))
-	mux.HandleFunc("GET /api/address/{addr}", handle(srv.address))
+	mux.HandleFunc("GET /api/address/{addr}", handle(srv.limited(srv.address)))
 	mux.HandleFunc("GET /api/deposits/{addr}", handle(srv.deposits))
 	mux.HandleFunc("GET /api/pegout/{txid}", handle(srv.pegOut))
 	mux.HandleFunc("POST /api/tx", handle(srv.broadcast))
+	mux.HandleFunc("GET /api/rawtx/{txid}", handle(srv.rawTx))
 	mux.HandleFunc("POST /api/deposit-address", handle(srv.depositAddress))
 	mux.HandleFunc("POST /api/faucet", handle(srv.faucetClaim))
 
 	log.Printf("serving on http://%s", *listen)
-	server := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{
+		Addr: *listen, Handler: securityHeaders(mux),
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+		WriteTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second,
+	}
 	return server.ListenAndServe()
-}
-
-func explorerLinks(p *chaincfg.Params) map[string]string {
-	tx, addr := dogecoinExplorer(p)
-	return map[string]string{"tx": tx, "address": addr}
 }

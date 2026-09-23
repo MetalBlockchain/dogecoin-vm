@@ -6,9 +6,16 @@ import { ripemd160 } from './vendor/noble-hashes-1.8.0/legacy.js';
 
 export const KOINU = 100_000_000n;
 
-// Dogecoin's recommended 0.01 DOGE/kB wallet fee, and soft dust limit.
+// Dogecoin's recommended 0.01 DOGE/kB wallet fee, its soft dust limit (each
+// output below it costs that much again in fee) and hard dust limit (outputs
+// below it are not relayed).
 const FEE_PER_BYTE = 1000n;
 const SOFT_DUST = KOINU / 100n;
+const HARD_DUST = SOFT_DUST / 10n;
+
+// No payment this page builds should cost more than this in fees; a larger
+// figure means something is wrong, so refuse to sign.
+const MAX_FEE = 5n * KOINU;
 
 const concat = (...parts) => {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
@@ -114,14 +121,22 @@ export function newPrivateKey() {
   return secp.utils.randomPrivateKey();
 }
 
-// parseKey accepts a WIF (any network) or 64 hex characters.
+// parseKey accepts a compressed-key WIF (any network) or 64 hex characters.
+// Addresses here are for compressed public keys, so an uncompressed WIF
+// would open a different, empty wallet; it is refused.
 export function parseKey(s) {
   s = s.trim();
-  if (/^[0-9a-f]{64}$/i.test(s)) return unhex(s);
-  const { payload } = checkDecode(s);
-  if (payload.length === 33 && payload[32] === 1) return payload.slice(0, 32);
-  if (payload.length === 32) return payload;
-  throw new Error('not a private key');
+  let key;
+  if (/^[0-9a-f]{64}$/i.test(s)) {
+    key = unhex(s);
+  } else {
+    const { payload } = checkDecode(s);
+    if (payload.length === 32) throw new Error('this is an uncompressed-key WIF; export a compressed one');
+    if (payload.length !== 33 || payload[32] !== 1) throw new Error('not a private key');
+    key = payload.slice(0, 32);
+  }
+  if (!secp.utils.isValidPrivateKey(key)) throw new Error('not a valid private key');
+  return key;
 }
 
 export const wif = (key, versions) => checkEncode(versions.wif, concat(key, Uint8Array.of(1)));
@@ -192,14 +207,64 @@ function derSignature(sig) {
   return concat(Uint8Array.of(0x30, body.length), body);
 }
 
+// txid is a transaction's id: its double SHA-256, byte-reversed.
+export const txid = (raw) => hex(dsha(raw).reverse());
+
+// parseOutputs reads the outputs of a legacy-format transaction.
+function parseOutputs(raw) {
+  let i = 4;
+  const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+  const need = (n) => { if (i + n > raw.length) throw new Error('truncated transaction'); };
+  const readVarint = () => {
+    need(1);
+    const b = raw[i++];
+    if (b < 0xfd) return b;
+    if (b === 0xfd) { need(2); const v = view.getUint16(i, true); i += 2; return v; }
+    if (b === 0xfe) { need(4); const v = view.getUint32(i, true); i += 4; return v; }
+    throw new Error('transaction too large');
+  };
+  const inputs = readVarint();
+  for (let n = 0; n < inputs; n++) {
+    need(36); i += 36;
+    const len = readVarint();
+    need(len + 4); i += len + 4;
+  }
+  const count = readVarint();
+  const outputs = [];
+  for (let n = 0; n < count; n++) {
+    need(8);
+    const value = view.getBigUint64(i, true); i += 8;
+    const len = readVarint();
+    need(len);
+    outputs.push({ value, script: raw.slice(i, i + len) });
+    i += len;
+  }
+  return outputs;
+}
+
 function opReturn(data) {
   return { value: 0n, script: concat(Uint8Array.of(0x6a), pushData(data)) };
 }
 
-// buildPayment spends key's P2PKH outputs (from the API's utxo list) to pay
-// amount to script, with an optional OP_RETURN, returning the signed hex and
-// fee.
-export async function buildPayment({ key, utxos, script, amount, data }) {
+// verifiedInput checks a UTXO the server listed against the transaction that
+// created it, fetched with getRawTx and matched to its id, and returns the
+// value and script from those bytes. Legacy signatures do not commit to the
+// amounts they spend, so a server lying about a value could otherwise turn
+// the difference into fee.
+async function verifiedInput(u, getRawTx, fromScript) {
+  const raw = unhex(await getRawTx(u.txid));
+  if (txid(raw) !== u.txid) throw new Error(`the server sent the wrong transaction for ${u.txid}`);
+  const out = parseOutputs(raw)[u.vout];
+  if (!out) throw new Error(`transaction ${u.txid} has no output ${u.vout}`);
+  if (hex(out.script) !== hex(fromScript)) throw new Error(`output ${u.txid}:${u.vout} is not yours`);
+  return { txid: u.txid, vout: u.vout, value: out.value };
+}
+
+// buildPayment spends key's P2PKH outputs (from the API's utxo list, each
+// checked with getRawTx) to pay amount to script, with an optional
+// OP_RETURN. It returns the signed hex, its txid and the fee.
+export async function buildPayment({ key, utxos, getRawTx, script, amount, data }) {
+  if (amount < HARD_DUST) throw new Error(`the smallest payment is ${formatDoge(HARD_DUST)} DOGE`);
   const from = keyDestination(key);
   const fromScript = pkScript(from);
   const spendable = utxos
@@ -209,15 +274,17 @@ export async function buildPayment({ key, utxos, script, amount, data }) {
 
   const outputs = [{ value: amount, script }];
   if (data) outputs.push(opReturn(data));
+  const dustFee = amount < SOFT_DUST ? SOFT_DUST : 0n;
 
   let inputs = [];
   let total = 0n;
   let fee = 0n;
   for (const u of spendable) {
-    inputs.push(u);
-    total += u.value;
+    const input = await verifiedInput(u, getRawTx, fromScript);
+    inputs.push(input);
+    total += input.value;
     const size = 10 + 149 * inputs.length + 34 * (outputs.length + 1) + (data ? data.length + 3 : 0);
-    fee = BigInt(size) * FEE_PER_BYTE;
+    fee = BigInt(size) * FEE_PER_BYTE + dustFee;
     if (total >= amount + fee) break;
   }
   if (total < amount + fee) {
@@ -226,6 +293,7 @@ export async function buildPayment({ key, utxos, script, amount, data }) {
   const change = total - amount - fee;
   if (change >= SOFT_DUST) outputs.push({ value: change, script: fromScript });
   else fee += change;
+  if (fee > MAX_FEE) throw new Error(`the fee would be ${formatDoge(fee)} DOGE; refusing to sign`);
 
   const tx = {
     version: 1,
@@ -237,7 +305,8 @@ export async function buildPayment({ key, utxos, script, amount, data }) {
     const sig = await secp.signAsync(sighash(tx, i, fromScript), key, { lowS: true });
     tx.inputs[i].script = concat(pushData(concat(derSignature(sig), Uint8Array.of(1))), pushData(pub));
   }
-  return { hex: hex(serialize(tx)), fee };
+  const raw = serialize(tx);
+  return { hex: hex(raw), txid: txid(raw), fee };
 }
 
 // pegOutData is the DVMO tag naming the Dogecoin address to pay.

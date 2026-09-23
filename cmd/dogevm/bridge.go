@@ -78,6 +78,7 @@ type pegState struct {
 	paid            map[chainhash.Hash]chainhash.Hash // peg-out -> payment txid
 	refunded        map[wire.OutPoint]chainhash.Hash  // deposit -> refund txid
 	held            []deposit                         // deposits not credited: no destination, or outside the limits
+	settled         []deposit                         // deposits refunded instead of credited
 	locked          int64                             // DOGE held at the peg address on Dogecoin
 	lockedUTXOs     []utxo
 	unclaimedOnDoge int64 // deposits without a usable destination
@@ -297,6 +298,7 @@ func (b *bridge) load() (*pegState, error) {
 	for _, d := range all {
 		switch {
 		case s.refunded[d.outPoint] != (chainhash.Hash{}):
+			s.settled = append(s.settled, d)
 		case d.valid:
 			s.deposits = append(s.deposits, d)
 		default:

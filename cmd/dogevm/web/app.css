@@ -36,7 +36,8 @@
 
   --btn: #16233a;
   --btn-ink: #f2f4f1;
-  --focus: #f2b33d;
+  --focus: #16233a;
+  --control-border: #7c8a86;
 
   --sans: "Schibsted Grotesk", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, monospace;
@@ -71,6 +72,8 @@
     --panel: #1c2c4b;
     --btn: #e7ecf2;
     --btn-ink: #0d1524;
+    --focus: #f2b33d;
+    --control-border: #5a6d8f;
     color-scheme: dark;
   }
 }
@@ -92,6 +95,8 @@
   --panel: #1c2c4b;
   --btn: #e7ecf2;
   --btn-ink: #0d1524;
+  --focus: #f2b33d;
+  --control-border: #5a6d8f;
   color-scheme: dark;
 }
 
@@ -219,6 +224,8 @@ code { font-family: var(--mono); font-size: 0.9em; }
 }
 @media (max-width: 52rem) {
   .layout { grid-template-columns: 1fr; }
+  /* On a narrow screen the wallet comes first; the peg follows. */
+  .layout .console { order: -1; }
   .lower { grid-template-columns: 1fr; grid-template-areas: "activity" "reserves" "blocks"; }
 }
 
@@ -232,6 +239,8 @@ code { font-family: var(--mono); font-size: 0.9em; }
 }
 .peg h2 { color: var(--panel-ink); }
 .peg-lede { color: var(--panel-soft); margin-top: 0; }
+/* The panel is navy in both themes, so its focus ring stays gold. */
+.peg { --focus: #f2b33d; }
 .gauge { display: grid; gap: 1.25rem; margin: 1.75rem 0 1.25rem; }
 .gauge-row {
   display: grid;
@@ -299,13 +308,13 @@ code { font-family: var(--mono); font-size: 0.9em; }
 input {
   font: 400 var(--step-0) var(--mono);
   padding: 0.7rem 0.8rem;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--control-border);
   border-radius: 3px;
   background: var(--surface-sunk);
   color: var(--ink);
   min-width: 0;
 }
-input::placeholder { color: var(--ink-soft); opacity: 0.8; }
+input::placeholder { color: var(--ink-soft); opacity: 1; }
 
 button {
   font: 500 var(--step-0) var(--sans);
@@ -360,6 +369,8 @@ button.copy { font-size: var(--step--1); padding: 0.2rem 0.6rem; vertical-align:
 .empty { color: var(--ink-soft); }
 .status-done { color: var(--ok); font-weight: 500; }
 .status-waiting { color: var(--ink-soft); }
+.status-held { color: var(--coin-ink); font-weight: 500; }
+.mono { font-family: var(--mono); font-size: 0.9em; word-break: break-all; }
 .result code, .transfers code, .history code, .io code { word-break: break-all; }
 
 .deposit-address { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: center; margin: 1.5rem 0; }
