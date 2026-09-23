@@ -176,6 +176,13 @@ async function loadInfo() {
 async function refreshStatus() {
   try {
     const s = await api('/api/status');
+    // An emergency pause: nothing is credited or paid until it ends.
+    const band = $('pause-band');
+    band.hidden = !s.paused;
+    if (s.paused) {
+      const text = `The bridge is paused: ${s.paused.reason} Deposits and withdrawals already sent are processed when it resumes.`;
+      if (band.textContent !== text) band.textContent = text;
+    }
     $('vm-height').textContent = s.dogecoinvmHeight.toLocaleString('en-US');
     // While the bridge's Dogecoin node catches up, show how far it has got
     // rather than a block number that looks like the chain tip.

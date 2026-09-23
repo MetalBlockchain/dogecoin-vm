@@ -124,6 +124,18 @@ code { font-family: var(--mono); font-size: 0.9em; }
 
 /* Network band */
 
+/* Shown only while the bridge is paused. */
+.pause-band {
+  max-width: none;
+  margin: 0;
+  padding: 0.7rem 1rem;
+  background: var(--error);
+  color: #ffffff;
+  font-weight: 700;
+  text-align: center;
+}
+:root[data-theme="dark"] .pause-band { color: #1a0d0c; }
+@media (prefers-color-scheme: dark) { :root[data-theme="system"] .pause-band { color: #1a0d0c; } }
 .network-band {
   max-width: none;
   margin: 0;

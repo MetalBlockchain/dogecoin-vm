@@ -360,6 +360,9 @@ var errInsolvent = errors.New("peg is insolvent: DOGE locked on Dogecoin is less
 // step performs at most one release or payment. It returns what it did, or
 // "" if there was nothing to do.
 func (b *bridge) step() (string, error) {
+	if p := b.paused(); p != nil {
+		return "", p.err()
+	}
 	s, err := b.load()
 	if err != nil {
 		return "", err
@@ -531,6 +534,9 @@ var (
 // for room under maxCirculating) needs force, and the bridge must be
 // stopped first so the two cannot race.
 func (b *bridge) refund(op wire.OutPoint, dest destination, force bool) (chainhash.Hash, error) {
+	if p := b.paused(); p != nil {
+		return chainhash.Hash{}, p.err()
+	}
 	s, err := b.load()
 	if err != nil {
 		return chainhash.Hash{}, err

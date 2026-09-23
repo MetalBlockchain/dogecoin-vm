@@ -429,6 +429,9 @@ func (c *cosigner) handleSign(r *http.Request) (any, error) {
 // the DOGE the action moves.
 func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) {
 	b := c.b
+	if p := b.paused(); p != nil {
+		return nil, nil, 0, fmt.Errorf("this signer is paused: %s", p.Reason)
+	}
 	tx, err := decodeTx(req.Tx)
 	if err != nil {
 		return nil, nil, 0, err

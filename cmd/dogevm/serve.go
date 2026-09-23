@@ -217,6 +217,9 @@ func (srv *server) status(*http.Request) (any, error) {
 		},
 		"updated": snap.updated.UTC().Format(time.RFC3339),
 	}
+	if p := srv.b.paused(); p != nil {
+		out["paused"] = p
+	}
 	if supply := srv.supply.Load(); supply != nil {
 		out["dogecoinSupply"] = supply
 	}

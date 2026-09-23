@@ -38,6 +38,7 @@ type signerSet struct {
 	CoordinatorKey string         `json:"coordinatorKey,omitempty"` // hex; signs every request to the signers
 	Policy         *pegPolicy     `json:"policy,omitempty"`
 
+	path         string // the file it was read from, if any
 	redeemScript []byte
 	pubKeys      []*btcec.PublicKey
 	privKeys     []*btcec.PrivateKey
@@ -110,6 +111,7 @@ func readSignerSet(path string) (*signerSet, error) {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	s.path = path
 	return &s, s.load()
 }
 

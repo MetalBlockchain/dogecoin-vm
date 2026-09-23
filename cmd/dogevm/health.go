@@ -48,6 +48,8 @@ func (h *healthChecker) register(fs *flag.FlagSet) {
 func (h *healthChecker) run(state *pegState, loadErr error) []check {
 	var checks []check
 
+	checks = append(checks, h.pauseCheck())
+
 	// The peg.
 	switch {
 	case loadErr != nil:
@@ -66,6 +68,14 @@ func (h *healthChecker) run(state *pegState, loadErr error) []check {
 		checks = append(checks, h.validatorBalance())
 	}
 	return checks
+}
+
+// pauseCheck fails while the bridge is paused, so the pause is alerted on.
+func (h *healthChecker) pauseCheck() check {
+	if p := h.b.paused(); p != nil {
+		return check{"pause", false, fmt.Sprintf("paused since %s: %s", p.Since.UTC().Format(time.RFC3339), p.Reason)}
+	}
+	return check{"pause", true, "not paused"}
 }
 
 // bridgeLiveness fails if a deposit or peg-out is well past due.

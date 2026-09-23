@@ -57,6 +57,8 @@ Bridge (peg signers):
   dogevm refund -signers FILE -deposit TXID:VOUT [-to DOGEADDR]
       return a held deposit, less the Dogecoin fee, to its sender (or -to)
   dogevm monitor -signers FILE [-webhook URL]  alert when a health check fails
+  dogevm pause -signers FILE -reason TEXT     emergency stop: sign and pay nothing (a signer: -dir DIR)
+  dogevm resume -signers FILE                 end a pause
   dogevm serve -signers FILE                  web wallet and bridge API
   dogevm signer-setup STEP                    set up separate signers: init, coordinator, assemble, join, check
   dogevm signer-key -out FILE                 new key for one separate signer; prints its public key
@@ -134,6 +136,8 @@ func main() {
 		"signer-key":      cmdSignerKey,
 		"signer-setup":    cmdSignerSetup,
 		"signers-check":   cmdSignersCheck,
+		"pause":           cmdPause,
+		"resume":          cmdResume,
 	}
 	run, ok := commands[cmd]
 	if !ok {
@@ -623,15 +627,24 @@ func cmdBridge(args []string) error {
 		return fmt.Errorf("importing the peg address into Dogecoin Core: %w", err)
 	}
 
+	lastErr := ""
 	for {
 		for {
 			done, err := b.step()
 			if err != nil {
 				if !*once {
-					b.logf("error: %v", err)
+					// Log a standing condition, such as a pause, once.
+					if err.Error() != lastErr {
+						b.logf("error: %v", err)
+						lastErr = err.Error()
+					}
 					break
 				}
 				return err
+			}
+			if lastErr != "" {
+				b.logf("running again")
+				lastErr = ""
 			}
 			if done == "" {
 				break
