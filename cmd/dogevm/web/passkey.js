@@ -24,6 +24,16 @@ export const isBackup = (s) => typeof s === 'string' && s.trim().startsWith(PREF
 
 class PasskeyError extends Error {}
 
+const noPRF = () => new PasskeyError(
+  "This browser and passkey can't encrypt the wallet: they don't support the PRF extension together. " +
+  'With a security key such as a YubiKey, use Chrome, Edge or Firefox; Safari supports it only for iCloud Keychain passkeys.');
+
+function failure(err) {
+  if (err.name === 'NotAllowedError') return new PasskeyError('The passkey request was cancelled, timed out, or not allowed by the browser.');
+  if (err.name === 'InvalidStateError') return new PasskeyError('This security key already has a passkey for this wallet.');
+  return new PasskeyError(`${err.name}: ${err.message}`);
+}
+
 async function aesKey(prfOutput, salt) {
   const base = await crypto.subtle.importKey('raw', prfOutput, 'HKDF', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
@@ -41,15 +51,16 @@ async function prfSecret(credentialId, salt) {
         challenge: random(32),
         rpId: location.hostname,
         allowCredentials: credentialId ? [{ type: 'public-key', id: credentialId }] : [],
-        userVerification: 'required',
+        // A PIN or biometric if the authenticator has one; a touch otherwise.
+        userVerification: 'preferred',
         extensions: { prf: { eval: { first: salt } } },
       },
     });
   } catch (err) {
-    throw new PasskeyError(err.name === 'NotAllowedError' ? 'The passkey request was cancelled or timed out.' : err.message);
+    throw failure(err);
   }
   const out = assertion?.getClientExtensionResults()?.prf?.results?.first;
-  if (!out) throw new PasskeyError("This passkey can't encrypt: its provider doesn't support the PRF extension. Try iCloud Keychain (Safari 18+), Google Password Manager (Chrome) or a recent security key.");
+  if (!out) throw noPRF();
   return { secret: new Uint8Array(out), credentialId: new Uint8Array(assertion.rawId) };
 }
 
@@ -64,16 +75,19 @@ export async function protect(key) {
         rp: { name: 'DogecoinVM', id: location.hostname },
         user: { id: random(16), name: 'DogecoinVM wallet', displayName: 'DogecoinVM wallet' },
         pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-        authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+        // The backup names the credential, so it need not be discoverable:
+        // on a security key such as a YubiKey that saves one of its
+        // limited slots. Passkey managers make it discoverable anyway.
+        authenticatorSelection: { residentKey: 'discouraged', userVerification: 'preferred' },
         extensions: { prf: {} },
       },
     });
   } catch (err) {
-    throw new PasskeyError(err.name === 'NotAllowedError' ? 'The passkey request was cancelled or timed out.' : err.message);
+    throw failure(err);
   }
-  if (!credential.getClientExtensionResults()?.prf?.enabled) {
-    throw new PasskeyError("This passkey can't encrypt: its provider doesn't support the PRF extension. Try iCloud Keychain (Safari 18+), Google Password Manager (Chrome) or a recent security key.");
-  }
+  // Some browsers only report PRF support when it is used, so only an
+  // explicit "no" stops here; otherwise the next step finds out.
+  if (credential.getClientExtensionResults()?.prf?.enabled === false) throw noPRF();
   const salt = random(32);
   const { secret } = await prfSecret(new Uint8Array(credential.rawId), salt);
   const iv = random(12);
