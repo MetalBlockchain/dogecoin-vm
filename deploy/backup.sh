@@ -62,10 +62,12 @@ UNIT
 
 cmd_run() {
   [[ -s "$CONF/recipients" ]] || { echo "no recipients; run: $0 setup AGE_RECIPIENT" >&2; exit 1; }
-  local stamp work out
+  local stamp out
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
-  work=$(mktemp -d)
-  trap 'rm -rf "$work"' EXIT
+  # Global, so the exit trap can still see it.
+  WORK=$(mktemp -d)
+  trap 'rm -rf "$WORK"' EXIT
+  local work=$WORK
   mkdir -p "$work/dogevm"
   local root=$work/dogevm
 
@@ -88,11 +90,13 @@ cmd_run() {
 
   # The watch-only wallet, copied consistently by Dogecoin Core itself.
   # Rebuilding it instead means a rescan of the whole chain.
-  # dogecoind writes the copy itself, so it goes in its own directory.
-  local wallet=$DOGE_DIR/dogevm-wallet-$stamp.dat
-  if sudo -u dogevm /opt/dogecoin/bin/dogecoin-cli -datadir="$DOGE_DIR" backupwallet "$wallet" 2>/dev/null; then
+  # Dogecoin Core 1.14 writes wallet backups into its own backups/ folder,
+  # whatever path it is given.
+  local wallet=dogevm-wallet-$stamp.dat
+  if sudo -u dogevm /opt/dogecoin/bin/dogecoin-cli -datadir="$DOGE_DIR" backupwallet "$wallet" 2>/dev/null &&
+    [[ -f "$DOGE_DIR/backups/$wallet" ]]; then
     mkdir -p "$root$DOGE_DIR"
-    mv "$wallet" "$root$DOGE_DIR/wallet.dat"
+    mv "$DOGE_DIR/backups/$wallet" "$root$DOGE_DIR/wallet.dat"
   else
     log "could not back up the Dogecoin wallet (is dogecoind running?)"
   fi
