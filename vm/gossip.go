@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 	"github.com/MetalBlockchain/metalgo/ids"
 	"github.com/MetalBlockchain/metalgo/network/p2p/gossip"
 	"go.uber.org/zap"

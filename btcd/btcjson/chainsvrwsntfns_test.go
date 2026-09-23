@@ -12,7 +12,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcjson"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
 )
 
 // TestChainSvrWsNtfns tests all of the chain server websocket-specific

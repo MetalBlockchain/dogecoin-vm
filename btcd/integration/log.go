@@ -6,7 +6,7 @@ package integration
 import (
 	"os"
 
-	"github.com/MetalBlockchain/btcvm/btcd/rpcclient"
+	"github.com/paulgnz/dogecoin-vm/btcd/rpcclient"
 	"github.com/btcsuite/btclog"
 )
 

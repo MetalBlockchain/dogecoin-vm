@@ -8,7 +8,7 @@ import (
 	"math"
 	"testing"
 
-	. "github.com/MetalBlockchain/btcvm/btcd/btcutil"
+	. "github.com/paulgnz/dogecoin-vm/btcd/btcutil"
 )
 
 func TestAmountCreation(t *testing.T) {

@@ -7,8 +7,8 @@ package ffldb
 import (
 	"fmt"
 
-	"github.com/MetalBlockchain/btcvm/btcd/database"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/database"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 	"github.com/btcsuite/btclog"
 )
 

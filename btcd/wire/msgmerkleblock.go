@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 // maxFlagsPerMerkleBlock is the maximum number of flag bytes that could

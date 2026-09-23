@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcjson"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
 	"github.com/stretchr/testify/require"
 )
 

@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2"
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2/ecdsa"
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 	"golang.org/x/crypto/ripemd160"
 )
 

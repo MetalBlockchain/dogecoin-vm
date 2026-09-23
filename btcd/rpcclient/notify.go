@@ -13,10 +13,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcjson"
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 var (

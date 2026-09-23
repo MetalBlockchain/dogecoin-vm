@@ -15,14 +15,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MetalBlockchain/btcvm/btcd/blockchain"
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2"
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
-	"github.com/MetalBlockchain/btcvm/btcd/integration/rpctest"
-	"github.com/MetalBlockchain/btcvm/btcd/txscript"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/blockchain"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/integration/rpctest"
+	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 const (

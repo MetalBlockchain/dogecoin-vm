@@ -10,9 +10,9 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/txscript"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 // txValidateItem holds a transaction along with which input to validate.

@@ -11,5 +11,5 @@
 
 ## Issue Tracker
 
-The [integrated github issue tracker](https://github.com/MetalBlockchain/btcvm/btcd/issues)
+The [integrated github issue tracker](https://github.com/paulgnz/dogecoin-vm/btcd/issues)
 is used for this project.

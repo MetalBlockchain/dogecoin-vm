@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 const (

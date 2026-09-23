@@ -5,7 +5,7 @@
 package ffldb
 
 import (
-	"github.com/MetalBlockchain/btcvm/btcd/database/internal/treap"
+	"github.com/paulgnz/dogecoin-vm/btcd/database/internal/treap"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"github.com/syndtr/goleveldb/leveldb/util"
 )

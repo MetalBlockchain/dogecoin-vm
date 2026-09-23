@@ -1,11 +1,11 @@
 integration
 ===========
 
-[![Build Status](https://github.com/MetalBlockchain/btcvm/btcd/workflows/Build%20and%20Test/badge.svg)](https://github.com/MetalBlockchain/btcvm/btcd/actions)
+[![Build Status](https://github.com/paulgnz/dogecoin-vm/btcd/workflows/Build%20and%20Test/badge.svg)](https://github.com/paulgnz/dogecoin-vm/btcd/actions)
 [![ISC License](http://img.shields.io/badge/license-ISC-blue.svg)](http://copyfree.org)
 
 This contains integration tests which make use of the
-[rpctest](https://github.com/MetalBlockchain/btcvm/btcd/tree/master/integration/rpctest)
+[rpctest](https://github.com/paulgnz/dogecoin-vm/btcd/tree/master/integration/rpctest)
 package to programmatically drive nodes via RPC.
 
 ## License

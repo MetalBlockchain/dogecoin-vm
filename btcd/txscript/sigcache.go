@@ -8,7 +8,7 @@ import (
 	"bytes"
 	"sync"
 
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 // sigCacheEntry represents an entry in the SigCache. Entries within the

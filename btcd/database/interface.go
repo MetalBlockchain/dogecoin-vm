@@ -8,8 +8,8 @@
 package database
 
 import (
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 // Cursor represents a cursor over key/value pairs and nested buckets of a

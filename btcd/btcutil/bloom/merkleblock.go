@@ -5,10 +5,10 @@
 package bloom
 
 import (
-	"github.com/MetalBlockchain/btcvm/btcd/blockchain"
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/blockchain"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 // merkleBlock is used to house intermediate information needed to generate a

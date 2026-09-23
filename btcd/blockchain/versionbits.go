@@ -5,7 +5,7 @@
 package blockchain
 
 import (
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
 )
 
 const (

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 var (

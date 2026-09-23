@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/MetalBlockchain/btcvm/btcd/txscript"
+	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
 )
 
 // CreateWalletResult models the result of the createwallet command.

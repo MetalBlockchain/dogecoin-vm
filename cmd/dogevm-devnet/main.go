@@ -16,7 +16,7 @@ import (
 	"github.com/MetalBlockchain/metalgo/vms/secp256k1fx"
 	"github.com/MetalBlockchain/metalgo/wallet/subnet/primary"
 
-	"github.com/MetalBlockchain/btcvm/vm"
+	"github.com/paulgnz/dogecoin-vm/vm"
 )
 
 func main() {

@@ -8,9 +8,9 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2"
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2/ecdsa"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 // genRandomSig returns a random message, a signature of the message under the

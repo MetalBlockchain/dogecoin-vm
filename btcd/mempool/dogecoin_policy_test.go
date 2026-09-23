@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
-	"github.com/MetalBlockchain/btcvm/btcd/txscript"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 // newDogecoinPoolHarness returns a harness whose pool applies Dogecoin's

@@ -17,7 +17,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
 	secp_ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

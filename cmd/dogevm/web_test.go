@@ -14,8 +14,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2"
-	"github.com/MetalBlockchain/btcvm/btcd/txscript"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
 )
 
 // TestWebChainMatchesGo runs the web wallet's chain.js under Node and checks

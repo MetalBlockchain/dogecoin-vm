@@ -13,7 +13,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 // genesisCoinbaseTx is the coinbase transaction for the genesis blocks for

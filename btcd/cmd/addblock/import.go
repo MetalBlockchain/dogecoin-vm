@@ -11,12 +11,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MetalBlockchain/btcvm/btcd/blockchain"
-	"github.com/MetalBlockchain/btcvm/btcd/blockchain/indexers"
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
-	"github.com/MetalBlockchain/btcvm/btcd/database"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/blockchain"
+	"github.com/paulgnz/dogecoin-vm/btcd/blockchain/indexers"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/database"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 var zeroHash = chainhash.Hash{}

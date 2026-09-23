@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2"
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil/base58"
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil/bech32"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil/base58"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil/bech32"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
 	"golang.org/x/crypto/ripemd160"
 )
 

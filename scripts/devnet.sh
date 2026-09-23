@@ -86,7 +86,7 @@ cmd_start() {
 
   log "building plugin and tools"
   VMID=$(cd "$ROOT" && go run ./scripts/vm-id-generator.go)
-  (cd "$ROOT" && go build -o "$DIR/plugins/$VMID" ./cmd/btcvm \
+  (cd "$ROOT" && go build -o "$DIR/plugins/$VMID" ./cmd/dogevm-plugin \
     && go build -o "$DIR/bin/dogevm" ./cmd/dogevm \
     && go build -o "$DIR/bin/dogevm-devnet" ./cmd/dogevm-devnet)
 

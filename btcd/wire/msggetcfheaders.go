@@ -7,7 +7,7 @@ package wire
 import (
 	"io"
 
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 // MsgGetCFHeaders is a message similar to MsgGetHeaders, but for committed

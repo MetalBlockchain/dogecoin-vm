@@ -7,7 +7,7 @@ package blockchain
 import (
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
 )
 
 // TestNotifications ensures that notification callbacks are fired on events.

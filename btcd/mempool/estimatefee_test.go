@@ -9,10 +9,10 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
-	"github.com/MetalBlockchain/btcvm/btcd/mining"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/mining"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 // newTestFeeEstimator creates a feeEstimator with some different parameters

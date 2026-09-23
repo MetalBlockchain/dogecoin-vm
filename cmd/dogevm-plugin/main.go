@@ -12,7 +12,7 @@ import (
 	"github.com/MetalBlockchain/metalgo/vms/rpcchainvm"
 	"github.com/spf13/cobra"
 
-	"github.com/MetalBlockchain/btcvm/vm"
+	"github.com/paulgnz/dogecoin-vm/vm"
 
 	log "github.com/inconshreveable/log15"
 )

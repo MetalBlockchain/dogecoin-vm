@@ -12,11 +12,11 @@ import (
 	"testing"
 	"testing/quick"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2"
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2/schnorr"
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil/hdkeychain"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/schnorr"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil/hdkeychain"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/stretchr/testify/require"
 )

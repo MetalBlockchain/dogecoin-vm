@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/txscript"
+	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
 )
 
 // TestCheckBlockScripts ensures that validating the all of the scripts in a

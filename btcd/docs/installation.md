@@ -31,7 +31,7 @@ verify the signature perform the following:
 
 ## Windows Installation
 
-* Install the MSI available at: [btcd windows installer](https://github.com/MetalBlockchain/btcvm/btcd/releases)
+* Install the MSI available at: [btcd windows installer](https://github.com/paulgnz/dogecoin-vm/btcd/releases)
 * Launch btcd from the Start Menu
 
 ## Linux/BSD/MacOSX/POSIX Installation
@@ -52,8 +52,8 @@ recommended that `GOPATH` is set to a directory in your home directory such as
 * Run the following commands to obtain btcd, all dependencies, and install it:
 
 ```bash
-git clone https://github.com/MetalBlockchain/btcvm/btcd $GOPATH/src/github.com/MetalBlockchain/btcvm/btcd
-cd $GOPATH/src/github.com/MetalBlockchain/btcvm/btcd
+git clone https://github.com/paulgnz/dogecoin-vm/btcd $GOPATH/src/github.com/paulgnz/dogecoin-vm/btcd
+cd $GOPATH/src/github.com/paulgnz/dogecoin-vm/btcd
 go install -v . ./cmd/...
 ```
 
@@ -73,4 +73,4 @@ Typically btcd will run and start downloading the block chain with no extra
 configuration necessary, however, there is an optional method to use a
 `bootstrap.dat` file that may speed up the initial block chain download process.
 
-* [Using bootstrap.dat](https://github.com/MetalBlockchain/btcvm/btcd/blob/master/docs/configuration.md#using-bootstrapdat)
+* [Using bootstrap.dat](https://github.com/paulgnz/dogecoin-vm/btcd/blob/master/docs/configuration.md#using-bootstrapdat)

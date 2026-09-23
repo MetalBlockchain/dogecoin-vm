@@ -1,9 +1,9 @@
 indexers
 ========
 
-[![Build Status](https://github.com/MetalBlockchain/btcvm/btcd/workflows/Build%20and%20Test/badge.svg)](https://github.com/MetalBlockchain/btcvm/btcd/actions)
+[![Build Status](https://github.com/paulgnz/dogecoin-vm/btcd/workflows/Build%20and%20Test/badge.svg)](https://github.com/paulgnz/dogecoin-vm/btcd/actions)
 [![ISC License](http://img.shields.io/badge/license-ISC-blue.svg)](http://copyfree.org)
-[![GoDoc](https://pkg.go.dev/github.com/MetalBlockchain/btcvm/btcd/blockchain/indexers?status.png)](https://pkg.go.dev/github.com/MetalBlockchain/btcvm/btcd/blockchain/indexers)
+[![GoDoc](https://pkg.go.dev/github.com/paulgnz/dogecoin-vm/btcd/blockchain/indexers?status.png)](https://pkg.go.dev/github.com/paulgnz/dogecoin-vm/btcd/blockchain/indexers)
 
 Package indexers implements optional block chain indexes.
 
@@ -23,7 +23,7 @@ via an RPC interface.
 ## Installation
 
 ```bash
-$ go get -u github.com/MetalBlockchain/btcvm/btcd/blockchain/indexers
+$ go get -u github.com/paulgnz/dogecoin-vm/btcd/blockchain/indexers
 ```
 
 ## License

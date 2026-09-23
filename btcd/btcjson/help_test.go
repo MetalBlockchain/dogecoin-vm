@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcjson"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
 )
 
 // TestHelpReflectInternals ensures the various help functions which deal with

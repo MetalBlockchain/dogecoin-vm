@@ -1,9 +1,9 @@
 btcec
 =====
 
-[![Build Status](https://github.com/MetalBlockchain/btcvm/btcd/workflows/Build%20and%20Test/badge.svg)](https://github.com/MetalBlockchain/btcvm/btcd/actions)
+[![Build Status](https://github.com/paulgnz/dogecoin-vm/btcd/workflows/Build%20and%20Test/badge.svg)](https://github.com/paulgnz/dogecoin-vm/btcd/actions)
 [![ISC License](http://img.shields.io/badge/license-ISC-blue.svg)](http://copyfree.org)
-[![GoDoc](https://pkg.go.dev/github.com/MetalBlockchain/btcvm/btcd/btcec/v2?status.png)](https://pkg.go.dev/github.com/MetalBlockchain/btcvm/btcd/btcec/v2)
+[![GoDoc](https://pkg.go.dev/github.com/paulgnz/dogecoin-vm/btcd/btcec/v2?status.png)](https://pkg.go.dev/github.com/paulgnz/dogecoin-vm/btcd/btcec/v2)
 
 Package btcec implements elliptic curve cryptography needed for working with
 Bitcoin (secp256k1 only for now). It is designed so that it may be used with the
@@ -20,16 +20,16 @@ use secp256k1 elliptic curve cryptography.
 ## Installation and Updating
 
 ```bash
-$ go install -u -v github.com/MetalBlockchain/btcvm/btcd/btcec/v2
+$ go install -u -v github.com/paulgnz/dogecoin-vm/btcd/btcec/v2
 ```
 
 ## Examples
 
-* [Sign Message](https://pkg.go.dev/github.com/MetalBlockchain/btcvm/btcd/btcec/v2#example-package--SignMessage)  
+* [Sign Message](https://pkg.go.dev/github.com/paulgnz/dogecoin-vm/btcd/btcec/v2#example-package--SignMessage)  
   Demonstrates signing a message with a secp256k1 private key that is first
   parsed form raw bytes and serializing the generated signature.
 
-* [Verify Signature](https://pkg.go.dev/github.com/MetalBlockchain/btcvm/btcd/btcec/v2#example-package--VerifySignature)  
+* [Verify Signature](https://pkg.go.dev/github.com/paulgnz/dogecoin-vm/btcd/btcec/v2#example-package--VerifySignature)  
   Demonstrates verifying a secp256k1 signature against a public key that is
   first parsed from raw bytes.  The signature is also parsed from raw bytes.
 

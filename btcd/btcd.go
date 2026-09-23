@@ -11,13 +11,13 @@ import (
 	"path/filepath"
 	"runtime/debug"
 
-	"github.com/MetalBlockchain/btcvm/btcd/blockchain"
-	"github.com/MetalBlockchain/btcvm/btcd/blockchain/indexers"
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/database"
-	"github.com/MetalBlockchain/btcvm/btcd/limits"
-	"github.com/MetalBlockchain/btcvm/btcd/mining"
-	"github.com/MetalBlockchain/btcvm/btcd/ossec"
+	"github.com/paulgnz/dogecoin-vm/btcd/blockchain"
+	"github.com/paulgnz/dogecoin-vm/btcd/blockchain/indexers"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/database"
+	"github.com/paulgnz/dogecoin-vm/btcd/limits"
+	"github.com/paulgnz/dogecoin-vm/btcd/mining"
+	"github.com/paulgnz/dogecoin-vm/btcd/ossec"
 )
 
 const (

@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
-	"github.com/MetalBlockchain/btcvm/btcd/peer"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/peer"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 	"github.com/btcsuite/go-socks/socks"
 )
 

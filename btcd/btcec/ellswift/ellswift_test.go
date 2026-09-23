@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
 )
 
 // setHex decodes the passed big-endian hex string into the internal field value

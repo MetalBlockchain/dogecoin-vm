@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	. "github.com/MetalBlockchain/btcvm/btcd/chaincfg"
+	. "github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
 )
 
 // Define some of the required parameters for a user-registered

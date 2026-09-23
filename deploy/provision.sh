@@ -111,7 +111,7 @@ if [[ ! -f "$STATE/chain.json" ]]; then
 else
   # Rebuild the plugin so an update takes effect on restart.
   VMID=$(cd "$HOME_DIR/src" && as_dogevm go run ./scripts/vm-id-generator.go)
-  (cd "$HOME_DIR/src" && as_dogevm go build -o "$STATE/plugins/$VMID" ./cmd/btcvm)
+  (cd "$HOME_DIR/src" && as_dogevm go build -o "$STATE/plugins/$VMID" ./cmd/dogevm-plugin)
 fi
 CHAIN_ID=$(jq -r .chainID "$STATE/chain.json")
 VM_RPC_PASS=$(cat "$STATE/rpc-password")

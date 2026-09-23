@@ -9,9 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcjson"
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 // FutureGenerateResult is a future promise to deliver the result of a

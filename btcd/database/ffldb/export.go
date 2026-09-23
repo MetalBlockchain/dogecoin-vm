@@ -5,7 +5,7 @@
 package ffldb
 
 import (
-	"github.com/MetalBlockchain/btcvm/btcd/database"
+	"github.com/paulgnz/dogecoin-vm/btcd/database"
 )
 
 // TstRunWithMaxBlockFileSize runs the passed function with the maximum allowed

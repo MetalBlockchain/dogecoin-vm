@@ -3,7 +3,7 @@ package rpcclient
 import (
 	"encoding/json"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcjson"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
 )
 
 // FutureGetZmqNotificationsResult is a future promise to deliver the result of

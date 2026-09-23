@@ -10,7 +10,7 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 	"github.com/stretchr/testify/require"
 )
 

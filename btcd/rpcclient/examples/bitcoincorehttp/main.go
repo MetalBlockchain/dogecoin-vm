@@ -7,7 +7,7 @@ package main
 import (
 	"log"
 
-	"github.com/MetalBlockchain/btcvm/btcd/rpcclient"
+	"github.com/paulgnz/dogecoin-vm/btcd/rpcclient"
 )
 
 func main() {

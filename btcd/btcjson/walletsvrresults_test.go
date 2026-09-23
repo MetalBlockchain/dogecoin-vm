@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/txscript"
+	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
 	"github.com/davecgh/go-spew/spew"
 )
 

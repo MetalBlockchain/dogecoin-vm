@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcjson"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
 )
 
 // helpDescsEnUS defines the English descriptions used for the help strings.

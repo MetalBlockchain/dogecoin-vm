@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
 )
 
 const (

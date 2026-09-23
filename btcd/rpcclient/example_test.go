@@ -7,7 +7,7 @@ package rpcclient
 import (
 	"fmt"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcjson"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
 )
 
 var connCfg = &ConnConfig{

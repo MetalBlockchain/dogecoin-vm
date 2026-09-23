@@ -10,7 +10,7 @@ and gets the current block count.
 The first step is to use `go get` to download and install the rpcclient package:
 
 ```bash
-$ go get github.com/MetalBlockchain/btcvm/btcd/rpcclient
+$ go get github.com/paulgnz/dogecoin-vm/btcd/rpcclient
 ```
 
 Next, modify the `main.go` source to specify the correct RPC username and
@@ -32,7 +32,7 @@ $ socat -d UNIX-LISTEN:/tmp/test.XXXX,fork TCP:localhost:8332
 Finally, navigate to the example's directory and run it with:
 
 ```bash
-$ cd $GOPATH/src/github.com/MetalBlockchain/btcvm/btcd/rpcclient/examples/bitcoincorehttp
+$ cd $GOPATH/src/github.com/paulgnz/dogecoin-vm/btcd/rpcclient/examples/bitcoincorehttp
 $ go run *.go
 ```
 

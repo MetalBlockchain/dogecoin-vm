@@ -3,8 +3,8 @@ package psbt
 import (
 	"bytes"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2"
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2/ecdsa"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
 )
 
 // PartialSig encapsulate a (BTC public key, ECDSA signature)

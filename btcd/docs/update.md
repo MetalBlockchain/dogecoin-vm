@@ -3,6 +3,6 @@
 * Run the following commands to update btcd, all dependencies, and install it:
 
 ```bash
-cd $GOPATH/src/github.com/MetalBlockchain/btcvm/btcd
+cd $GOPATH/src/github.com/paulgnz/dogecoin-vm/btcd
 git pull && go install -v . ./cmd/...
 ```

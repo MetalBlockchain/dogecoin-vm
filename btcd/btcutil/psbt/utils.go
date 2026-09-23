@@ -12,8 +12,8 @@ import (
 	"io"
 	"sort"
 
-	"github.com/MetalBlockchain/btcvm/btcd/txscript"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 // WriteTxWitness is a utility function due to non-exported witness

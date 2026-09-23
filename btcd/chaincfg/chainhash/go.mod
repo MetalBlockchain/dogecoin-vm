@@ -1,3 +1,3 @@
-module github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash
+module github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash
 
 go 1.22

@@ -7,8 +7,8 @@ package hdkeychain_test
 import (
 	"fmt"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcutil/hdkeychain"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcutil/hdkeychain"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
 )
 
 // This example demonstrates how to generate a cryptographically random seed

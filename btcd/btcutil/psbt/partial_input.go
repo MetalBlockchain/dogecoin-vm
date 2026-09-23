@@ -6,8 +6,8 @@ import (
 	"io"
 	"sort"
 
-	"github.com/MetalBlockchain/btcvm/btcd/txscript"
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 // PInput is a struct encapsulating all the data that can be attached to any

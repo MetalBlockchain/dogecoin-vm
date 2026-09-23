@@ -1,9 +1,9 @@
 testhelper
 ==========
 
-[![Build Status](https://github.com/MetalBlockchain/btcvm/btcd/workflows/Build%20and%20Test/badge.svg)](https://github.com/MetalBlockchain/btcvm/btcd/actions)
+[![Build Status](https://github.com/paulgnz/dogecoin-vm/btcd/workflows/Build%20and%20Test/badge.svg)](https://github.com/paulgnz/dogecoin-vm/btcd/actions)
 [![ISC License](http://img.shields.io/badge/license-ISC-blue.svg)](http://copyfree.org)
-[![GoDoc](https://img.shields.io/badge/godoc-reference-blue.svg)](https://pkg.go.dev/github.com/MetalBlockchain/btcvm/btcd/blockchain/testhelper)
+[![GoDoc](https://img.shields.io/badge/godoc-reference-blue.svg)](https://pkg.go.dev/github.com/paulgnz/dogecoin-vm/btcd/blockchain/testhelper)
 
 Package testhelper provides functions that are used internally in the
 btcd/blockchain and btcd/blockchain/fullblocktests package to test consensus

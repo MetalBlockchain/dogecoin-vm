@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 // randAddr generates a *wire.NetAddressV2 backed by a random IPv4/IPv6

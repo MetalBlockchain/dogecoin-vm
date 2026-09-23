@@ -8,7 +8,7 @@ package schnorr
 import (
 	"fmt"
 
-	"github.com/MetalBlockchain/btcvm/btcd/btcec/v2"
+	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
