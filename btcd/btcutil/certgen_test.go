@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 	//"github.com/davecgh/go-spew/spew"
 )
 

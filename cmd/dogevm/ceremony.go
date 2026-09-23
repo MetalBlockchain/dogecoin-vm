@@ -38,9 +38,9 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2/ecdsa"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 )
 
 // operatorCard introduces one signer. It holds nothing secret.

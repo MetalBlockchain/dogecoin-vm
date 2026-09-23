@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // chainTx is a transaction and how many blocks confirm it (0 in mempool).

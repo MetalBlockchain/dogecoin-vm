@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/rpcclient"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/rpcclient"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 func main() {

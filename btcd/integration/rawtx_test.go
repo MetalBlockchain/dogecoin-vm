@@ -7,13 +7,13 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
-	"github.com/paulgnz/dogecoin-vm/btcd/integration/rpctest"
-	"github.com/paulgnz/dogecoin-vm/btcd/rpcclient"
-	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcjson"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/integration/rpctest"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/rpcclient"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/txscript"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 	"github.com/stretchr/testify/require"
 )
 

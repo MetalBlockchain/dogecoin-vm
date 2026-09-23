@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
-	"github.com/paulgnz/dogecoin-vm/btcd/database"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/database"
 )
 
 // BehaviorFlags is a bitmask defining tweaks to the normal behavior when

@@ -1,8 +1,8 @@
 # btcd
 
-[![Build Status](https://github.com/paulgnz/dogecoin-vm/btcd/workflows/Build%20and%20Test/badge.svg)](https://github.com/paulgnz/dogecoin-vm/btcd/actions)
+[![Build Status](https://github.com/MetalBlockchain/dogecoin-vm/btcd/workflows/Build%20and%20Test/badge.svg)](https://github.com/MetalBlockchain/dogecoin-vm/btcd/actions)
 [![ISC License](http://img.shields.io/badge/license-ISC-blue.svg)](http://copyfree.org)
-[![GoDoc](https://img.shields.io/badge/godoc-reference-blue.svg)](https://pkg.go.dev/github.com/paulgnz/dogecoin-vm/btcd)
+[![GoDoc](https://img.shields.io/badge/godoc-reference-blue.svg)](https://pkg.go.dev/github.com/MetalBlockchain/dogecoin-vm/btcd)
 
 btcd is an alternative full node bitcoin implementation written in Go (golang).
 

@@ -7,11 +7,11 @@ package txscript
 import (
 	"fmt"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/schnorr"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2/ecdsa"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2/schnorr"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // signatureVerifier is an abstract interface that allows the op code execution

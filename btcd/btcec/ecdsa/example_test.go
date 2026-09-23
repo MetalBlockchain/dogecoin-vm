@@ -8,9 +8,9 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2/ecdsa"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 // This example demonstrates signing a message with a secp256k1 private key that

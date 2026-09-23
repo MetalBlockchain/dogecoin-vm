@@ -13,9 +13,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcjson"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg"
 	flags "github.com/jessevdk/go-flags"
 )
 

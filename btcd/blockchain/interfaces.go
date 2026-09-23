@@ -1,8 +1,8 @@
 package blockchain
 
 import (
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 // ChainCtx is an interface that abstracts away blockchain parameters.

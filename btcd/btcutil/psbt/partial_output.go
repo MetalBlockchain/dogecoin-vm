@@ -5,7 +5,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // POutput is a struct encapsulating all the data that can be attached

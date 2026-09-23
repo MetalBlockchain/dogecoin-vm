@@ -7,13 +7,13 @@ package txscript
 import (
 	"errors"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/schnorr"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2/schnorr"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2/ecdsa"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // RawTxInWitnessSignature returns the serialized ECDA signature for the input

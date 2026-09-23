@@ -14,7 +14,7 @@
 # This is a test network: one process holds every peg signer key.
 set -euo pipefail
 
-REPO=${REPO:-https://github.com/paulgnz/dogecoin-vm}
+REPO=${REPO:-https://github.com/MetalBlockchain/dogecoin-vm}
 BRANCH=${BRANCH:-dogecoin}
 GO_VERSION=1.24.11
 GO_SHA256=bceca00afaac856bc48b4cc33db7cd9eb383c81811379faed3bdbc80edb0af65

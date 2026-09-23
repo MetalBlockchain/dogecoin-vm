@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 const (

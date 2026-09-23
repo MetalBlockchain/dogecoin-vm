@@ -27,20 +27,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/blockchain"
-	"github.com/paulgnz/dogecoin-vm/btcd/blockchain/indexers"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ecdsa"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
-	"github.com/paulgnz/dogecoin-vm/btcd/database"
-	"github.com/paulgnz/dogecoin-vm/btcd/mempool"
-	"github.com/paulgnz/dogecoin-vm/btcd/mining"
-	"github.com/paulgnz/dogecoin-vm/btcd/mining/cpuminer"
-	"github.com/paulgnz/dogecoin-vm/btcd/peer"
-	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/blockchain"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/blockchain/indexers"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2/ecdsa"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcjson"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/database"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/mempool"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/mining"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/mining/cpuminer"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/peer"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/txscript"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 	"github.com/btcsuite/websocket"
 )
 
@@ -4994,4 +4994,3 @@ func init() {
 	rpcHandlers = rpcHandlersBeforeInit
 	rand.Seed(time.Now().UnixNano())
 }
-

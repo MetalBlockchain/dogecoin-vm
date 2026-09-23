@@ -8,13 +8,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	btcd "github.com/paulgnz/dogecoin-vm/btcd"
-	"github.com/paulgnz/dogecoin-vm/btcd/blockchain"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
-	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	btcd "github.com/MetalBlockchain/dogecoin-vm/btcd"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/blockchain"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/txscript"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // pegSigners is a 2-of-3 multisig standing in for the peg signers.

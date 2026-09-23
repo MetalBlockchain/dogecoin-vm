@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/database/internal/treap"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/database/internal/treap"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"github.com/syndtr/goleveldb/leveldb/util"

@@ -12,7 +12,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcjson"
 )
 
 // TestBtcdExtCmds tests all of the btcd extended commands marshal and unmarshal

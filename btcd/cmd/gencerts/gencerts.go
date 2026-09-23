@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 	flags "github.com/jessevdk/go-flags"
 )
 

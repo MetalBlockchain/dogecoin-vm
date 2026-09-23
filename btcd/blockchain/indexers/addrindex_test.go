@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // addrIndexBucket provides a mock address index database bucket by implementing

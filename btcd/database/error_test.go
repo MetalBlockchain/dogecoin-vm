@@ -8,7 +8,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/database"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/database"
 )
 
 // TestErrorCodeStringer tests the stringized output for the ErrorCode type.

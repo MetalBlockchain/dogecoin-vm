@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcjson"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcjson"
 	"github.com/btcsuite/go-socks/socks"
 )
 

@@ -103,7 +103,6 @@ func looksLikeInt(s string) bool {
 	return len(s) > 0
 }
 
-
 // processScript converts the template output to actual script bytes. We scan
 // each line, then go through each element one by one, deciding to either add a
 // normal op code, a push data, or an integer value.

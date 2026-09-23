@@ -1,14 +1,14 @@
-module github.com/paulgnz/dogecoin-vm
+module github.com/MetalBlockchain/dogecoin-vm
 
 go 1.24.0
 
 toolchain go1.24.8
 
 replace (
-	github.com/paulgnz/dogecoin-vm/btcd/btcec/v2 => ./btcd/btcec
-	github.com/paulgnz/dogecoin-vm/btcd/btcutil => ./btcd/btcutil
-	github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash => ./btcd/chaincfg/chainhash
-	github.com/paulgnz/dogecoin-vm/btcd/v2transport => ./btcd/v2transport
+	github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2 => ./btcd/btcec
+	github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil => ./btcd/btcutil
+	github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash => ./btcd/chaincfg/chainhash
+	github.com/MetalBlockchain/dogecoin-vm/btcd/v2transport => ./btcd/v2transport
 )
 
 require (
@@ -28,10 +28,10 @@ require (
 	github.com/inconshreveable/log15 v2.16.0+incompatible
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/jrick/logrotate v1.1.2
-	github.com/paulgnz/dogecoin-vm/btcd/btcec/v2 v2.3.5
-	github.com/paulgnz/dogecoin-vm/btcd/btcutil v0.0.0-00010101000000-000000000000
-	github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash v1.1.0
-	github.com/paulgnz/dogecoin-vm/btcd/v2transport v0.0.0-00010101000000-000000000000
+	github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2 v2.3.5
+	github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil v0.0.0-00010101000000-000000000000
+	github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash v1.1.0
+	github.com/MetalBlockchain/dogecoin-vm/btcd/v2transport v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.22.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1

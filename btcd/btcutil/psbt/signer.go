@@ -10,7 +10,7 @@ package psbt
 // is in the correct state.
 
 import (
-	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/txscript"
 )
 
 // SignOutcome is a enum-like value that expresses the outcome of a call to the

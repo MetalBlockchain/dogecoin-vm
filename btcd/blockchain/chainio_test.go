@@ -11,8 +11,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/database"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/database"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // TestErrNotInMainChain ensures the functions related to errNotInMainChain work

@@ -16,9 +16,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
-	"github.com/paulgnz/dogecoin-vm/btcd/mining"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/mining"
 )
 
 // TODO incorporate Alex Morcos' modifications to Gavin's initial model
@@ -279,7 +279,7 @@ func (ef *FeeEstimator) RegisterBlock(block *btcutil.Block) error {
 		// Also check that blocksToConfirm is not negative as this causes
 		// the node to crash on reorgs.  A tx that was observed at height X
 		// might be included in heights less than X because of chain reorgs.
-		// Refer to github.com/paulgnz/dogecoin-vm/btcd/issues/1660 for more information.
+		// Refer to github.com/MetalBlockchain/dogecoin-vm/btcd/issues/1660 for more information.
 		//
 		// TODO(kcalvinalvin) a better design that doesn't just skip over the
 		// transaction would result in a more accurate fee estimator.  Properly

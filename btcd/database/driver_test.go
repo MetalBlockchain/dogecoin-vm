@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/database"
-	_ "github.com/paulgnz/dogecoin-vm/btcd/database/ffldb"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/database"
+	_ "github.com/MetalBlockchain/dogecoin-vm/btcd/database/ffldb"
 )
 
 var (

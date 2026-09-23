@@ -3,8 +3,8 @@ package integration
 import (
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
-	"github.com/paulgnz/dogecoin-vm/btcd/integration/rpctest"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/integration/rpctest"
 )
 
 func TestInvalidateAndReconsiderBlock(t *testing.T) {

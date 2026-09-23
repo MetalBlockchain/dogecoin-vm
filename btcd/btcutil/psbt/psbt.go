@@ -13,8 +13,8 @@ import (
 	"errors"
 	"io"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // psbtMagicLength is the length of the magic bytes used to signal the start of

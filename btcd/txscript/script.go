@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // Bip16Activation is the timestamp where BIP0016 is valid to use in the

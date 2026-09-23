@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil/txsort"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil/txsort"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // TestSort ensures the transaction sorting works according to the BIP.

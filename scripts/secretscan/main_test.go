@@ -59,7 +59,7 @@ diff --git a/README.md b/README.md
 --- a/README.md
 +++ b/README.md
 @@ -40,0 +41 @@
-+bot token `+fakeBotToken+`
++bot token ` + fakeBotToken + `
 `)
 	found := scanDiff("", diff)
 	require.Len(t, found, 2, "%v", found)

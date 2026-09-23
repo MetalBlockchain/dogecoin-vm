@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 	"github.com/MetalBlockchain/metalgo/snow/engine/common"
 	"go.uber.org/zap"
 )
@@ -290,4 +290,3 @@ func (b *blockBuilder) clearPendingSignal() {
 	b.lock.Unlock()
 	b.vm.ctx.Log.Debug("cleared pending transaction signal")
 }
-

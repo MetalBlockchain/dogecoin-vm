@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/ellswift"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2/ellswift"
 )
 
 func setHex(hexString string) *btcec.FieldVal {

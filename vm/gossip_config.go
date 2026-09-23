@@ -67,9 +67,9 @@ type GossipConfig struct {
 func DefaultGossipConfig() GossipConfig {
 	return GossipConfig{
 		// Push Gossip - Fast propagation
-		PushGossipPercentStake:  0.9,  // 90% of validator stake
-		PushGossipNumValidators: 100,  // Up to 100 validators
-		PushGossipNumPeers:      0,    // No non-validator peers by default
+		PushGossipPercentStake:  0.9, // 90% of validator stake
+		PushGossipNumValidators: 100, // Up to 100 validators
+		PushGossipNumPeers:      0,   // No non-validator peers by default
 		PushGossipFrequency:     100 * time.Millisecond,
 
 		// Pull Gossip - Reliability and gap-filling

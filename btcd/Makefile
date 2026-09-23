@@ -1,4 +1,4 @@
-PKG := github.com/paulgnz/dogecoin-vm/btcd
+PKG := github.com/MetalBlockchain/dogecoin-vm/btcd
 
 LINT_PKG := github.com/golangci/golangci-lint/cmd/golangci-lint
 GOACC_PKG := github.com/ory/go-acc

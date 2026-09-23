@@ -5,9 +5,9 @@ import (
 	"math"
 	"math/bits"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2/schnorr"
-	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2/schnorr"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/txscript"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 const (

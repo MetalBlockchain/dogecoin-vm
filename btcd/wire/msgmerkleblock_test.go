@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 	"github.com/davecgh/go-spew/spew"
 )
 

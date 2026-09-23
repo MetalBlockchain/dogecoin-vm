@@ -38,7 +38,7 @@ import (
 	"github.com/MetalBlockchain/metalgo/vms/secp256k1fx"
 	"github.com/MetalBlockchain/metalgo/wallet/subnet/primary"
 
-	"github.com/paulgnz/dogecoin-vm/vm"
+	"github.com/MetalBlockchain/dogecoin-vm/vm"
 )
 
 // keyFile is the P-Chain key, stored with 0600 permissions.

@@ -8,8 +8,8 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/blockchain/internal/workmath"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/blockchain/internal/workmath"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 // HashToBig converts a chainhash.Hash into a big.Int that can be used to

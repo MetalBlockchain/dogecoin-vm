@@ -7,7 +7,7 @@ package base58_test
 import (
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil/base58"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil/base58"
 )
 
 var checkEncodingStringTests = []struct {

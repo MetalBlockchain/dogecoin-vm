@@ -89,9 +89,9 @@ func (vm *VM) initializeGossip() error {
 		metrics,
 		pushGossipParams,
 		pushRegossipParams,
-		1000,                                // discardedSize
-		10,                                  // targetGossipSize
-		vm.gossipConfig.RegossipFrequency,   // maxRegossipFrequency
+		1000,                              // discardedSize
+		10,                                // targetGossipSize
+		vm.gossipConfig.RegossipFrequency, // maxRegossipFrequency
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create push gossiper: %w", err)

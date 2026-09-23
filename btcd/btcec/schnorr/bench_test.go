@@ -11,7 +11,7 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcec/v2"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

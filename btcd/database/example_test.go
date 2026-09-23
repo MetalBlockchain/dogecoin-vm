@@ -10,11 +10,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
-	"github.com/paulgnz/dogecoin-vm/btcd/database"
-	_ "github.com/paulgnz/dogecoin-vm/btcd/database/ffldb"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/database"
+	_ "github.com/MetalBlockchain/dogecoin-vm/btcd/database/ffldb"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // This example demonstrates creating a new database.
@@ -22,8 +22,8 @@ func ExampleCreate() {
 	// This example assumes the ffldb driver is imported.
 	//
 	// import (
-	// 	"github.com/paulgnz/dogecoin-vm/btcd/database"
-	// 	_ "github.com/paulgnz/dogecoin-vm/btcd/database/ffldb"
+	// 	"github.com/MetalBlockchain/dogecoin-vm/btcd/database"
+	// 	_ "github.com/MetalBlockchain/dogecoin-vm/btcd/database/ffldb"
 	// )
 
 	// Create a database and schedule it to be closed and removed on exit.
@@ -48,8 +48,8 @@ func Example_basicUsage() {
 	// This example assumes the ffldb driver is imported.
 	//
 	// import (
-	// 	"github.com/paulgnz/dogecoin-vm/btcd/database"
-	// 	_ "github.com/paulgnz/dogecoin-vm/btcd/database/ffldb"
+	// 	"github.com/MetalBlockchain/dogecoin-vm/btcd/database"
+	// 	_ "github.com/MetalBlockchain/dogecoin-vm/btcd/database/ffldb"
 	// )
 
 	// Create a database and schedule it to be closed and removed on exit.
@@ -114,8 +114,8 @@ func Example_blockStorageAndRetrieval() {
 	// This example assumes the ffldb driver is imported.
 	//
 	// import (
-	// 	"github.com/paulgnz/dogecoin-vm/btcd/database"
-	// 	_ "github.com/paulgnz/dogecoin-vm/btcd/database/ffldb"
+	// 	"github.com/MetalBlockchain/dogecoin-vm/btcd/database"
+	// 	_ "github.com/MetalBlockchain/dogecoin-vm/btcd/database/ffldb"
 	// )
 
 	// Create a database and schedule it to be closed and removed on exit.

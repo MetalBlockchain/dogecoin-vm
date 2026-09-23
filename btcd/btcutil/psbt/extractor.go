@@ -12,8 +12,8 @@ package psbt
 import (
 	"bytes"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/txscript"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/txscript"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // Extract takes a finalized psbt.Packet and outputs a finalized transaction

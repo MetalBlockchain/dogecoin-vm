@@ -10,7 +10,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 )
 
 // BenchmarkMsgCFCheckptDecode benchmarks decoding of MsgCFCheckpt messages
@@ -115,4 +115,3 @@ func BenchmarkMsgCFCheckptDecodeEmpty(b *testing.B) {
 		}
 	}
 }
-

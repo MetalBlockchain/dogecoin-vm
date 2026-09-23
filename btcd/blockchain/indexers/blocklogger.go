@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 	"github.com/btcsuite/btclog"
 )
 

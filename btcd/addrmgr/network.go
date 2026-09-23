@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 var (

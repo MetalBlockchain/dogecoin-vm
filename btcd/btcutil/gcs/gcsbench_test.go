@@ -10,7 +10,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil/gcs"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil/gcs"
 )
 
 func genRandFilterElements(numElements uint) ([][]byte, error) {

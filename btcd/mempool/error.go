@@ -5,8 +5,8 @@
 package mempool
 
 import (
-	"github.com/paulgnz/dogecoin-vm/btcd/blockchain"
-	"github.com/paulgnz/dogecoin-vm/btcd/wire"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/blockchain"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // RuleError identifies a rule violation.  It is used to indicate that

@@ -4,8 +4,8 @@
 package vm
 
 import (
-	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
-	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 	"github.com/MetalBlockchain/metalgo/ids"
 )
 
@@ -14,8 +14,8 @@ import (
 // both transactions and blocks.
 type BTCGossip struct {
 	ItemType GossipItemType
-	Tx       *btcutil.Tx     // non-nil if ItemType == GossipItemTypeTx
-	Block    *btcutil.Block  // non-nil if ItemType == GossipItemTypeBlock
+	Tx       *btcutil.Tx    // non-nil if ItemType == GossipItemTypeTx
+	Block    *btcutil.Block // non-nil if ItemType == GossipItemTypeBlock
 }
 
 // GossipID returns the unique identifier for this gossip item.

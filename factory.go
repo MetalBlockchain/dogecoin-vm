@@ -7,7 +7,7 @@ import (
 	"github.com/MetalBlockchain/metalgo/utils/logging"
 	"github.com/MetalBlockchain/metalgo/vms"
 
-	"github.com/paulgnz/dogecoin-vm/vm"
+	"github.com/MetalBlockchain/dogecoin-vm/vm"
 )
 
 var _ vms.Factory = &Factory{}
