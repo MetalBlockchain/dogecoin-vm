@@ -19,26 +19,34 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="app.css">
+  <script>
+    // Apply a saved theme before first paint, so the page does not flash.
+    try { const t = localStorage.getItem('dogevm.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+  </script>
   <script type="module" src="app.js"></script>
 </head>
 <body>
   <p class="network-band" id="network-band" role="note" hidden></p>
-  <p class="sync-band" id="sync-band" role="status" hidden></p>
 
   <header class="masthead">
     <div class="brand">
       <img class="brand-coin" src="dogecoin.svg" alt="" width="64" height="64">
       <h1>DogecoinVM <span class="masthead-sub" id="network-name">bridge</span></h1>
     </div>
-    <form class="search" id="search-form" role="search">
-      <label for="search" class="visually-hidden">Search DogecoinVM</label>
-      <input id="search" autocomplete="off" spellcheck="false" placeholder="Search a transaction, block or address">
-    </form>
     <dl class="heights" aria-live="polite">
-      <div class="height height-doge"><dt>Dogecoin block</dt><dd id="doge-height">…</dd></div>
+      <div class="height height-doge"><dt id="doge-height-label">Dogecoin block</dt><dd id="doge-height">…</dd><span class="sync-meter" id="sync-meter" hidden><span id="sync-fill"></span></span></div>
       <div class="height height-vm"><dt>DogecoinVM block</dt><dd id="vm-height">…</dd></div>
     </dl>
   </header>
+
+  <section class="intro" id="intro" aria-label="How it works">
+    <p class="pitch">Move DOGE to a fast chain on Metal Blockchain, one for one, and back again.</p>
+    <ol class="steps">
+      <li><span><strong>Deposit</strong> DOGE from any Dogecoin wallet to your own deposit address.</span></li>
+      <li><span><strong>Use it</strong> on DogecoinVM, where a payment is final in seconds.</span></li>
+      <li><span><strong>Withdraw</strong> back to any Dogecoin address whenever you like.</span></li>
+    </ol>
+  </section>
 
   <main class="explorer-view" id="explorer-view" hidden></main>
 
@@ -129,6 +137,7 @@
         <h2>Deposit DOGE from Dogecoin</h2>
         <p class="needs-key">Create or import a key on the Wallet tab first.</p>
         <div class="with-key">
+          <p class="notice" id="deposit-sync" hidden></p>
           <p>Send DOGE to this Dogecoin address from any wallet. After <span id="confs-needed">6</span> confirmations it appears in your DogecoinVM wallet, less a <span id="vm-fee">0.01</span> DOGE fee. The minimum is <span id="min-deposit">1</span> DOGE.<span id="deposit-limits"></span></p>
           <div class="deposit-address">
             <div id="deposit-qr" class="qr" aria-hidden="true"></div>
@@ -191,12 +200,17 @@
     </section>
 
     <section class="board blocks" aria-labelledby="blocks-title">
-      <h2 id="blocks-title">Latest DogecoinVM blocks</h2>
+      <h2 id="blocks-title">Explore DogecoinVM</h2>
+      <form class="search" id="search-form" role="search">
+        <label for="search" class="visually-hidden">Search DogecoinVM</label>
+        <input id="search" autocomplete="off" spellcheck="false" placeholder="Transaction, block or address">
+      </form>
       <ol class="block-list" id="blocks"></ol>
     </section>
   </div>
 
   <footer class="footer">
+    <button class="theme-toggle" id="theme-toggle" type="button">Theme: system</button>
     <p>DogecoinVM runs on Metal Blockchain. The bridge is run by a set of signers, who hold the DOGE locked on Dogecoin. <a href="https://github.com/paulgnz/dogecoin-vm">Source and docs</a>.</p>
   </footer>
 </body>

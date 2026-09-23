@@ -52,6 +52,33 @@ for (const tab of document.querySelectorAll('[role=tab]')) {
   tab.addEventListener('click', () => selectTab(tab.id.replace('tab-', '')));
 }
 
+// Arrow keys move between tabs, as the WAI-ARIA tabs pattern expects.
+document.querySelector('[role=tablist]').addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+  const tabs = [...document.querySelectorAll('[role=tab]')].filter((t) => !t.hidden);
+  const i = tabs.indexOf(document.activeElement);
+  if (i < 0) return;
+  const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+  next.focus();
+  selectTab(next.id.replace('tab-', ''));
+});
+
+// Theme: follow the system unless the viewer picks light or dark.
+const THEME_STORE = 'dogevm.theme';
+const themes = ['system', 'light', 'dark'];
+function applyTheme(theme) {
+  if (theme === 'system') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', theme);
+  $('theme-toggle').textContent = `Theme: ${theme}`;
+}
+applyTheme(themes.includes(store.get(THEME_STORE)) ? store.get(THEME_STORE) : 'system');
+$('theme-toggle').addEventListener('click', () => {
+  const current = document.documentElement.getAttribute('data-theme') || 'system';
+  const next = themes[(themes.indexOf(current) + 1) % themes.length];
+  store.set(THEME_STORE, next);
+  applyTheme(next);
+});
+
 document.addEventListener('click', async (e) => {
   const target = e.target.closest('button.copy');
   if (!target) return;
@@ -96,15 +123,24 @@ async function loadInfo() {
 async function refreshStatus() {
   try {
     const s = await api('/api/status');
-    $('doge-height').textContent = s.dogecoinHeight.toLocaleString('en-US');
-    const sync = s.dogecoinSync;
-    $('sync-band').hidden = !(sync && sync.syncing);
-    if (sync && sync.syncing) {
-      $('sync-band').textContent =
-        `The bridge's Dogecoin node is still catching up (block ${s.dogecoinHeight.toLocaleString('en-US')} of ${sync.headers.toLocaleString('en-US')}). ` +
-        'Deposits are credited once it reaches the present.';
-    }
     $('vm-height').textContent = s.dogecoinvmHeight.toLocaleString('en-US');
+    // While the bridge's Dogecoin node catches up, show how far it has got
+    // rather than a block number that looks like the chain tip.
+    const sync = s.dogecoinSync;
+    const syncing = Boolean(sync && sync.syncing);
+    $('sync-meter').hidden = !syncing;
+    $('deposit-sync').hidden = !syncing;
+    if (syncing) {
+      const pct = Math.min(99, Math.floor((s.dogecoinHeight / sync.headers) * 100));
+      $('doge-height-label').textContent = 'Dogecoin node syncing';
+      $('doge-height').textContent = `${pct}%`;
+      $('sync-fill').style.width = `${pct}%`;
+      $('deposit-sync').textContent =
+        `The bridge's Dogecoin node is catching up (${pct}%). Deposits you send now are safe, and are credited once it reaches the present.`;
+    } else {
+      $('doge-height-label').textContent = 'Dogecoin block';
+      $('doge-height').textContent = s.dogecoinHeight.toLocaleString('en-US');
+    }
     if (!s.audit) {
       $('verdict').textContent = 'The bridge cannot read both chains right now.';
       $('verdict').className = 'peg-verdict bad';
@@ -121,10 +157,16 @@ async function refreshStatus() {
     $('circulating-fill').style.width = `${pct(circulating)}%`;
     $('pending-in').textContent = tidy(a.pendingPegIns);
     $('pending-out').textContent = tidy(a.pendingPegOuts);
-    $('verdict').textContent = a.solvent
-      ? 'Fully backed.'
-      : 'Not fully backed: the bridge has stopped moving DOGE.';
-    $('verdict').className = 'peg-verdict' + (a.solvent ? '' : ' bad');
+    if (!a.solvent) {
+      $('verdict').textContent = 'Not fully backed: the bridge has stopped moving DOGE.';
+      $('verdict').className = 'peg-verdict bad';
+    } else if (locked === 0n && circulating === 0n) {
+      $('verdict').textContent = 'Nothing locked yet. The first deposit starts the peg.';
+      $('verdict').className = 'peg-verdict quiet';
+    } else {
+      $('verdict').textContent = 'Fully backed.';
+      $('verdict').className = 'peg-verdict';
+    }
   } catch (err) {
     $('verdict').textContent = `Can't reach the bridge: ${err.message}`;
     $('verdict').className = 'peg-verdict bad';

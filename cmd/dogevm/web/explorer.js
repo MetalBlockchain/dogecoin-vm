@@ -194,7 +194,7 @@ async function showAddress(addr) {
 function route() {
   const m = location.hash.match(/^#\/(tx|block|address)\/(.+)$/);
   const explorer = $('explorer-view');
-  const home = [$('home'), $('home-lower')];
+  const home = [$('intro'), $('home'), $('home-lower')];
   if (!m) {
     explorer.hidden = true;
     home.forEach((n) => { n.hidden = false; });
