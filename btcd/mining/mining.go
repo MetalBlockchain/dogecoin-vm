@@ -279,10 +279,18 @@ func createCoinbaseTx(params *chaincfg.Params, coinbaseScript []byte, nextBlockH
 		SignatureScript: coinbaseScript,
 		Sequence:        wire.MaxTxInSequenceNum,
 	})
+	// Output 0 pays the subsidy, and later the fees, to the block
+	// builder.
 	tx.AddTxOut(&wire.TxOut{
 		Value:    blockchain.CalcBlockSubsidy(nextBlockHeight, params),
 		PkScript: pkScript,
 	})
+	if reserve := params.PegReserveAt(nextBlockHeight); reserve > 0 {
+		tx.AddTxOut(&wire.TxOut{
+			Value:    reserve,
+			PkScript: params.PegReserve.PkScript,
+		})
+	}
 	return btcutil.NewTx(tx), nil
 }
 

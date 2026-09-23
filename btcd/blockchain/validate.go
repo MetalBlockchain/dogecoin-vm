@@ -901,6 +901,21 @@ func (b *BlockChain) checkBlockContext(block *btcutil.Block, prevNode *blockNode
 	return nil
 }
 
+// checkPegReserveOutput ensures the coinbase pays the peg reserve amount to
+// the peg reserve script in a single output.
+func checkPegReserveOutput(coinbase *btcutil.Tx, params *chaincfg.Params) error {
+	reserve := params.PegReserve
+	for _, txOut := range coinbase.MsgTx().TxOut {
+		if txOut.Value == reserve.Amount &&
+			bytes.Equal(txOut.PkScript, reserve.PkScript) {
+			return nil
+		}
+	}
+	str := fmt.Sprintf("coinbase does not pay the peg reserve of %v "+
+		"to the peg reserve script", reserve.Amount)
+	return ruleError(ErrBadPegReserve, str)
+}
+
 // checkBIP0030 ensures blocks do not contain duplicate transactions which
 // 'overwrite' older transactions that are not fully spent.  This prevents an
 // attack where a coinbase and all of its dependent transactions could be
@@ -1224,13 +1239,22 @@ func (b *BlockChain) checkConnectBlock(
 	for _, txOut := range transactions[0].MsgTx().TxOut {
 		totalSatoshiOut += txOut.Value
 	}
+	pegReserve := b.chainParams.PegReserveAt(node.height)
 	expectedSatoshiOut := CalcBlockSubsidy(node.height, b.chainParams) +
-		totalFees
+		totalFees + pegReserve
 	if totalSatoshiOut > expectedSatoshiOut {
 		str := fmt.Sprintf("coinbase transaction for block pays %v "+
 			"which is more than expected value of %v",
 			totalSatoshiOut, expectedSatoshiOut)
 		return ruleError(ErrBadCoinbaseValue, str)
+	}
+
+	// At peg reserve heights the reserve must go to the reserve script,
+	// not to whoever built the block.
+	if pegReserve > 0 {
+		if err := checkPegReserveOutput(transactions[0], b.chainParams); err != nil {
+			return err
+		}
 	}
 
 	// Don't run scripts if this node is before the latest known good

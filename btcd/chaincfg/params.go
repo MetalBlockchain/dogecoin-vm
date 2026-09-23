@@ -89,6 +89,26 @@ func (d *ConsensusDeployment) EffectiveAlwaysActiveHeight() uint32 {
 	return d.AlwaysActiveHeight
 }
 
+// PegReserve describes the coins a two-way peg releases from and returns to.
+// The reserve is created once, in the coinbases of the first Blocks blocks,
+// and locked to PkScript (normally a multisig of the peg signers). A
+// transaction may not create more than MaxSatoshi, which is why it is spread
+// across several blocks.
+type PegReserve struct {
+	PkScript []byte
+	Amount   int64
+	Blocks   int32
+}
+
+// PegReserveAt returns the amount the coinbase at height must pay to the peg
+// reserve, or zero.
+func (p *Params) PegReserveAt(height int32) int64 {
+	if p.PegReserve == nil || height < 1 || height > p.PegReserve.Blocks {
+		return 0
+	}
+	return p.PegReserve.Amount
+}
+
 // DNSSeed identifies a DNS seed.
 type DNSSeed struct {
 	// Host defines the hostname of the seed.
@@ -230,6 +250,11 @@ type Params struct {
 	// NoBlockSubsidy, when set, makes the block subsidy zero at every
 	// height so the coinbase can only claim transaction fees.
 	NoBlockSubsidy bool
+
+	// PegReserve, when set, requires the coinbase of each block at heights
+	// 1 through PegReserve.Blocks to pay exactly PegReserve.Amount to
+	// PegReserve.PkScript. It is the only way DogecoinVM creates coins.
+	PegReserve *PegReserve
 
 	// TargetTimespan is the desired amount of time that should elapse
 	// before the block difficulty requirement is examined to determine how

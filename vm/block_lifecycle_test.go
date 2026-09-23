@@ -34,7 +34,16 @@ func TestMain(m *testing.M) {
 }
 
 // newTestVM starts a VM on DogecoinVM testnet with its btcd data in dir.
-func newTestVM(t *testing.T, dir string) *VM {
+// extra is merged into the btcd config in the genesis.
+func newTestVM(t *testing.T, dir string, extra map[string]any) *VM {
+	t.Helper()
+	vm, err := startTestVM(t, dir, extra)
+	require.NoError(t, err)
+	return vm
+}
+
+// startTestVM is newTestVM, returning Initialize's error.
+func startTestVM(t *testing.T, dir string, extra map[string]any) (*VM, error) {
 	t.Helper()
 	require := require.New(t)
 
@@ -45,28 +54,35 @@ func newTestVM(t *testing.T, dir string) *VM {
 	configFile := filepath.Join(dir, "btcd.conf")
 	require.NoError(os.WriteFile(configFile, nil, 0o600))
 
-	genesis, err := json.Marshal(map[string]any{
-		"config": map[string]any{
-			"configFile":  configFile,
-			"testNet":     true,
-			"dataDir":     filepath.Join(dir, "data"),
-			"logDir":      filepath.Join(dir, "logs"),
-			"miningAddrs": []string{miningAddr.EncodeAddress()},
-			"disableRPC":  true,
-		},
-	})
+	config := map[string]any{
+		"configFile":  configFile,
+		"testNet":     true,
+		"dataDir":     filepath.Join(dir, "data"),
+		"logDir":      filepath.Join(dir, "logs"),
+		"miningAddrs": []string{miningAddr.EncodeAddress()},
+		"disableRPC":  true,
+	}
+	for k, v := range extra {
+		config[k] = v
+	}
+	genesis, err := json.Marshal(map[string]any{"config": config})
 	require.NoError(err)
 
 	vm := &VM{}
 	snowCtx := snowtest.Context(t, ids.GenerateTestID())
-	require.NoError(vm.Initialize(context.Background(), snowCtx, memdb.New(), genesis, nil, nil, nil, nil))
-	return vm
+	err = vm.Initialize(context.Background(), snowCtx, memdb.New(), genesis, nil, nil, nil, nil)
+	return vm, err
 }
 
 func setupVM(t *testing.T) *VM {
 	t.Helper()
+	return setupVMWithConfig(t, nil)
+}
+
+func setupVMWithConfig(t *testing.T, extra map[string]any) *VM {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir()) // btcd derives default paths from $HOME
-	vm := newTestVM(t, t.TempDir())
+	vm := newTestVM(t, t.TempDir(), extra)
 	t.Cleanup(func() { _ = vm.Shutdown(context.Background()) })
 	return vm
 }
@@ -302,7 +318,7 @@ func TestLastAcceptedSurvivesRestart(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 
-	vm := newTestVM(t, dir)
+	vm := newTestVM(t, dir, nil)
 	blk := buildBlock(t, vm)
 	require.NoError(blk.Verify(ctx))
 	require.NoError(blk.Accept(ctx))
@@ -312,7 +328,7 @@ func TestLastAcceptedSurvivesRestart(t *testing.T) {
 	require.NoError(pending.Verify(ctx))
 	require.NoError(vm.Shutdown(ctx))
 
-	vm = newTestVM(t, dir)
+	vm = newTestVM(t, dir, nil)
 	defer func() { _ = vm.Shutdown(ctx) }()
 
 	lastAccepted, err := vm.LastAccepted(ctx)

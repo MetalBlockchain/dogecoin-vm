@@ -5,9 +5,12 @@
 package btcd
 
 import (
+	"errors"
+	"fmt"
 	"math/big"
 	"time"
 
+	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
 	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
 	"github.com/MetalBlockchain/btcvm/btcd/txscript"
 	"github.com/MetalBlockchain/btcvm/btcd/wire"
@@ -247,6 +250,40 @@ var DogecoinVMTestNetParams = func() chaincfg.Params {
 	p.HDCoinType = 1
 	return p
 }()
+
+// PegReserveAmountPerBlock is what each peg reserve coinbase pays into the
+// reserve: 9 billion DOGE, leaving room under the 10 billion DOGE
+// per-transaction limit for the block's fees.
+const PegReserveAmountPerBlock = 9_000_000_000 * 1e8
+
+// withPegReserve returns a copy of p whose chain params lock blocks worth of
+// PegReserveAmountPerBlock to address.
+func withPegReserve(p *params, address string, blocks int32) (*params, error) {
+	if address == "" || blocks < 1 {
+		return nil, errors.New("pegReserveAddress and a positive " +
+			"pegReserveBlocks must be set together")
+	}
+	addr, err := btcutil.DecodeAddress(address, p.Params)
+	if err != nil {
+		return nil, fmt.Errorf("invalid pegReserveAddress: %w", err)
+	}
+	if !addr.IsForNet(p.Params) {
+		return nil, fmt.Errorf("pegReserveAddress %s is not for %s",
+			address, p.Name)
+	}
+	pkScript, err := txscript.PayToAddrScript(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	chainParams := *p.Params
+	chainParams.PegReserve = &chaincfg.PegReserve{
+		PkScript: pkScript,
+		Amount:   PegReserveAmountPerBlock,
+		Blocks:   blocks,
+	}
+	return &params{Params: &chainParams, rpcPort: p.rpcPort}, nil
+}
 
 var dogecoinVMMainNetParams = params{
 	Params:  &DogecoinVMMainNetParams,

@@ -172,6 +172,8 @@ type Config struct {
 	SigNetChallenge      string        `json:"sigNetChallenge"      long:"signetchallenge"      description:"Connect to a custom signet network defined by this challenge instead of using the global default signet network -- Can be specified multiple times"`
 	SigNetSeedNode       []string      `json:"sigNetSeedNode"       long:"signetseednode"       description:"Specify a seed node for the signet network instead of using the global default signet network seed nodes"`
 	MainNet              bool          `json:"mainNet"              long:"mainnet"              description:"Use the DogecoinVM main network (default is testnet)"`
+	PegReserveAddress    string        `json:"pegReserveAddress"    long:"pegreserveaddress"    description:"Address the peg reserve is locked to (normally a P2SH multisig of the peg signers); empty disables the reserve"`
+	PegReserveBlocks     int32         `json:"pegReserveBlocks"     long:"pegreserveblocks"     description:"Number of blocks, from height 1, whose coinbase each pays 9,000,000,000 DOGE into the peg reserve"`
 	TestNet              bool          `json:"testNet"              long:"testnet"              description:"Use the test network"`
 	TorIsolation         bool          `json:"torIsolation"         long:"torisolation"         description:"Enable Tor stream isolation by randomizing user credentials for each connection."`
 	TrickleInterval      time.Duration `json:"trickleInterval"      long:"trickleinterval"      description:"Minimum time between attempts to send new inventory to a connected peer"`
@@ -592,7 +594,9 @@ func LoadConfig(nodeId string, overrideCfg *Config) (*Config, []string, error) {
 	// Multiple networks can't be selected simultaneously.
 	numNets := 0
 	// Count number of network flags passed; assign active network params
-	// while we're at it
+	// while we're at it. Start from the default so a previous LoadConfig
+	// in this process cannot leak its choice.
+	activeNetParams = &dogecoinVMTestNetParams
 	if cfg.MainNet {
 		numNets++
 		activeNetParams = &dogecoinVMMainNetParams
@@ -610,6 +614,20 @@ func LoadConfig(nodeId string, overrideCfg *Config) (*Config, []string, error) {
 		fmt.Fprintln(os.Stderr, err)
 		fmt.Fprintln(os.Stderr, usageMessage)
 		return nil, nil, err
+	}
+
+	// The peg reserve is part of consensus, set per chain in its genesis
+	// config. Apply it to a copy so the package-level params stay intact.
+	if cfg.PegReserveAddress != "" || cfg.PegReserveBlocks != 0 {
+		withReserve, err := withPegReserve(activeNetParams,
+			cfg.PegReserveAddress, cfg.PegReserveBlocks)
+		if err != nil {
+			err := fmt.Errorf("%s: %w", funcName, err)
+			fmt.Fprintln(os.Stderr, err)
+			return nil, nil, err
+		}
+		activeNetParams = withReserve
+		cfg.ChainParams = activeNetParams.Params
 	}
 
 	// If mainnet is active, then we won't allow the stall handler to be

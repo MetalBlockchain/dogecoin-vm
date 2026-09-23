@@ -224,6 +224,10 @@ const (
 	// ErrTimewarpAttack indicates a timewarp attack i.e.
 	// when block's timestamp is too early on diff adjustment block.
 	ErrTimewarpAttack
+
+	// ErrBadPegReserve indicates that a coinbase at a peg reserve height
+	// does not pay the peg reserve to the peg reserve script.
+	ErrBadPegReserve
 )
 
 // Map of ErrorCode values back to their constant names for pretty printing.
@@ -266,6 +270,7 @@ var errorCodeStrings = map[ErrorCode]string{
 	ErrScriptMalformed:           "ErrScriptMalformed",
 	ErrScriptValidation:          "ErrScriptValidation",
 	ErrUnexpectedWitness:         "ErrUnexpectedWitness",
+	ErrBadPegReserve:             "ErrBadPegReserve",
 	ErrInvalidWitnessCommitment:  "ErrInvalidWitnessCommitment",
 	ErrWitnessCommitmentMismatch: "ErrWitnessCommitmentMismatch",
 	ErrPreviousBlockUnknown:      "ErrPreviousBlockUnknown",
