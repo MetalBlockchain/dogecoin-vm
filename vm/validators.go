@@ -28,11 +28,7 @@ func (vm *VM) InitializeValidators() (*p2p.Validators, error) {
 		return nil, fmt.Errorf("validator state not initialized")
 	}
 
-	// Get peers from the p2p network
-	peers := vm.p2pNetwork.Peers
-
 	p2pValidators := p2p.NewValidators(
-		peers,
 		vm.ctx.Log,
 		vm.ctx.SubnetID,
 		vm.ctx.ValidatorState,

@@ -59,7 +59,7 @@ func newTestVM(t *testing.T, dir string) *VM {
 
 	vm := &VM{}
 	snowCtx := snowtest.Context(t, ids.GenerateTestID())
-	require.NoError(vm.Initialize(context.Background(), snowCtx, memdb.New(), genesis, nil, nil, nil, nil, nil))
+	require.NoError(vm.Initialize(context.Background(), snowCtx, memdb.New(), genesis, nil, nil, nil, nil))
 	return vm
 }
 

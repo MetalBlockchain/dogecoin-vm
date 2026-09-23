@@ -47,9 +47,8 @@ var Version = &version.Semantic{
 // VM implements the Metal ChainVM interface for Bitcoin
 type VM struct {
 	// Metal context
-	ctx      *snow.Context
-	db       database.Database
-	toEngine chan<- common.Message
+	ctx *snow.Context
+	db  database.Database
 
 	config *btcd.Config
 
@@ -120,7 +119,6 @@ func (vm *VM) Initialize(
 	genesisBytes []byte,
 	upgradeBytes []byte,
 	configBytes []byte,
-	toEngine chan<- common.Message,
 	_ []*common.Fx,
 	appSender common.AppSender,
 ) error {
@@ -135,7 +133,6 @@ func (vm *VM) Initialize(
 	}
 
 	vm.db = db
-	vm.toEngine = toEngine
 	vm.appSender = appSender
 	vm.shutdownChan = make(chan struct{})
 	vm.verifiedBlocks = make(map[ids.ID]*BlockAdapter)
@@ -186,10 +183,16 @@ func (vm *VM) Initialize(
 	vm.btcdAdapter.SetOnTxAccepted(vm.blockBuilder.onTxAccepted)
 	vm.btcdAdapter.Start()
 
-	// Initialize p2p network
+	// Initialize p2p network. The validator set tracks connected
+	// validators for stake-weighted gossip, so it is registered as a
+	// connection handler.
 	vm.ctx.Log.Info("Initializing p2p network")
+	vm.p2pValidators, err = vm.InitializeValidators()
+	if err != nil {
+		return fmt.Errorf("failed to initialize validators: %w", err)
+	}
 	reg := prometheus.NewRegistry()
-	p2pNet, err := p2p.NewNetwork(vm.ctx.Log, appSender, reg, "p2p")
+	p2pNet, err := p2p.NewNetwork(vm.ctx.Log, appSender, reg, "p2p", vm.p2pValidators)
 	if err != nil {
 		return fmt.Errorf("failed to create p2p network: %w", err)
 	}
@@ -642,8 +645,7 @@ func (vm *VM) AppRequest(
 	deadline time.Time,
 	msgBytes []byte,
 ) error {
-	// Not implemented yet
-	return nil
+	return vm.p2pNetwork.AppRequest(ctx, nodeID, requestID, deadline, msgBytes)
 }
 
 // AppRequestFailed handles failed app requests
@@ -653,50 +655,28 @@ func (vm *VM) AppRequestFailed(
 	requestID uint32,
 	appErr *common.AppError,
 ) error {
-	// Log the failure
-	return nil
+	return vm.p2pNetwork.AppRequestFailed(ctx, nodeID, requestID, appErr)
 }
 
 // AppResponse handles responses to app requests
 func (vm *VM) AppResponse(ctx context.Context, nodeID ids.NodeID, requestID uint32, msgBytes []byte) error {
-	// Not implemented yet
-	return nil
+	return vm.p2pNetwork.AppResponse(ctx, nodeID, requestID, msgBytes)
 }
 
-// Connected is called when a new connection is established
+// Connected is called when a new connection is established. The p2p network
+// tracks peers for gossip, so it must hear about every connection.
 func (vm *VM) Connected(ctx context.Context, nodeID ids.NodeID, nodeVersion *version.Application) error {
-	return nil
+	return vm.p2pNetwork.Connected(ctx, nodeID, nodeVersion)
 }
 
 // Disconnected is called when a connection is terminated
 func (vm *VM) Disconnected(ctx context.Context, nodeID ids.NodeID) error {
-	return nil
+	return vm.p2pNetwork.Disconnected(ctx, nodeID)
 }
 
-// CrossChainAppRequest handles incoming cross-chain app requests
-func (vm *VM) CrossChainAppRequest(
-	ctx context.Context,
-	chainID ids.ID,
-	requestID uint32,
-	deadline time.Time,
-	msgBytes []byte,
-) error {
-	return errors.New("cross-chain requests not supported")
-}
-
-// CrossChainAppRequestFailed handles failed cross-chain app requests
-func (vm *VM) CrossChainAppRequestFailed(
-	ctx context.Context,
-	chainID ids.ID,
-	requestID uint32,
-	appErr *common.AppError,
-) error {
-	return nil
-}
-
-// CrossChainAppResponse handles responses to cross-chain app requests
-func (vm *VM) CrossChainAppResponse(ctx context.Context, chainID ids.ID, requestID uint32, msgBytes []byte) error {
-	return nil
+// NewHTTPHandler returns nil: the VM serves no gRPC-routed HTTP handler.
+func (vm *VM) NewHTTPHandler(context.Context) (http.Handler, error) {
+	return nil, nil
 }
 
 // CreateHandlers creates and returns HTTP handlers
