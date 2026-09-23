@@ -463,3 +463,70 @@ func TestDepositCaps(t *testing.T) {
 	h.b.maxCirculating = 200 * doge
 	require.NotEmpty(h.step())
 }
+
+func TestRefundHeldDeposit(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	h.b.maxDeposit = 100 * doge
+	alice, aliceOnDoge := h.user(1), h.user(2)
+
+	// Two deposits so the peg has a confirmed output to pay from, one of
+	// them over the cap.
+	h.deposit(50*doge, &alice, 6)
+	require.NotEmpty(h.step())
+	h.vm.mine()
+	over := h.deposit(150*doge, &alice, 6)
+	op := wire.OutPoint{Hash: over.TxHash(), Index: 0}
+	require.Empty(h.step())
+	require.Equal(int64(150*doge), h.audit().UnclaimedOnDoge)
+
+	_, err := h.b.refund(op, aliceOnDoge, false)
+	require.NoError(err)
+	require.Equal(int64(149*doge), paidTo(h.doge, aliceOnDoge), "150 DOGE less the 1 DOGE fee")
+	refundTx := h.doge.txs[len(h.doge.txs)-1].tx
+	refunded, ok := parseRefund(refundTx)
+	require.True(ok)
+	require.Equal(op, refunded)
+
+	// Settled: no longer held, never credited, and cannot be refunded again.
+	h.doge.mine()
+	a := h.audit()
+	require.Zero(a.UnclaimedOnDoge)
+	require.True(a.solvent(), "%+v", a)
+	require.Equal(int64(50*doge), a.Circulating)
+	require.Equal(int64(50*doge), a.Locked)
+	_, err = h.b.refund(op, aliceOnDoge, false)
+	require.ErrorContains(err, "already refunded")
+
+	h.b.maxDeposit = 0 // even with the cap lifted, it stays refunded
+	require.Empty(h.step())
+}
+
+func TestRefundCreditableDepositNeedsForce(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	alice, aliceOnDoge := h.user(1), h.user(2)
+
+	// Waiting for confirmations: the bridge would credit it later.
+	dep := h.deposit(40*doge, &alice, 1)
+	h.doge.add(func() *wire.MsgTx { // a confirmed peg output to pay from
+		tx := wire.NewMsgTx(1)
+		tx.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+		tx.AddTxOut(wire.NewTxOut(100*doge, h.b.signers.pkScript()))
+		return tx
+	}(), 6)
+	op := wire.OutPoint{Hash: dep.TxHash(), Index: 0}
+
+	_, err := h.b.refund(op, aliceOnDoge, false)
+	require.ErrorIs(err, errCreditable)
+
+	_, err = h.b.refund(op, aliceOnDoge, true)
+	require.NoError(err)
+	for i := 0; i < 6; i++ {
+		h.doge.mine()
+	}
+	require.Empty(h.step(), "a refunded deposit is never credited")
+
+	_, err = h.b.refund(wire.OutPoint{Index: 9}, aliceOnDoge, false)
+	require.ErrorIs(err, errNotRefundable)
+}

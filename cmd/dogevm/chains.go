@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 
@@ -269,6 +270,32 @@ func (c *dogeChain) unspent(addresses []btcutil.Address, minConf int64) ([]utxo,
 		})
 	}
 	return utxos, nil
+}
+
+// sender returns the destination that funded the first input of txid, which
+// is where a refund of it should normally go.
+func (c *dogeChain) sender(txid chainhash.Hash) (destination, error) {
+	var txHex string
+	if err := c.rpc.call(&txHex, "getrawtransaction", txid.String(), 0); err != nil {
+		return destination{}, err
+	}
+	tx, err := decodeTx(txHex)
+	if err != nil {
+		return destination{}, err
+	}
+	prev := tx.TxIn[0].PreviousOutPoint
+	var prevHex string
+	if err := c.rpc.call(&prevHex, "getrawtransaction", prev.Hash.String(), 0); err != nil {
+		return destination{}, err
+	}
+	prevTx, err := decodeTx(prevHex)
+	if err != nil {
+		return destination{}, err
+	}
+	if int(prev.Index) >= len(prevTx.TxOut) {
+		return destination{}, errors.New("malformed input")
+	}
+	return destinationOfScript(prevTx.TxOut[prev.Index].PkScript)
 }
 
 func (c *dogeChain) send(tx *wire.MsgTx) (chainhash.Hash, error) {

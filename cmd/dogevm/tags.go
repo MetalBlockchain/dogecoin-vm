@@ -19,6 +19,7 @@ import (
 //	DVMI txid vout         VM release crediting that Dogecoin deposit
 //	DVMO type hash160      VM peg-out to the reserve; pay this Dogecoin address
 //	DVMR txid              Dogecoin payment for that VM peg-out
+//	DVMF txid vout         Dogecoin refund of a deposit that was not credited
 //
 // type is 0 for P2PKH and 1 for P2SH. txids are in internal byte order and
 // vout is little endian.
@@ -27,6 +28,7 @@ var (
 	tagRelease = []byte("DVMI")
 	tagPegOut  = []byte("DVMO")
 	tagPayment = []byte("DVMR")
+	tagRefund  = []byte("DVMF")
 )
 
 const (
@@ -73,6 +75,22 @@ func (d destination) pkScript() []byte {
 	return script
 }
 
+// destinationOfScript reads a P2PKH or P2SH output script.
+func destinationOfScript(script []byte) (destination, error) {
+	var d destination
+	switch txscript.GetScriptClass(script) {
+	case txscript.PubKeyHashTy:
+		d.kind = destP2PKH
+		copy(d.hash[:], script[3:23])
+	case txscript.ScriptHashTy:
+		d.kind = destP2SH
+		copy(d.hash[:], script[2:22])
+	default:
+		return d, errors.New("not a P2PKH or P2SH output")
+	}
+	return d, nil
+}
+
 func encodeDestination(tag []byte, d destination) []byte {
 	return append(append(append([]byte{}, tag...), d.kind), d.hash[:]...)
 }
@@ -88,8 +106,16 @@ func decodeDestination(payload []byte) (destination, error) {
 }
 
 func encodeRelease(deposit wire.OutPoint) []byte {
-	out := append(append([]byte{}, tagRelease...), deposit.Hash[:]...)
-	return binary.LittleEndian.AppendUint32(out, deposit.Index)
+	return encodeOutPointTag(tagRelease, deposit)
+}
+
+func encodeRefund(deposit wire.OutPoint) []byte {
+	return encodeOutPointTag(tagRefund, deposit)
+}
+
+func encodeOutPointTag(tag []byte, op wire.OutPoint) []byte {
+	out := append(append([]byte{}, tag...), op.Hash[:]...)
+	return binary.LittleEndian.AppendUint32(out, op.Index)
 }
 
 func encodePayment(request chainhash.Hash) []byte {
@@ -128,8 +154,17 @@ func nullData(data []byte) *wire.TxOut {
 
 // parseRelease reads the deposit a VM release credits.
 func parseRelease(tx *wire.MsgTx) (wire.OutPoint, bool) {
+	return parseOutPointTag(tx, tagRelease)
+}
+
+// parseRefund reads the deposit a Dogecoin refund returns.
+func parseRefund(tx *wire.MsgTx) (wire.OutPoint, bool) {
+	return parseOutPointTag(tx, tagRefund)
+}
+
+func parseOutPointTag(tx *wire.MsgTx, want []byte) (wire.OutPoint, bool) {
 	tag, payload, ok := opReturnData(tx)
-	if !ok || !bytes.Equal(tag, tagRelease) || len(payload) != 36 {
+	if !ok || !bytes.Equal(tag, want) || len(payload) != 36 {
 		return wire.OutPoint{}, false
 	}
 	var op wire.OutPoint

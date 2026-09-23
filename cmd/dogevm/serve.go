@@ -31,6 +31,7 @@ var webFiles embed.FS
 // registration and the faucet, and never see a key or password.
 type server struct {
 	b      *bridge
+	health *healthChecker
 	vm     *vmChain
 	doge   *dogeChain
 	faucet *faucet
@@ -56,6 +57,7 @@ type snapshot struct {
 	vmHeight   int64
 	dogeHeight int64
 	dogeSync   dogeSync
+	checks     []check
 	updated    time.Time
 	err        string
 }
@@ -69,6 +71,7 @@ func (srv *server) refresh() {
 		snap.state = state
 		snap.audit = srv.b.audit(state)
 	}
+	snap.checks = srv.health.run(state, err)
 	_ = srv.vm.rpc.call(&snap.vmHeight, "getblockcount")
 	_ = srv.doge.rpc.call(&snap.dogeHeight, "getblockcount")
 	_ = srv.doge.rpc.call(&snap.dogeSync, "getblockchaininfo")
@@ -206,6 +209,26 @@ func (srv *server) status(*http.Request) (any, error) {
 		out["audit"] = formatAudit(snap.audit)
 	}
 	return out, nil
+}
+
+// healthHandler reports the health checks: 200 if all pass, 503 if one
+// fails, for uptime monitors.
+func (srv *server) healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	snap := srv.current()
+	if snap == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "checks": []check{}})
+		return
+	}
+	ok := allOK(snap.checks)
+	if !ok {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok": ok, "checks": snap.checks, "updated": snap.updated.UTC().Format(time.RFC3339),
+	})
 }
 
 func (srv *server) address(r *http.Request) (any, error) {
@@ -461,6 +484,8 @@ func cmdServe(args []string) error {
 	faucetAmount := flags.String("faucet-amount", "100", "DOGE per faucet claim")
 	s.register(flags)
 	b := bridgeFlags(flags)
+	health := &healthChecker{b: b}
+	health.register(flags)
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -479,6 +504,7 @@ func cmdServe(args []string) error {
 
 	srv := &server{
 		b:             b,
+		health:        health,
 		vm:            b.vm.(*vmChain),
 		doge:          b.doge.(*dogeChain),
 		registerLimit: newRateLimit(30, time.Hour),
@@ -519,6 +545,7 @@ func cmdServe(args []string) error {
 	mux.Handle("GET /", http.FileServerFS(static))
 	mux.HandleFunc("GET /api/info", handle(srv.info))
 	mux.HandleFunc("GET /api/status", handle(srv.status))
+	mux.HandleFunc("GET /api/health", srv.healthHandler)
 	mux.HandleFunc("GET /api/address/{addr}", handle(srv.address))
 	mux.HandleFunc("GET /api/deposits/{addr}", handle(srv.deposits))
 	mux.HandleFunc("GET /api/pegout/{txid}", handle(srv.pegOut))

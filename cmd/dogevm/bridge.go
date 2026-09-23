@@ -74,6 +74,8 @@ type pegState struct {
 	pegOuts         []pegOut
 	deposits        []deposit
 	paid            map[chainhash.Hash]chainhash.Hash // peg-out -> payment txid
+	refunded        map[wire.OutPoint]chainhash.Hash  // deposit -> refund txid
+	held            []deposit                         // deposits not credited: no destination, or outside the limits
 	locked          int64                             // DOGE held at the peg address on Dogecoin
 	lockedUTXOs     []utxo
 	unclaimedOnDoge int64 // deposits without a usable destination
@@ -165,6 +167,7 @@ func (b *bridge) load() (*pegState, error) {
 	s := &pegState{
 		released: map[wire.OutPoint]chainhash.Hash{},
 		paid:     map[chainhash.Hash]chainhash.Hash{},
+		refunded: map[wire.OutPoint]chainhash.Hash{},
 	}
 
 	// DogecoinVM side.
@@ -253,12 +256,16 @@ func (b *bridge) load() (*pegState, error) {
 			}
 		}
 	}
+	var all []deposit
 	for _, t := range dogeTxs {
 		if spendsAny(t.tx, pegOuts) {
 			// Only the signers can spend peg outputs; outputs back to the
 			// peg are change, not deposits.
 			if request, ok := parsePayment(t.tx); ok {
 				s.paid[request] = t.tx.TxHash()
+			}
+			if deposit, ok := parseRefund(t.tx); ok {
+				s.refunded[deposit] = t.tx.TxHash()
 			}
 			continue
 		}
@@ -280,11 +287,18 @@ func (b *bridge) load() (*pegState, error) {
 			default:
 				continue
 			}
-			if d.valid {
-				s.deposits = append(s.deposits, d)
-			} else {
-				s.unclaimedOnDoge += d.value
-			}
+			all = append(all, d)
+		}
+	}
+	// A refunded deposit is settled: never credited, no longer owed.
+	for _, d := range all {
+		switch {
+		case s.refunded[d.outPoint] != (chainhash.Hash{}):
+		case d.valid:
+			s.deposits = append(s.deposits, d)
+		default:
+			s.held = append(s.held, d)
+			s.unclaimedOnDoge += d.value
 		}
 	}
 	s.lockedUTXOs, err = b.doge.unspent(dogeAddrs, 0)
@@ -423,13 +437,22 @@ func (b *bridge) release(s *pegState, d deposit) (chainhash.Hash, error) {
 // pay pays peg-out p on Dogecoin from the peg address. The peg gives up the
 // full peg-out; the Dogecoin fee comes out of the payment.
 func (b *bridge) pay(s *pegState, p pegOut) (chainhash.Hash, error) {
+	return b.payFromPeg(s, p.value, p.dest, encodePayment(p.txid))
+}
+
+// payFromPeg pays value, less the Dogecoin fee, to dest from confirmed peg
+// outputs on Dogecoin, tagged with data. Change returns to the peg address.
+func (b *bridge) payFromPeg(s *pegState, value int64, dest destination, data []byte) (chainhash.Hash, error) {
 	var confirmed []utxo
 	for _, u := range s.lockedUTXOs {
 		if u.confirmations > 0 {
 			confirmed = append(confirmed, u)
 		}
 	}
-	inputs, total, err := selectUTXOs(confirmed, p.value)
+	if value <= b.dogeFee {
+		return chainhash.Hash{}, fmt.Errorf("%s DOGE does not cover the %s DOGE fee", formatDoge(value), formatDoge(b.dogeFee))
+	}
+	inputs, total, err := selectUTXOs(confirmed, value)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
@@ -437,13 +460,13 @@ func (b *bridge) pay(s *pegState, p pegOut) (chainhash.Hash, error) {
 	for _, u := range inputs {
 		tx.AddTxIn(wire.NewTxIn(&u.outPoint, nil, nil))
 	}
-	tx.AddTxOut(wire.NewTxOut(p.value-b.dogeFee, p.dest.pkScript()))
+	tx.AddTxOut(wire.NewTxOut(value-b.dogeFee, dest.pkScript()))
 	// Change below Dogecoin's hard dust limit cannot be relayed, so it
 	// goes to the fee.
-	if change := total - p.value; change >= dogecoinHardDust {
+	if change := total - value; change >= dogecoinHardDust {
 		tx.AddTxOut(wire.NewTxOut(change, b.signers.pkScript()))
 	}
-	tx.AddTxOut(nullData(encodePayment(p.txid)))
+	tx.AddTxOut(nullData(data))
 	redeems := make([][]byte, len(inputs))
 	for i, u := range inputs {
 		if redeems[i] = s.redeemFor[string(u.pkScript)]; redeems[i] == nil {
@@ -454,6 +477,43 @@ func (b *bridge) pay(s *pegState, p pegOut) (chainhash.Hash, error) {
 		return chainhash.Hash{}, err
 	}
 	return b.doge.send(tx)
+}
+
+var (
+	errNotRefundable = errors.New("not a deposit the bridge holds")
+	errCreditable    = errors.New("the bridge may still credit this deposit; stop the bridge and pass -force to refund it")
+)
+
+// refund returns deposit op, less the Dogecoin fee, to dest. Deposits the
+// bridge will never credit (no destination, outside the limits) can always
+// be refunded. One it may still credit (it is waiting for confirmations or
+// for room under maxCirculating) needs force, and the bridge must be
+// stopped first so the two cannot race.
+func (b *bridge) refund(op wire.OutPoint, dest destination, force bool) (chainhash.Hash, error) {
+	s, err := b.load()
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+	if txid, done := s.refunded[op]; done {
+		return chainhash.Hash{}, fmt.Errorf("already refunded in %v", txid)
+	}
+	if txid, done := s.released[op]; done {
+		return chainhash.Hash{}, fmt.Errorf("already credited in %v", txid)
+	}
+	for _, d := range s.held {
+		if d.outPoint == op {
+			return b.payFromPeg(s, d.value, dest, encodeRefund(op))
+		}
+	}
+	for _, d := range s.deposits {
+		if d.outPoint == op {
+			if !force {
+				return chainhash.Hash{}, errCreditable
+			}
+			return b.payFromPeg(s, d.value, dest, encodeRefund(op))
+		}
+	}
+	return chainhash.Hash{}, errNotRefundable
 }
 
 // dogecoinHardDust is Dogecoin Core's DEFAULT_HARD_DUST_LIMIT.

@@ -19,10 +19,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
 	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg"
+	"github.com/paulgnz/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/paulgnz/dogecoin-vm/btcd/wire"
 )
 
 const usage = `dogevm: DogecoinVM wallet and two-way peg bridge
@@ -46,6 +50,10 @@ Bridge (peg signers):
       create a signer set, and print the peg addresses and genesis config
   dogevm bridge -signers FILE [-once]         run the bridge
   dogevm audit -signers FILE                  check the peg is fully backed
+  dogevm refund -signers FILE -list           deposits that are held or not yet credited
+  dogevm refund -signers FILE -deposit TXID:VOUT [-to DOGEADDR]
+      return a held deposit, less the Dogecoin fee, to its sender (or -to)
+  dogevm monitor -signers FILE [-webhook URL]  alert when a health check fails
   dogevm serve -signers FILE                  web wallet and bridge API
 
 Personal deposit addresses are recorded in -deposits (default deposits.json
@@ -114,6 +122,8 @@ func main() {
 		"signers":         cmdSigners,
 		"bridge":          cmdBridge,
 		"audit":           cmdAudit,
+		"refund":          cmdRefund,
+		"monitor":         cmdMonitor,
 	}
 	run, ok := commands[cmd]
 	if !ok {
@@ -545,5 +555,113 @@ func cmdAudit(args []string) error {
 	if !a.solvent() {
 		return errInsolvent
 	}
+	return nil
+}
+
+func parseOutPoint(s string) (wire.OutPoint, error) {
+	var op wire.OutPoint
+	i := strings.LastIndexByte(s, ':')
+	if i < 0 {
+		return op, fmt.Errorf("deposit must be TXID:VOUT, got %q", s)
+	}
+	hash, err := chainhash.NewHashFromStr(s[:i])
+	if err != nil {
+		return op, err
+	}
+	vout, err := strconv.ParseUint(s[i+1:], 10, 32)
+	if err != nil {
+		return op, err
+	}
+	return wire.OutPoint{Hash: *hash, Index: uint32(vout)}, nil
+}
+
+// holdReason explains why the bridge has not credited a deposit.
+func (b *bridge) holdReason(d deposit) string {
+	switch {
+	case d.valid && d.confirmations < b.depositConfirmations:
+		return fmt.Sprintf("waiting for confirmations (%d of %d)", d.confirmations, b.depositConfirmations)
+	case d.valid:
+		return "waiting for room under -max-circulating"
+	case d.value < b.minDeposit:
+		return "below the minimum deposit"
+	case b.maxDeposit > 0 && d.value > b.maxDeposit:
+		return "above the maximum deposit"
+	default:
+		return "no DogecoinVM destination"
+	}
+}
+
+func cmdRefund(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("refund", flag.ExitOnError)
+	signersPath := fs.String("signers", "", "peg signer set file")
+	depositsPath := fs.String("deposits", "", "deposit address registry (default: deposits.json next to -signers)")
+	list := fs.Bool("list", false, "list deposits that are held or not yet credited")
+	depositFlag := fs.String("deposit", "", "deposit to refund, as TXID:VOUT")
+	to := fs.String("to", "", "Dogecoin address to refund to (default: the deposit's sender)")
+	force := fs.Bool("force", false, "refund a deposit the bridge may still credit (stop the bridge first)")
+	s.register(fs)
+	b := bridgeFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := s.resolve(); err != nil {
+		return err
+	}
+	if err := required(map[string]string{"signers": *signersPath}); err != nil {
+		return err
+	}
+	signers, err := readSignerSet(*signersPath)
+	if err != nil {
+		return err
+	}
+	b.connect(&s, signers)
+	b.registry = registryFor(*depositsPath, *signersPath)
+
+	if *list {
+		state, err := b.load()
+		if err != nil {
+			return err
+		}
+		rows := []map[string]string{}
+		for _, d := range append(append([]deposit{}, state.held...), state.deposits...) {
+			if _, done := state.released[d.outPoint]; done {
+				continue
+			}
+			rows = append(rows, map[string]string{
+				"deposit": d.outPoint.String(),
+				"amount":  formatDoge(d.value),
+				"status":  b.holdReason(d),
+			})
+		}
+		printJSON(rows)
+		return nil
+	}
+
+	if err := required(map[string]string{"deposit": *depositFlag}); err != nil {
+		return err
+	}
+	op, err := parseOutPoint(*depositFlag)
+	if err != nil {
+		return err
+	}
+	var dest destination
+	if *to != "" {
+		addr, err := btcutil.DecodeAddress(*to, s.dogeParams)
+		if err != nil {
+			return fmt.Errorf("-to must be a Dogecoin %s address: %w", s.dogeNet, err)
+		}
+		if dest, err = destinationOf(addr); err != nil {
+			return err
+		}
+	} else if dest, err = b.doge.(*dogeChain).sender(op.Hash); err != nil {
+		return fmt.Errorf("finding the deposit's sender (pass -to): %w", err)
+	}
+	txid, err := b.refund(op, dest, *force)
+	if err != nil {
+		return err
+	}
+	destAddr, _ := dest.address(s.dogeParams)
+	printJSON(map[string]string{"refundTxid": txid.String(), "to": destAddr.EncodeAddress()})
 	return nil
 }
