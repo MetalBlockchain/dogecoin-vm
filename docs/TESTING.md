@@ -15,9 +15,11 @@ The quickest way in is the hosted test network, at **https://metaldoge.com**:
 
 It runs one Metal node, Dogecoin Core on Dogecoin testnet, the bridge and the web wallet, set up by [`deploy/provision.sh`](../deploy/provision.sh). The rest of this page runs the same stack on your own machine.
 
-This walks through a complete local setup: a Metal node running DogecoinVM, Dogecoin Core on regtest, and a DOGE round trip through the peg. Everything here was run on macOS (arm64); Linux works the same way.
+## Local setup
 
-## What you need
+This runs everything on your machine: a Metal node running DogecoinVM, Dogecoin Core on regtest, and a DOGE round trip through the peg. It was run on macOS (arm64); Linux works the same way.
+
+### What you need
 
 - Go 1.24+, `jq`, `openssl`, Docker (for Dogecoin Core).
 - **metalgo v1.13.5.** The plugin speaks rpcchainvm protocol 43 and will not load in other versions.
@@ -38,7 +40,7 @@ This walks through a complete local setup: a Metal node running DogecoinVM, Doge
   ```
   Check the tarball against the release's `SHA256SUMS.asc`.
 
-## 1. Start a DogecoinVM devnet
+### 1. Start a DogecoinVM devnet
 
 ```bash
 METALGO=/path/to/metalgo/build/metalgo scripts/devnet.sh start
@@ -47,7 +49,7 @@ eval "$(scripts/devnet.sh env)"
 
 This builds the plugin under its VM ID (`mEUwHwfd8UTHf23UYkQxHvy1n1EGwWieXQnjmtzSryJRZckzu`) and creates a 2-of-3 peg signer set. It then starts a single metalgo node on a local network with sybil protection off, and creates a subnet and chain with a 1-block (9 billion DOGE) peg reserve. State lives in `~/.dogevm-devnet`; `scripts/devnet.sh stop` stops the node, and deleting the directory starts over.
 
-## 2. Connect
+### 2. Connect
 
 DogecoinVM speaks btcd's JSON-RPC (Bitcoin Core-style) at:
 
@@ -62,7 +64,7 @@ curl -s -u "$DOGEVM_RPC_USER:$DOGEVM_RPC_PASS" -H 'content-type: application/jso
 
 RPC credentials and indexes are node settings, in `~/.dogevm-devnet/chain-configs/<chainID>/config.json`, not in the public genesis. The node needs `txIndex` and `addrIndex` for the wallet and bridge. For a shared node, set `rpcLimitUser`/`rpcLimitPass` there: a limited user can read and broadcast but not administer.
 
-## 3. Wallets
+### 3. Wallets
 
 Keys and addresses are Dogecoin's, so one key controls the same funds' address on both chains. No existing Dogecoin wallet can talk to DogecoinVM yet, because it is not reachable over Dogecoin's P2P network or Electrum. Use the `dogevm` CLI for now:
 
@@ -77,7 +79,7 @@ export DOGECOIN_RPC=http://127.0.0.1:18332 DOGECOIN_RPC_USER=doge DOGECOIN_RPC_P
 
 `keygen` prints the private key as a Dogecoin WIF too, so the same key can be imported into Dogecoin Core with `importprivkey`.
 
-## 4. Peg in and out
+### 4. Peg in and out
 
 ```bash
 SIGNERS=~/.dogevm-devnet/signers.json
@@ -107,7 +109,7 @@ paid 499.00000000 DOGE for peg-out 4fce1377… in 20c02315…
 
 See [BRIDGE.md](BRIDGE.md) for how the peg works and its trust model.
 
-## Against Dogecoin testnet instead of regtest
+### Against Dogecoin testnet instead of regtest
 
 Run `dogecoind -testnet -txindex=1` (RPC port 44555), wait for it to sync, and use `DOGECOIN_NETWORK=testnet` for `scripts/devnet.sh start` and `dogevm`. Testnet DOGE comes from a faucet. Set the bridge's `-confirmations` to the depth you want (at least 6).
 
@@ -118,4 +120,4 @@ go test ./vm/ ./cmd/... ./btcd/ ./btcd/mempool/
 ```
 
 - `vm/`: block lifecycle, peg reserve consensus and a multisig reserve release, run in-process against a real btcd.
-- `cmd/dogevm/`: bridge logic against in-memory chains: exactly-once crediting, spoofed tags, a round trip, and halting when insolvent.
+- `cmd/dogevm/`: bridge logic against in-memory chains that run btcd's script engine on every signed input: exactly-once crediting, spoofed tags, personal deposit addresses, a round trip, and halting when insolvent. Also checks the web wallet's `chain.js` against the Go code under Node, when Node is installed.
