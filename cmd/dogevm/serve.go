@@ -157,6 +157,8 @@ func (srv *server) info(*http.Request) (any, error) {
 		"dogeFee":              formatDoge(srv.b.dogeFee),
 		"minDeposit":           formatDoge(srv.b.minDeposit),
 		"minPegOut":            formatDoge(srv.b.minPegOut),
+		"maxDeposit":           formatDoge(srv.b.maxDeposit),
+		"maxCirculating":       formatDoge(srv.b.maxCirculating),
 		"faucet":               srv.faucet.info(),
 		"dogecoinvmVersions":   addressVersions(srv.b.vmParams),
 		"dogecoinVersions":     addressVersions(srv.b.dogeParams),

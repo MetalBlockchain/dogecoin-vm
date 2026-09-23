@@ -356,6 +356,8 @@ func bridgeFlags(fs *flag.FlagSet) *bridge {
 	fs.Int64Var(&b.dogeFee, "doge-fee", koinuPerDoge, "koinu deducted from each peg-out for the Dogecoin fee")
 	fs.Int64Var(&b.minDeposit, "min-deposit", koinuPerDoge, "smallest deposit credited, in koinu")
 	fs.Int64Var(&b.minPegOut, "min-peg-out", 2*koinuPerDoge, "smallest peg-out paid, in koinu")
+	fs.Int64Var(&b.maxDeposit, "max-deposit", 0, "largest deposit credited, in koinu; larger ones are held for refund (0: no cap)")
+	fs.Int64Var(&b.maxCirculating, "max-circulating", 0, "most DOGE, in koinu, the bridge lets circulate on DogecoinVM (0: no cap)")
 	return b
 }
 

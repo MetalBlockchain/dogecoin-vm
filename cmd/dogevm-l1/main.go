@@ -1,0 +1,240 @@
+// Command dogevm-l1 creates a DogecoinVM L1 on a Metal network: a subnet, the
+// DogecoinVM chain in it, and the conversion to an L1 validated by a node.
+//
+//	dogevm-l1 key -out p-chain-key.json
+//	    create the P-Chain key that pays for and owns the L1; fund its address
+//	dogevm-l1 balance -key p-chain-key.json
+//	dogevm-l1 create -key p-chain-key.json -genesis genesis.json -node-uri http://127.0.0.1:9660
+//	    create the subnet and chain and convert them to an L1 validated by the
+//	    node at -node-uri, printing the IDs as JSON
+//
+// -uri is the P-Chain API to use (default: -node-uri).
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	"github.com/MetalBlockchain/metalgo/api/info"
+	"github.com/MetalBlockchain/metalgo/ids"
+	"github.com/MetalBlockchain/metalgo/utils/constants"
+	"github.com/MetalBlockchain/metalgo/utils/crypto/secp256k1"
+	"github.com/MetalBlockchain/metalgo/utils/formatting/address"
+	"github.com/MetalBlockchain/metalgo/utils/units"
+	"github.com/MetalBlockchain/metalgo/vms/platformvm"
+	"github.com/MetalBlockchain/metalgo/vms/platformvm/txs"
+	"github.com/MetalBlockchain/metalgo/vms/platformvm/warp/message"
+	"github.com/MetalBlockchain/metalgo/vms/secp256k1fx"
+	"github.com/MetalBlockchain/metalgo/wallet/subnet/primary"
+
+	"github.com/paulgnz/dogecoin-vm/vm"
+)
+
+// keyFile is the P-Chain key, stored with 0600 permissions.
+type keyFile struct {
+	PrivateKey string `json:"privateKey"`
+	PAddress   string `json:"pChainAddress"`
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: dogevm-l1 key|balance|create [flags]")
+		os.Exit(2)
+	}
+	var err error
+	switch os.Args[1] {
+	case "key":
+		err = cmdKey(os.Args[2:])
+	case "balance":
+		err = cmdBalance(os.Args[2:])
+	case "create":
+		err = cmdCreate(os.Args[2:])
+	default:
+		err = fmt.Errorf("unknown command %q", os.Args[1])
+	}
+	if err != nil {
+		log.Fatalf("dogevm-l1 %s: %v", os.Args[1], err)
+	}
+}
+
+func pAddress(key *secp256k1.PrivateKey, networkID uint32) (string, error) {
+	return address.Format("P", constants.GetHRP(networkID), key.Address().Bytes())
+}
+
+func readKey(path string) (*secp256k1.PrivateKey, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var kf keyFile
+	if err := json.Unmarshal(raw, &kf); err != nil {
+		return nil, err
+	}
+	key := new(secp256k1.PrivateKey)
+	if err := key.UnmarshalJSON([]byte(`"` + kf.PrivateKey + `"`)); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return key, nil
+}
+
+func networkIDFlag(fs *flag.FlagSet) *uint {
+	return fs.Uint("network-id", uint(constants.MainnetID), "Metal network ID (1 = mainnet, 5 = tahoe testnet)")
+}
+
+func cmdKey(args []string) error {
+	fs := flag.NewFlagSet("key", flag.ExitOnError)
+	out := fs.String("out", "", "file to write the key to")
+	networkID := networkIDFlag(fs)
+	_ = fs.Parse(args)
+	if *out == "" {
+		return errors.New("-out is required")
+	}
+	if _, err := os.Stat(*out); err == nil {
+		return fmt.Errorf("%s already exists; refusing to overwrite a key", *out)
+	}
+	key, err := secp256k1.NewPrivateKey()
+	if err != nil {
+		return err
+	}
+	addr, err := pAddress(key, uint32(*networkID))
+	if err != nil {
+		return err
+	}
+	raw, _ := json.MarshalIndent(keyFile{PrivateKey: key.String(), PAddress: addr}, "", "  ")
+	if err := os.WriteFile(*out, append(raw, '\n'), 0o600); err != nil {
+		return err
+	}
+	fmt.Println(addr)
+	return nil
+}
+
+func cmdBalance(args []string) error {
+	fs := flag.NewFlagSet("balance", flag.ExitOnError)
+	keyPath := fs.String("key", "", "P-Chain key file")
+	uri := fs.String("uri", "http://127.0.0.1:9660", "P-Chain API")
+	_ = fs.Parse(args)
+	key, err := readKey(*keyPath)
+	if err != nil {
+		return err
+	}
+	bal, err := platformvm.NewClient(*uri).GetBalance(context.Background(), []ids.ShortID{key.Address()})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%d nMETAL (%.4f METAL) unlocked\n", bal.Unlocked, float64(bal.Unlocked)/float64(units.Avax))
+	return nil
+}
+
+func cmdCreate(args []string) error {
+	fs := flag.NewFlagSet("create", flag.ExitOnError)
+	keyPath := fs.String("key", "", "P-Chain key file; pays the fees and owns the subnet")
+	genesisPath := fs.String("genesis", "", "DogecoinVM genesis JSON")
+	nodeURI := fs.String("node-uri", "http://127.0.0.1:9660", "API of the node that will validate the L1")
+	uri := fs.String("uri", "", "P-Chain API (default: -node-uri)")
+	name := fs.String("name", "dogecoinvm", "chain name")
+	balance := fs.Float64("validator-balance", 5, "METAL to prepay the validator's continuous fee (about 1.3 METAL a month)")
+	subnetFlag := fs.String("subnet", "", "existing subnet to use instead of creating one")
+	chainFlag := fs.String("chain", "", "existing chain to use instead of creating one (needs -subnet)")
+	networkID := networkIDFlag(fs)
+	_ = fs.Parse(args)
+	if *keyPath == "" || (*genesisPath == "" && *chainFlag == "") {
+		return errors.New("-key and -genesis are required")
+	}
+	if *uri == "" {
+		*uri = *nodeURI
+	}
+
+	ctx := context.Background()
+	key, err := readKey(*keyPath)
+	if err != nil {
+		return err
+	}
+	owner := &secp256k1fx.OutputOwners{Threshold: 1, Addrs: []ids.ShortID{key.Address()}}
+	kc := secp256k1fx.NewKeychain(key)
+
+	nodeID, pop, err := info.NewClient(*nodeURI).GetNodeID(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the validator node's ID: %w", err)
+	}
+	log.Printf("validator %s", nodeID)
+
+	subnetID := ids.Empty
+	if *subnetFlag != "" {
+		if subnetID, err = ids.FromString(*subnetFlag); err != nil {
+			return err
+		}
+	} else {
+		wallet, err := primary.MakePWallet(ctx, *uri, kc, primary.WalletConfig{})
+		if err != nil {
+			return err
+		}
+		tx, err := wallet.IssueCreateSubnetTx(owner)
+		if err != nil {
+			return fmt.Errorf("creating subnet: %w", err)
+		}
+		subnetID = tx.ID()
+		log.Printf("created subnet %s", subnetID)
+	}
+
+	wallet, err := primary.MakePWallet(ctx, *uri, kc, primary.WalletConfig{SubnetIDs: []ids.ID{subnetID}})
+	if err != nil {
+		return err
+	}
+
+	chainID := ids.Empty
+	if *chainFlag != "" {
+		if chainID, err = ids.FromString(*chainFlag); err != nil {
+			return err
+		}
+	} else {
+		genesis, err := os.ReadFile(*genesisPath)
+		if err != nil {
+			return err
+		}
+		if !json.Valid(genesis) {
+			return fmt.Errorf("%s is not valid JSON", *genesisPath)
+		}
+		tx, err := wallet.IssueCreateChainTx(subnetID, genesis, vm.ID, nil, *name)
+		if err != nil {
+			return fmt.Errorf("creating chain: %w", err)
+		}
+		chainID = tx.ID()
+		log.Printf("created chain %s", chainID)
+	}
+
+	// DogecoinVM has no validator manager contract. The manager chain is the
+	// DogecoinVM chain itself, so the validator set stays as created until one
+	// is added; balance top-ups need no manager.
+	pOwner := message.PChainOwner{Threshold: 1, Addresses: []ids.ShortID{key.Address()}}
+	convertTx, err := wallet.IssueConvertSubnetToL1Tx(subnetID, chainID, nil, []*txs.ConvertSubnetToL1Validator{{
+		NodeID:                nodeID.Bytes(),
+		Weight:                100,
+		Balance:               uint64(*balance * float64(units.Avax)),
+		Signer:                *pop,
+		RemainingBalanceOwner: pOwner,
+		DeactivationOwner:     pOwner,
+	}})
+	if err != nil {
+		return fmt.Errorf("converting to an L1: %w", err)
+	}
+	log.Printf("converted to an L1 in %s", convertTx.ID())
+
+	out, _ := json.MarshalIndent(map[string]string{
+		"networkID":    fmt.Sprint(*networkID),
+		"vmID":         vm.ID.String(),
+		"subnetID":     subnetID.String(),
+		"chainID":      chainID.String(),
+		"validationID": subnetID.Append(0).String(),
+		"validator":    nodeID.String(),
+		"convertTxID":  convertTx.ID().String(),
+		"created":      time.Now().UTC().Format(time.RFC3339),
+	}, "", "  ")
+	fmt.Println(string(out))
+	return nil
+}

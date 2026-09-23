@@ -36,6 +36,13 @@ type bridge struct {
 	dogeFee              int64 // deducted from each peg-out to pay the Dogecoin fee
 	minDeposit           int64
 	minPegOut            int64
+	// maxDeposit and maxCirculating cap what the bridge will credit, so a
+	// bug or a compromised signer can only lose so much. Deposits above
+	// maxDeposit are never credited; a deposit that would take circulating
+	// DOGE past maxCirculating waits. Either stays locked on Dogecoin for a
+	// manual refund. Zero means no cap.
+	maxDeposit     int64
+	maxCirculating int64
 
 	logf func(format string, args ...any)
 }
@@ -122,6 +129,11 @@ func (b *bridge) dogeWatchSet(s *pegState) ([]btcutil.Address, map[string]destin
 		depositDest[string(p2shScript(redeem))] = d
 	}
 	return addrs, depositDest, nil
+}
+
+// depositInRange reports whether a deposit of value is credited at all.
+func (b *bridge) depositInRange(value int64) bool {
+	return value >= b.minDeposit && (b.maxDeposit == 0 || value <= b.maxDeposit)
 }
 
 // spendsAny reports whether tx spends one of outs.
@@ -261,10 +273,10 @@ func (b *bridge) load() (*pegState, error) {
 			switch dest, personal := depositDest[string(out.PkScript)]; {
 			case personal:
 				// A personal deposit address names its destination.
-				d.dest, d.valid = dest, out.Value >= b.minDeposit
+				d.dest, d.valid = dest, b.depositInRange(out.Value)
 			case bytes.Equal(out.PkScript, script):
 				// The shared peg address needs a DVMD tag.
-				d.dest, d.valid = tagDest, hasTag && out.Value >= b.minDeposit
+				d.dest, d.valid = tagDest, hasTag && b.depositInRange(out.Value)
 			default:
 				continue
 			}
@@ -333,6 +345,11 @@ func (b *bridge) step() (string, error) {
 	if !s.vmPending {
 		for _, d := range s.deposits {
 			if _, done := s.released[d.outPoint]; done || d.confirmations < b.depositConfirmations {
+				continue
+			}
+			if b.maxCirculating > 0 && s.reserveCreated-s.reserveUnspent+d.value > b.maxCirculating {
+				b.logf("holding deposit %v: crediting %s DOGE would exceed the %s DOGE cap",
+					d.outPoint, formatDoge(d.value), formatDoge(b.maxCirculating))
 				continue
 			}
 			txid, err := b.release(s, d)

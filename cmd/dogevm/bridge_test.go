@@ -432,3 +432,34 @@ func TestPegOutSpendsPersonalDeposit(t *testing.T) {
 	require.Equal(int64(40*doge), a.Circulating)
 	require.Equal(int64(40*doge), a.Locked)
 }
+
+func TestDepositCaps(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	h.b.maxDeposit = 100 * doge
+	h.b.maxCirculating = 150 * doge
+	alice := h.user(1)
+
+	// Over the per-deposit cap: never credited, held on Dogecoin.
+	h.deposit(101*doge, &alice, 6)
+	require.Empty(h.step())
+	a := h.audit()
+	require.Equal(int64(101*doge), a.UnclaimedOnDoge)
+
+	// Within both caps: credited.
+	h.deposit(100*doge, &alice, 6)
+	require.NotEmpty(h.step())
+	h.vm.mine()
+
+	// Would take circulating to 180 DOGE, past the 150 cap: waits.
+	h.deposit(80*doge, &alice, 6)
+	require.Empty(h.step())
+	a = h.audit()
+	require.Equal(int64(100*doge), a.Circulating)
+	require.Equal(int64(80*doge), a.PendingPegIns)
+	require.True(a.solvent())
+
+	// Raising the cap releases it.
+	h.b.maxCirculating = 200 * doge
+	require.NotEmpty(h.step())
+}
