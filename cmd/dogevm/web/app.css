@@ -167,6 +167,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .height dd { margin: 0; font: 500 var(--step-1) var(--mono); font-variant-numeric: tabular-nums; }
 .sync-meter { display: block; height: 4px; margin-top: 0.3rem; background: var(--rule); border-radius: 2px; overflow: hidden; }
 .sync-meter span { display: block; height: 100%; background: var(--coin); width: 0; transition: width 600ms ease; }
+.sync-of { display: block; margin-top: 0.25rem; font: 400 var(--step--1) var(--mono); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 
 /* Introduction: what this is, in three steps. */
 

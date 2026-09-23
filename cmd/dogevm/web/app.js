@@ -129,17 +129,18 @@ async function refreshStatus() {
     const sync = s.dogecoinSync;
     const syncing = Boolean(sync && sync.syncing);
     $('sync-meter').hidden = !syncing;
+    $('sync-of').hidden = !syncing;
     $('deposit-sync').hidden = !syncing;
+    $('doge-height').textContent = s.dogecoinHeight.toLocaleString('en-US');
     if (syncing) {
       const pct = Math.min(99, Math.floor((s.dogecoinHeight / sync.headers) * 100));
       $('doge-height-label').textContent = 'Dogecoin node syncing';
-      $('doge-height').textContent = `${pct}%`;
       $('sync-fill').style.width = `${pct}%`;
+      $('sync-of').textContent = `of ${sync.headers.toLocaleString('en-US')} (${pct}%)`;
       $('deposit-sync').textContent =
         `The bridge's Dogecoin node is catching up (${pct}%). Deposits you send now are safe, and are credited once it reaches the present.`;
     } else {
       $('doge-height-label').textContent = 'Dogecoin block';
-      $('doge-height').textContent = s.dogecoinHeight.toLocaleString('en-US');
     }
     if (!s.audit) {
       $('verdict').textContent = 'The bridge cannot read both chains right now.';
