@@ -4,6 +4,10 @@
 #   METALGO=/path/to/metalgo scripts/devnet.sh start   # build, start, create the chain
 #   scripts/devnet.sh stop
 #   scripts/devnet.sh env                              # print connection settings
+#   METALGO=... scripts/devnet.sh run                  # run the node in the foreground (systemd)
+#
+# PUBLIC_RPC_USER and PUBLIC_RPC_PASS, if set when the chain is created, add a
+# limited RPC user that can read and broadcast but not administer the node.
 #
 # The node runs with sybil protection disabled, so it alone validates every
 # chain. State lives in DEVNET_DIR (default ~/.dogevm-devnet); delete it to
@@ -113,8 +117,10 @@ cmd_start() {
     jq -n --arg user "$RPC_USER" --arg pass "$(cat "$RPC_PASS_FILE")" \
       --arg builder "$(jq -r .dogecoinvmAddress "$DIR/builder.json")" \
       --arg data "$DIR/chaindata" --arg logs "$DIR/chainlogs" \
+        --arg luser "${PUBLIC_RPC_USER:-}" --arg lpass "${PUBLIC_RPC_PASS:-}" \
       '{rpcUser: $user, rpcPass: $pass, txIndex: true, addrIndex: true,
-        miningAddrs: [$builder], dataDir: $data, logDir: $logs}' \
+        miningAddrs: [$builder], dataDir: $data, logDir: $logs}
+       + (if $luser != "" then {rpcLimitUser: $luser, rpcLimitPass: $lpass} else {} end)' \
       >"$DIR/chain-configs/$CHAIN_ID/config.json"
     jq -n --arg id "$CHAIN_ID" '{($id): ["dogecoinvm"]}' >"$DIR/aliases.json"
 
@@ -137,9 +143,17 @@ export DOGECOIN_NETWORK=$DOGE_NETWORK
 EOF
 }
 
+cmd_run() {
+  [[ -n "${METALGO:-}" && -x "$METALGO" ]] || { log "set METALGO to a metalgo v1.13.5 binary"; exit 1; }
+  local flags=()
+  while IFS= read -r f; do flags+=("$f"); done < <(node_flags)
+  exec "$METALGO" "${flags[@]}"
+}
+
 case "${1:-}" in
   start) cmd_start ;;
   stop) stop_node ;;
   env) cmd_env ;;
-  *) echo "usage: $0 start|stop|env" >&2; exit 2 ;;
+  run) cmd_run ;;
+  *) echo "usage: $0 start|stop|env|run" >&2; exit 2 ;;
 esac
