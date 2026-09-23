@@ -83,6 +83,13 @@ async function refreshStatus() {
   try {
     const s = await api('/api/status');
     $('doge-height').textContent = s.dogecoinHeight.toLocaleString('en-US');
+    const sync = s.dogecoinSync;
+    $('sync-band').hidden = !(sync && sync.syncing);
+    if (sync && sync.syncing) {
+      $('sync-band').textContent =
+        `The bridge's Dogecoin node is still catching up (block ${s.dogecoinHeight.toLocaleString('en-US')} of ${sync.headers.toLocaleString('en-US')}). ` +
+        'Deposits are credited once it reaches the present.';
+    }
     $('vm-height').textContent = s.dogecoinvmHeight.toLocaleString('en-US');
     if (!s.audit) {
       $('verdict').textContent = 'The bridge cannot read both chains right now.';

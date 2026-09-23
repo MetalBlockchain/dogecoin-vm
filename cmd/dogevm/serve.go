@@ -41,6 +41,13 @@ type server struct {
 	registerLimit *rateLimit
 }
 
+// dogeSync is the part of Dogecoin Core's getblockchaininfo the page shows
+// while the node catches up; deposits are not seen until it has.
+type dogeSync struct {
+	Headers              int64   `json:"headers"`
+	VerificationProgress float64 `json:"verificationprogress"`
+}
+
 // snapshot is the bridge state, refreshed in the background so requests do
 // not each rescan both chains.
 type snapshot struct {
@@ -48,6 +55,7 @@ type snapshot struct {
 	audit      audit
 	vmHeight   int64
 	dogeHeight int64
+	dogeSync   dogeSync
 	updated    time.Time
 	err        string
 }
@@ -63,6 +71,7 @@ func (srv *server) refresh() {
 	}
 	_ = srv.vm.rpc.call(&snap.vmHeight, "getblockcount")
 	_ = srv.doge.rpc.call(&snap.dogeHeight, "getblockcount")
+	_ = srv.doge.rpc.call(&snap.dogeSync, "getblockchaininfo")
 
 	srv.mu.Lock()
 	srv.snapshot = snap
@@ -181,7 +190,13 @@ func (srv *server) status(*http.Request) (any, error) {
 	out := map[string]any{
 		"dogecoinvmHeight": snap.vmHeight,
 		"dogecoinHeight":   snap.dogeHeight,
-		"updated":          snap.updated.UTC().Format(time.RFC3339),
+		"dogecoinSync": map[string]any{
+			"headers":  snap.dogeSync.Headers,
+			"progress": snap.dogeSync.VerificationProgress,
+			// Dogecoin Core reports progress just under 1 when caught up.
+			"syncing": snap.dogeSync.Headers > 0 && snap.dogeHeight < snap.dogeSync.Headers-6,
+		},
+		"updated": snap.updated.UTC().Format(time.RFC3339),
 	}
 	if snap.err != "" {
 		out["error"] = snap.err

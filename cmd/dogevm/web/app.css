@@ -49,6 +49,15 @@ a { color: var(--vm); }
   text-align: center;
 }
 
+.sync-band {
+  max-width: none;
+  margin: 0;
+  padding: 0.5rem 1rem;
+  background: var(--coin-wash);
+  border-bottom: 1px solid var(--coin);
+  text-align: center;
+}
+
 /* Masthead */
 
 .masthead {
