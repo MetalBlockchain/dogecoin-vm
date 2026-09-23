@@ -115,8 +115,10 @@ func scanLine(line string) []string {
 // upstreamVector reports whether file is upstream btcd test data, whose
 // well-known keys are public, or this scanner's own test data.
 func upstreamVector(file string) bool {
-	if file == "scripts/secretscan/main_test.go" {
-		return true // the scanner's own fake secrets
+	switch file {
+	case "scripts/secretscan/main_test.go", // the scanner's own fake secrets
+		"cmd/dogevm/testdata/wallet-vectors.json": // keys are sha256 of public labels
+		return true
 	}
 	return strings.HasPrefix(file, "btcd/") &&
 		(strings.HasSuffix(file, "_test.go") || strings.Contains(file, "/testdata/") ||
