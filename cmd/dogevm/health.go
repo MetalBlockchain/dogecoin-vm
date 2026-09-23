@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -165,9 +168,50 @@ func allOK(checks []check) bool {
 	return true
 }
 
-// monitor runs the checks every interval and posts to webhook when a check
-// changes state, and again every remind while one is failing.
-func (h *healthChecker) monitor(interval, remind time.Duration, webhook string) {
+// alerter delivers monitor alerts.
+type alerter struct {
+	webhook       string // Slack or Discord incoming webhook
+	telegramToken string // Telegram bot token
+	telegramChat  string // Telegram chat ID
+}
+
+func (a alerter) send(msg string) {
+	if a.webhook != "" {
+		if err := postWebhook(a.webhook, msg); err != nil {
+			log.Printf("webhook: %v", err)
+		}
+	}
+	if a.telegramToken != "" && a.telegramChat != "" {
+		if err := postTelegram(a.telegramToken, a.telegramChat, msg); err != nil {
+			log.Printf("telegram: %v", err)
+		}
+	}
+}
+
+// postTelegram sends msg to a Telegram chat through a bot.
+func postTelegram(token, chatID, msg string) error {
+	body, _ := json.Marshal(map[string]any{
+		"chat_id": chatID, "text": msg, "disable_web_page_preview": true,
+	})
+	resp, err := http.Post("https://api.telegram.org/bot"+token+"/sendMessage", "application/json", bytes.NewReader(body))
+	if err != nil {
+		// The URL holds the token; do not log it.
+		return errors.New("request to Telegram failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		var res struct {
+			Description string `json:"description"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&res)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, res.Description)
+	}
+	return nil
+}
+
+// monitor runs the checks every interval and alerts when a check changes
+// state, and again every remind while one is failing.
+func (h *healthChecker) monitor(interval, remind time.Duration, alert alerter) {
 	last := map[string]bool{}
 	var lastAlert time.Time
 	for {
@@ -210,11 +254,7 @@ func (h *healthChecker) monitor(interval, remind time.Duration, webhook string) 
 				}
 			}
 			log.Print(msg)
-			if webhook != "" {
-				if err := postWebhook(webhook, msg); err != nil {
-					log.Printf("webhook: %v", err)
-				}
-			}
+			alert.send(msg)
 			lastAlert = time.Now()
 		}
 		time.Sleep(interval)
@@ -242,6 +282,9 @@ func cmdMonitor(args []string) error {
 	signersPath := fs.String("signers", "", "peg signer set file (public keys are enough)")
 	depositsPath := fs.String("deposits", "", "deposit address registry (default: deposits.json next to -signers)")
 	webhook := fs.String("webhook", "", "Slack or Discord incoming webhook URL for alerts")
+	telegramTokenFile := fs.String("telegram-token-file", "", "file holding a Telegram bot token, for alerts")
+	telegramChat := fs.String("telegram-chat", "", "Telegram chat ID to send alerts to")
+	test := fs.Bool("test-alert", false, "send a test alert and exit")
 	interval := fs.Duration("interval", time.Minute, "time between checks")
 	remind := fs.Duration("remind", 6*time.Hour, "repeat an alert this often while a check fails")
 	once := fs.Bool("once", false, "run the checks once, print them, and exit non-zero if one fails")
@@ -274,6 +317,18 @@ func cmdMonitor(args []string) error {
 		}
 		return nil
 	}
-	h.monitor(*interval, *remind, *webhook)
+	alert := alerter{webhook: *webhook, telegramChat: *telegramChat}
+	if *telegramTokenFile != "" {
+		token, err := os.ReadFile(*telegramTokenFile)
+		if err != nil {
+			return err
+		}
+		alert.telegramToken = strings.TrimSpace(string(token))
+	}
+	if *test {
+		alert.send("DogecoinVM bridge: test alert. Alerts are working.")
+		return nil
+	}
+	h.monitor(*interval, *remind, alert)
 	return nil
 }

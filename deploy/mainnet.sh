@@ -13,8 +13,8 @@
 # Dogecoin Core (dogecoind-main.service) may still be syncing: deposits are
 # credited once it has caught up.
 #
-# Alerts go to the Slack or Discord webhook URL in $SECRETS/alert-webhook, if
-# present; https://<domain>/api/health serves the same checks for uptime
+# Alerts go to the Slack or Discord webhook URL in $SECRETS/alert-webhook, and
+# to Telegram if $SECRETS/telegram-token and $SECRETS/telegram-chat exist; https://<domain>/api/health serves the same checks for uptime
 # monitors.
 #
 # Launch is safe to re-run; it reuses the chain it created. It caps what the
@@ -104,10 +104,13 @@ ENV
 -max-deposit $(koinu "$MAX_DEPOSIT") -max-circulating $(koinu "$MAX_CIRCULATING") -doge-fee $(koinu 0.1)"
   local health="-validation-id $(jq -r .validationID "$STATE/chain.json") -pchain-uri $NODE_API/ext/bc/P"
   [[ -f "$SECRETS/alert-webhook" ]] && health="$health -webhook $(cat "$SECRETS/alert-webhook")"
+  local alerts=""
+  [[ -f "$SECRETS/telegram-token" && -f "$SECRETS/telegram-chat" ]] &&
+    alerts="-telegram-token-file $SECRETS/telegram-token -telegram-chat $(cat "$SECRETS/telegram-chat")"
   for unit in bridge web monitor; do
     local exec="$BIN/dogevm bridge $policy -interval 30s"
     [[ $unit == web ]] && exec="$BIN/dogevm serve $policy ${health% -webhook*} -listen 127.0.0.1:8081"
-    [[ $unit == monitor ]] && exec="$BIN/dogevm monitor $policy $health"
+    [[ $unit == monitor ]] && exec="$BIN/dogevm monitor $policy $health $alerts"
     cat >"/etc/systemd/system/dogevm-$unit-main.service" <<UNIT
 [Unit]
 Description=DogecoinVM $unit (Metal mainnet, Dogecoin mainnet)
