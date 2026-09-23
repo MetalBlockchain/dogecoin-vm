@@ -171,6 +171,22 @@ type dogeChain struct {
 	rpc *rpcClient
 }
 
+// importTx adds one transaction, already in a block, to the wallet without a
+// rescan: this node proves it is in the chain (gettxoutproof) and the wallet
+// takes it (importprunedfunds). It lets a signer that started watching an
+// address late see a payment made to it before then.
+func (c *dogeChain) importTx(txid chainhash.Hash) error {
+	var raw string
+	if err := c.rpc.call(&raw, "getrawtransaction", txid.String(), 0); err != nil {
+		return err
+	}
+	var proof string
+	if err := c.rpc.call(&proof, "gettxoutproof", []string{txid.String()}); err != nil {
+		return err
+	}
+	return c.rpc.call(nil, "importprunedfunds", raw, proof)
+}
+
 // watch imports address into the Dogecoin Core wallet as watch-only.
 func (c *dogeChain) watch(address btcutil.Address, rescan bool) error {
 	return c.rpc.call(nil, "importaddress", address.EncodeAddress(), "dogevm", rescan)

@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/paulgnz/dogecoin-vm/btcd/btcutil"
@@ -533,14 +534,19 @@ func registerDeposit(b *bridge, dest destination) (btcutil.Address, error) {
 			}
 		}
 		// Tell the remote signers now, so their nodes watch the address
-		// before anything arrives at it.
+		// before anything arrives at it. A signer that misses this learns
+		// of the address from the first proposal that involves it.
+		var wg sync.WaitGroup
 		for _, r := range b.cosigners {
+			wg.Add(1)
 			go func(r *remoteSigner) {
+				defer wg.Done()
 				if err := r.register(dest); err != nil {
 					b.logf("telling signer %s about deposit address %s: %v", r.URL, addr.EncodeAddress(), err)
 				}
 			}(r)
 		}
+		wg.Wait()
 	}
 	return addr, nil
 }
@@ -551,6 +557,7 @@ func cmdDepositAddress(args []string) error {
 	signersPath := fs.String("signers", "", "peg signer set file (public keys are enough)")
 	depositsPath := fs.String("deposits", "", "deposit address registry (default: deposits.json next to -signers)")
 	to := fs.String("to", "", "DogecoinVM address to credit")
+	b := bridgeFlags(fs) // for -cosigners, to tell the signers
 	if err := parseFlags(fs, &s, args); err != nil {
 		return err
 	}
@@ -561,7 +568,7 @@ func cmdDepositAddress(args []string) error {
 	if err != nil {
 		return err
 	}
-	b := &bridge{registry: registryFor(*depositsPath, *signersPath)}
+	b.registry = registryFor(*depositsPath, *signersPath)
 	if err := b.connect(&s, signers); err != nil {
 		return err
 	}

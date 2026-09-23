@@ -457,6 +457,9 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 	if err != nil {
 		return nil, nil, 0, err
 	}
+	if s, err = c.catchUp(s, req, tx); err != nil {
+		return nil, nil, 0, err
+	}
 	if a := b.audit(s); !a.solvent() {
 		return nil, nil, 0, fmt.Errorf("%w (%+v)", errInsolvent, a)
 	}
@@ -612,6 +615,52 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		return nil, nil, 0, fmt.Errorf("signing would exceed this signer's %s DOGE daily limit", formatDoge(c.maxDaily))
 	}
 	return tx, redeems, value, nil
+}
+
+// catchUp handles a signer that started watching a deposit address after a
+// payment to it: its wallet has not seen the deposit, or an output the
+// proposal spends. It has its own Dogecoin node prove each such transaction is
+// in the chain and adds it to the wallet, then reloads. Nothing is taken from
+// the coordinator: a transaction that is not in this node's chain fails.
+func (c *cosigner) catchUp(s *pegState, req signRequest, tx *wire.MsgTx) (*pegState, error) {
+	dc, ok := c.b.doge.(*dogeChain)
+	if !ok {
+		return s, nil
+	}
+	var missing []chainhash.Hash
+	switch req.Action.Kind {
+	case actionRelease, actionRefund:
+		op, err := parseOutPoint(req.Action.Deposit)
+		if err != nil {
+			return nil, err
+		}
+		_, credit := findDeposit(s.deposits, op)
+		_, held := findDeposit(s.held, op)
+		_, released := s.released[op]
+		if !credit && !held && !released {
+			missing = append(missing, op.Hash)
+		}
+	}
+	if req.Chain == chainDogecoin {
+		known := map[wire.OutPoint]bool{}
+		for _, u := range s.lockedUTXOs {
+			known[u.outPoint] = true
+		}
+		for _, in := range tx.TxIn {
+			if !known[in.PreviousOutPoint] {
+				missing = append(missing, in.PreviousOutPoint.Hash)
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return s, nil
+	}
+	for _, txid := range missing {
+		if err := dc.importTx(txid); err != nil {
+			c.b.logf("could not import %v from this signer's Dogecoin node: %v", txid, err)
+		}
+	}
+	return c.b.load()
 }
 
 // refundApproved checks the operator listed this refund in the approvals
