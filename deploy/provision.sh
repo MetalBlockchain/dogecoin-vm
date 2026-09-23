@@ -122,7 +122,9 @@ After=network-online.target
 
 [Service]
 User=dogevm
-Environment=METALGO=$METALGO DEVNET_DIR=$STATE
+# The plugin and btcd derive default paths from HOME.
+Environment=HOME=$HOME_DIR METALGO=$METALGO DEVNET_DIR=$STATE
+WorkingDirectory=$HOME_DIR
 ExecStart=$HOME_DIR/src/scripts/devnet.sh run
 Restart=on-failure
 TimeoutStopSec=120
@@ -151,6 +153,7 @@ Requires=dogevm-node.service dogecoind.service
 
 [Service]
 User=dogevm
+Environment=HOME=$HOME_DIR
 EnvironmentFile=$STATE/bridge.env
 ExecStart=/usr/local/bin/dogevm bridge -signers $STATE/signers.json -confirmations 6 -interval 30s
 Restart=always
