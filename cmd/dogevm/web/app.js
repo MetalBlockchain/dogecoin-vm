@@ -133,7 +133,9 @@ async function refreshStatus() {
     $('deposit-sync').hidden = !syncing;
     $('doge-height').textContent = s.dogecoinHeight.toLocaleString('en-US');
     if (syncing) {
-      const pct = Math.min(99, Math.floor((s.dogecoinHeight / sync.headers) * 100));
+      // Dogecoin Core's progress is weighted by transactions. Early blocks
+      // are nearly empty, so a block count races ahead and then stalls.
+      const pct = Math.min(99, Math.floor(sync.progress * 100));
       $('doge-height-label').textContent = 'Dogecoin node syncing';
       $('sync-fill').style.width = `${pct}%`;
       $('sync-of').textContent = `of ${sync.headers.toLocaleString('en-US')} (${pct}%)`;
