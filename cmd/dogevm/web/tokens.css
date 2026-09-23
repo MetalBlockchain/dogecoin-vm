@@ -1,0 +1,107 @@
+/* The site's colours and type, shared by every page. Colour follows the
+   chain throughout: gold is Dogecoin, teal is DogecoinVM, violet is planned
+   work. Light is the default; data-theme="dark" forces dark, and
+   data-theme="system" follows the viewer's system setting. */
+
+:root {
+  --bg: #f2f4f1;
+  --surface: #ffffff;
+  --surface-sunk: #eaeee9;
+  --ink: #16233a;
+  --ink-soft: #4a576b;
+  --rule: #cdd5cf;
+
+  --coin: #b8912a;          /* Dogecoin */
+  --coin-ink: #7d5f10;      /* Dogecoin, as text */
+  --coin-wash: #f4ecd6;
+  --vm: #1d6f6a;            /* DogecoinVM */
+  --vm-ink: #1d6f6a;
+  --vm-wash: #d9ece9;
+  --plan: #5b5f86;          /* planned work */
+  --plan-wash: #e4e5f1;
+
+  --band: #f2b33d;
+  --band-ink: #16233a;
+  --error: #b3261e;
+  --ok: #1d6f6a;
+
+  /* The peg panel stays dark in both themes. */
+  --panel: #16233a;
+  --panel-ink: #f2f4f1;
+  --panel-soft: #c3ccd8;
+  --panel-track: rgba(242, 244, 241, 0.13);
+  --gauge-doge: #c79c2e;
+  --gauge-vm: #3fa39a;
+  --gauge-doge-ink: #e6c872;
+  --gauge-vm-ink: #86d6cd;
+  --panel-bad: #ff9b92;
+
+  --btn: #16233a;
+  --btn-ink: #f2f4f1;
+  --focus: #16233a;
+  --control-border: #7c8a86;
+
+  --sans: "Schibsted Grotesk", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* A major-third scale from 16px. */
+  --step--1: 0.875rem;
+  --step-0: 1rem;
+  --step-1: 1.25rem;
+  --step-2: 1.563rem;
+  --step-3: 1.953rem;
+  --step-4: 2.441rem;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --bg: #0d1524;
+    --surface: #15213a;
+    --surface-sunk: #0f192d;
+    --ink: #e7ecf2;
+    --ink-soft: #a3afc0;
+    --rule: #2a3a57;
+    --coin: #d4ab45;
+    --coin-ink: #e2c46d;
+    --coin-wash: rgba(212, 171, 69, 0.13);
+    --vm: #4fb3a9;
+    --vm-ink: #7fd0c7;
+    --vm-wash: rgba(79, 179, 169, 0.13);
+    --plan: #b7badf;
+    --plan-wash: rgba(150, 155, 210, 0.14);
+    --error: #ff9b92;
+    --ok: #7fd0c7;
+    --panel: #1c2c4b;
+    --btn: #e7ecf2;
+    --btn-ink: #0d1524;
+    --focus: #f2b33d;
+    --control-border: #5a6d8f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1524;
+  --surface: #15213a;
+  --surface-sunk: #0f192d;
+  --ink: #e7ecf2;
+  --ink-soft: #a3afc0;
+  --rule: #2a3a57;
+  --coin: #d4ab45;
+  --coin-ink: #e2c46d;
+  --coin-wash: rgba(212, 171, 69, 0.13);
+  --vm: #4fb3a9;
+  --vm-ink: #7fd0c7;
+  --vm-wash: rgba(79, 179, 169, 0.13);
+  --plan: #b7badf;
+  --plan-wash: rgba(150, 155, 210, 0.14);
+  --error: #ff9b92;
+  --ok: #7fd0c7;
+  --panel: #1c2c4b;
+  --btn: #e7ecf2;
+  --btn-ink: #0d1524;
+  --focus: #f2b33d;
+  --control-border: #5a6d8f;
+  color-scheme: dark;
+}

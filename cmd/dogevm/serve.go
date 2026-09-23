@@ -755,13 +755,15 @@ func cmdServe(args []string) error {
 		return err
 	}
 	mux := http.NewServeMux()
-	mux.Handle("GET /", http.FileServerFS(static))
-	// The site's pages at clean URLs. /explorer is the bridge page in
-	// explorer mode; /download/… (the Mac app's files) is served by Caddy.
-	for path, file := range map[string]string{
-		"/explorer": "index.html", "/roadmap": "roadmap.html", "/docs": "docs.html", "/download": "download.html",
-	} {
-		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, static, file) })
+	// A wallet should always run its current code, so browsers check for a
+	// newer file each time rather than reusing a cached one.
+	files := http.FileServerFS(static)
+	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		files.ServeHTTP(w, r)
+	}))
+	if err := handlePages(mux); err != nil {
+		return err
 	}
 	mux.HandleFunc("GET /api/info", handle(srv.info))
 	mux.HandleFunc("GET /api/status", handle(srv.status))

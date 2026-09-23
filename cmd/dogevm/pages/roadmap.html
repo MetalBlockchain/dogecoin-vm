@@ -1,32 +1,8 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DogecoinVM roadmap</title>
-  <meta name="description" content="What's running on DogecoinVM, how the DOGE bridge works, its known limits, and the plan to close them.">
-  <link rel="icon" href="dogecoin.svg" type="image/svg+xml">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@700&family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="site.css">
+{{define "head"}}
   <link rel="stylesheet" href="roadmap.css">
-  <script src="theme.js"></script>
-  <script type="module" src="site.js"></script>
-</head>
-<body>
-  <a class="skip-link" href="#content">Skip to content</a>
-  <header class="site-header">
-    <a class="site-brand" href="/"><img src="dogecoin.svg" alt="" width="32" height="32">DogecoinVM</a>
-    <nav class="site-nav" aria-label="Site">
-      <a href="/">Bridge</a>
-      <a href="/explorer">Explorer</a>
-      <a href="/roadmap" aria-current="page">Roadmap</a>
-      <a href="/docs">Docs</a>
-      <a class="nav-cta" href="/download">Download for Mac</a>
-    </nav>
-  </header>
-  <span id="content" tabindex="-1"></span>
+{{end}}
+{{define "fonts"}}<link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@700&family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">{{end}}
+{{define "main"}}
 <main class="page">
   <div class="hero">
   <div>
@@ -249,13 +225,4 @@
   </ul>
   <p class="note">This roadmap describes engineering work and its order; it isn't a schedule.</p>
 </main>
-  <footer class="site-footer">
-    <p>Developed by Paul Grey @ <a href="https://metallicus.com">metallicus.com</a>.</p>
-    <nav aria-label="More">
-      <a href="https://github.com/paulgnz/dogecoin-vm">Source</a>
-      <a href="https://github.com/paulgnz/dogecoin-vm/security/advisories/new">Report a security issue</a>
-      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Change theme">Theme: light</button>
-    </nav>
-  </footer>
-</body>
-</html>
+{{end}}

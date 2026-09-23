@@ -159,16 +159,23 @@ func TestEmbeddedImportsResolve(t *testing.T) {
 	require.Greater(t, checked, 5)
 }
 
-// TestPageIDsUnique checks no two elements of the page share an id: the page
-// finds elements by id, and a duplicate once hid the wallet's unlock button
-// behind an unrelated figure.
+// TestPageIDsUnique checks no two elements of a page share an id: the pages
+// find elements by id, and a duplicate once hid the wallet's unlock button
+// behind an unrelated figure. It also checks each page marks itself, and
+// only itself, as the current one in the menu.
 func TestPageIDsUnique(t *testing.T) {
-	page, err := fs.ReadFile(webFiles, "web/index.html")
+	pages, err := renderPages()
 	require.NoError(t, err)
-	seen := map[string]bool{}
-	for _, m := range regexp.MustCompile(`\sid="([^"]+)"`).FindAllStringSubmatch(string(page), -1) {
-		require.False(t, seen[m[1]], "id %q is used twice in index.html", m[1])
-		seen[m[1]] = true
+	require.Len(t, pages, len(sitePages))
+	for path, page := range pages {
+		seen := map[string]bool{}
+		for _, m := range regexp.MustCompile(`\sid="([^"]+)"`).FindAllStringSubmatch(string(page), -1) {
+			require.False(t, seen[m[1]], "id %q is used twice on %s", m[1], path)
+			seen[m[1]] = true
+		}
+		current := regexp.MustCompile(`href="([^"]+)" aria-current="page"`).FindAllStringSubmatch(string(page), -1)
+		require.Len(t, current, 1, path)
+		require.Equal(t, path, current[0][1])
 	}
-	require.Greater(t, len(seen), 50)
+	require.Greater(t, len(regexp.MustCompile(`\sid="`).FindAll(pages["/"], -1)), 50)
 }

@@ -152,9 +152,10 @@ async function refreshBlocks() {
 // announce the new page.
 function page(gen, title, ...body) {
   if (gen !== routeGen) return;
+  document.title = `${title}: DogecoinVM explorer`;
   const heading = el('h2', { tabindex: '-1' }, title);
   $('explorer-view').replaceChildren(
-    el('p', {}, el('a', { href: '#' }, onExplorerPage() ? '← Back to the explorer' : '← Back to the bridge')),
+    el('p', {}, el('a', { href: '#' }, '← Back to the explorer')),
     heading, ...body.filter((b) => b !== null && b !== undefined));
   return heading;
 }
@@ -227,29 +228,21 @@ async function showAddress(gen, addr) {
   }
 }
 
-// The same page serves /, the bridge (wallet and peg), and /explorer
-// (activity, reserves, blocks and search). Transaction, block and address
-// pages (#/tx/…) open on either.
-const onExplorerPage = () => location.pathname.replace(/\/$/, '') === '/explorer';
-
+// The explorer's front page lists activity, reserves and blocks; a
+// transaction, block or address replaces it.
 function route() {
   const gen = ++routeGen;
   const m = location.hash.match(/^#\/(tx|block|address)\/(.+)$/);
-  const explorer = $('explorer-view');
-  const bridgeParts = [$('intro'), $('home')];
-  const explorerParts = [$('explorer-heading'), $('home-lower')];
-  const onExplorer = onExplorerPage();
-  $(onExplorer ? 'nav-explorer' : 'nav-bridge').setAttribute('aria-current', 'page');
-  $(onExplorer ? 'nav-bridge' : 'nav-explorer').removeAttribute('aria-current');
-  document.title = onExplorer ? 'DogecoinVM explorer' : 'DogecoinVM bridge';
+  const view = $('explorer-view');
+  const front = [$('explorer-heading'), $('explorer-lists')];
   if (!m) {
-    explorer.hidden = true;
-    bridgeParts.forEach((n) => { n.hidden = onExplorer; });
-    explorerParts.forEach((n) => { n.hidden = !onExplorer; });
+    view.hidden = true;
+    front.forEach((n) => { n.hidden = false; });
+    document.title = 'DogecoinVM explorer';
     return;
   }
-  explorer.hidden = false;
-  [...bridgeParts, ...explorerParts].forEach((n) => { n.hidden = true; });
+  view.hidden = false;
+  front.forEach((n) => { n.hidden = true; });
   window.scrollTo(0, 0);
   let id;
   try {
@@ -276,8 +269,12 @@ async function search(q) {
   else if (q) location.hash = `#/address/${encodeURIComponent(q)}`;
 }
 
-export function startExplorer(networkInfo) {
-  info = networkInfo;
+async function start() {
+  try {
+    info = await api('/api/info');
+  } catch {
+    info = {}; // Dogecoin links then show as plain text
+  }
   $('search-form').addEventListener('submit', (e) => {
     e.preventDefault();
     search($('search').value);
@@ -289,3 +286,5 @@ export function startExplorer(networkInfo) {
   refresh();
   setInterval(refresh, 15000);
 }
+
+start();

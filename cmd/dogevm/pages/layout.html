@@ -1,0 +1,43 @@
+{{/* The frame of every page: head, menu and footer. Each page's file
+     defines "head" (its stylesheets and scripts) and "main". */}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <meta name="description" content="{{.Description}}">
+  <link rel="icon" href="dogecoin.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  {{block "fonts" .}}<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">{{end}}
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="site.css">
+  <script src="theme.js"></script>
+  <script type="module" src="site.js"></script>
+{{template "head" .}}
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header">
+    <a class="site-brand" href="/"><img src="dogecoin.svg" alt="" width="32" height="32">DogecoinVM</a>
+    <nav class="site-nav" aria-label="Site">
+      {{- range .Nav}}
+      <a {{if .CTA}}class="nav-cta" {{end}}href="{{.Path}}"{{if eq .Path $.Path}} aria-current="page"{{end}}>{{.Label}}{{if .CTA}}<span class="nav-more">&nbsp;for Mac</span>{{end}}</a>
+      {{- end}}
+    </nav>
+  </header>
+  <span id="content" tabindex="-1"></span>
+
+{{template "main" .}}
+
+  <footer class="site-footer">
+    <p>Developed by Paul Grey @ <a href="https://metallicus.com">metallicus.com</a>.</p>
+    <nav aria-label="More">
+      <a href="https://github.com/paulgnz/dogecoin-vm">Source</a>
+      <a href="https://github.com/paulgnz/dogecoin-vm/security/advisories/new">Report a security issue</a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Change theme">Theme: light</button>
+    </nav>
+  </footer>
+</body>
+</html>

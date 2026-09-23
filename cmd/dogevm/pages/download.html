@@ -1,34 +1,8 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DogecoinVM Wallet for Mac</title>
-  <meta name="description" content="A native Mac wallet for Dogecoin and DogecoinVM: review before you sign, Touch ID for every payment, signed and notarized by Apple.">
-  <link rel="icon" href="dogecoin.svg" type="image/svg+xml">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="app.css">
-  <link rel="stylesheet" href="site.css">
-  <script src="theme.js"></script>
-  <script type="module" src="site.js"></script>
+{{define "head"}}
   <script type="module" src="download.js"></script>
-</head>
-<body>
-  <a class="skip-link" href="#content">Skip to content</a>
-  <header class="site-header">
-    <a class="site-brand" href="/"><img src="dogecoin.svg" alt="" width="32" height="32">DogecoinVM</a>
-    <nav class="site-nav" aria-label="Site">
-      <a href="/">Bridge</a>
-      <a href="/explorer">Explorer</a>
-      <a href="/roadmap">Roadmap</a>
-      <a href="/docs">Docs</a>
-      <a class="nav-cta" href="/download" aria-current="page">Download for Mac</a>
-    </nav>
-  </header>
-
-  <main class="page" id="content" tabindex="-1">
+{{end}}
+{{define "main"}}
+  <main class="page">
     <div class="download-hero">
       <img src="icon-512.png" alt="" width="112" height="112">
       <div>
@@ -68,14 +42,4 @@
 
     <div class="callout"><p><strong>Beta.</strong> The app works with real DOGE and the bridge's beta limits. Keep amounts small, and back up your key from the app's Settings.</p></div>
   </main>
-
-  <footer class="site-footer">
-    <p>Developed by Paul Grey @ <a href="https://metallicus.com">metallicus.com</a>.</p>
-    <nav aria-label="More">
-      <a href="https://github.com/paulgnz/dogecoin-vm">Source</a>
-      <a href="https://github.com/paulgnz/dogecoin-vm/security/advisories/new">Report a security issue</a>
-      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Change theme">Theme: light</button>
-    </nav>
-  </footer>
-</body>
-</html>
+{{end}}

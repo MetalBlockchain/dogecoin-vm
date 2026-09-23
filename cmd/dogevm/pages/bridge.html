@@ -1,11 +1,4 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DogecoinVM bridge</title>
-  <meta name="description" content="Move DOGE between Dogecoin and DogecoinVM on Metal Blockchain, one for one.">
-  <link rel="icon" href="dogecoin.svg" type="image/svg+xml">
+{{define "head"}}
   <!-- Installable as an app. There is deliberately no service worker: a
        wallet should always load its current code from the server. -->
   <link rel="manifest" href="manifest.webmanifest">
@@ -21,30 +14,12 @@
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://metaldoge.com/og.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="app.css">
-  <link rel="stylesheet" href="site.css">
-  <script src="theme.js"></script>
-  <script type="module" src="site.js"></script>
   <script type="module" src="app.js"></script>
-</head>
-<body>
-  <a class="skip-link" href="#content">Skip to content</a>
-  <header class="site-header">
-    <a class="site-brand" href="/"><img src="dogecoin.svg" alt="" width="32" height="32">DogecoinVM</a>
-    <nav class="site-nav" aria-label="Site">
-      <a href="/" id="nav-bridge">Bridge</a>
-      <a href="/explorer" id="nav-explorer">Explorer</a>
-      <a href="/roadmap">Roadmap</a>
-      <a href="/docs">Docs</a>
-      <a class="nav-cta" href="/download">Download for Mac</a>
-    </nav>
-  </header>
+{{end}}
+{{define "main"}}
   <p class="network-band" id="network-band" role="note" hidden></p>
   <p class="pause-band" id="pause-band" role="alert" hidden></p>
-  <span id="content" tabindex="-1"></span>
 
   <section class="intro" id="intro" aria-labelledby="hero-title">
     <h1 class="hero-title" id="hero-title">Use DOGE on DogecoinVM <span class="beta-pill" id="network-name">beta</span></h1>
@@ -59,10 +34,6 @@
       <li><span><strong>Withdraw</strong> back to Dogecoin. The bridge pays it once it's final on DogecoinVM.</span></li>
     </ol>
   </section>
-
-  <h1 class="page-heading" id="explorer-heading" hidden>Explorer</h1>
-
-  <main class="explorer-view" id="explorer-view" hidden></main>
 
   <main class="layout" id="home">
     <aside class="peg" aria-labelledby="peg-title">
@@ -260,41 +231,4 @@
       </div>
     </section>
   </main>
-
-  <div class="lower" id="home-lower">
-    <section class="board activity" aria-labelledby="activity-title">
-      <h2 id="activity-title">Bridge activity</h2>
-      <p class="board-lede">Every move across the bridge, with the transaction on each chain. Dogecoin transactions open on a public Dogecoin explorer.</p>
-      <ol class="moves" id="activity"><li class="empty">Nothing has crossed the bridge yet.</li></ol>
-    </section>
-
-    <section class="board reserves" aria-labelledby="reserves-title">
-      <h2 id="reserves-title">Proof of reserves</h2>
-      <p class="board-lede">The DOGE backing DogecoinVM, output by output on Dogecoin. Each one can be checked on a public explorer.</p>
-      <dl class="reserve-totals">
-        <div><dt>Locked on Dogecoin</dt><dd class="amount" id="res-locked">…</dd></div>
-        <div><dt>Circulating on DogecoinVM</dt><dd class="amount" id="res-circulating">…</dd></div>
-      </dl>
-      <ol class="outputs" id="reserve-outputs"></ol>
-    </section>
-
-    <section class="board blocks" aria-labelledby="blocks-title">
-      <h2 id="blocks-title">Explore DogecoinVM</h2>
-      <form class="search" id="search-form" role="search">
-        <label for="search" class="visually-hidden">Search DogecoinVM</label>
-        <input id="search" autocomplete="off" spellcheck="false" placeholder="Txid, block or address">
-      </form>
-      <ol class="block-list" id="blocks"></ol>
-    </section>
-  </div>
-
-  <footer class="site-footer">
-    <p>Developed by Paul Grey @ <a href="https://metallicus.com">metallicus.com</a>.</p>
-    <nav aria-label="More">
-      <a href="https://github.com/paulgnz/dogecoin-vm">Source</a>
-      <a href="https://github.com/paulgnz/dogecoin-vm/security/advisories/new">Report a security issue</a>
-      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Change theme">Theme: light</button>
-    </nav>
-  </footer>
-</body>
-</html>
+{{end}}

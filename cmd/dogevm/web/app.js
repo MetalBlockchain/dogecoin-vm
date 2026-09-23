@@ -1,5 +1,4 @@
 import * as chain from './chain.js';
-import { startExplorer } from './explorer.js';
 import * as passkey from './passkey.js';
 
 const $ = (id) => document.getElementById(id);
@@ -58,7 +57,7 @@ function showResult(el, message, ok, txid, network = 'vm') {
   if (txid) {
     // The full transaction, in the right explorer, to check the outcome.
     const a = document.createElement('a');
-    a.href = network === 'doge' ? `https://blockchair.com/dogecoin/transaction/${txid}` : `#/tx/${txid}`;
+    a.href = network === 'doge' ? `https://blockchair.com/dogecoin/transaction/${txid}` : `/explorer#/tx/${txid}`;
     if (network === 'doge') { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
     a.textContent = txid;
     a.className = 'mono';
@@ -811,7 +810,6 @@ async function start() {
   }
   renderKey();
   refreshStatus();
-  startExplorer(info);
   setInterval(() => {
     refreshStatus();
     refreshWallet();
@@ -821,4 +819,7 @@ async function start() {
   }, 15000);
 }
 
-start();
+// Transaction, block and address pages used to open on this page; they're
+// on the explorer now.
+if (/^#\/(tx|block|address)\//.test(location.hash)) location.replace(`/explorer${location.hash}`);
+else start();
