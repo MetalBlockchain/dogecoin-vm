@@ -132,6 +132,7 @@ UNIT
   # metaldoge.com serves mainnet; the testnet stack is retired.
   cat >/etc/caddy/Caddyfile <<CADDY
 $DOMAIN {
+	header Strict-Transport-Security "max-age=31536000"
 	handle /rpc {
 		rewrite * /ext/bc/$chain/rpc
 		reverse_proxy 127.0.0.1:9660 {

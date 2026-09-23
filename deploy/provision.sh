@@ -192,6 +192,7 @@ log "Caddy"
 site() {
   cat <<SITE
 $1 {
+	header Strict-Transport-Security "max-age=31536000"
 	handle /rpc {
 		rewrite * /ext/bc/$CHAIN_ID/rpc
 		reverse_proxy 127.0.0.1:9650 {

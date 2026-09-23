@@ -90,15 +90,19 @@ func (h *healthChecker) bridgeLiveness(s *pegState) check {
 func (h *healthChecker) dogecoinNode() check {
 	rpc := h.b.doge.(*dogeChain).rpc
 	var info struct {
-		Blocks        int64  `json:"blocks"`
-		Headers       int64  `json:"headers"`
-		BestBlockHash string `json:"bestblockhash"`
+		Blocks               int64   `json:"blocks"`
+		Headers              int64   `json:"headers"`
+		BestBlockHash        string  `json:"bestblockhash"`
+		VerificationProgress float64 `json:"verificationprogress"`
 	}
 	if err := rpc.call(&info, "getblockchaininfo"); err != nil {
 		return check{"dogecoin", false, "Dogecoin Core is not answering: " + err.Error()}
 	}
 	if info.Blocks < info.Headers-6 {
-		return check{"dogecoin", false, fmt.Sprintf("syncing: block %d of %d", info.Blocks, info.Headers)}
+		// Progress is by transactions: recent blocks are full, so it is a
+		// better guide than the block count.
+		return check{"dogecoin", false, fmt.Sprintf("still syncing, %.0f%% done (block %d of %d); deposits are credited once it catches up",
+			info.VerificationProgress*100, info.Blocks, info.Headers)}
 	}
 	var header struct {
 		Time int64 `json:"time"`

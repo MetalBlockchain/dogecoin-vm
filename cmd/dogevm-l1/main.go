@@ -7,6 +7,8 @@
 //	dogevm-l1 create -key p-chain-key.json -genesis genesis.json -node-uri http://127.0.0.1:9660
 //	    create the subnet and chain and convert them to an L1 validated by the
 //	    node at -node-uri, printing the IDs as JSON
+//	dogevm-l1 node-id -cert staker.crt
+//	    the NodeID a node's staking certificate gives it (to check a backup)
 //
 // -uri is the P-Chain API to use (default: -node-uri).
 package main
@@ -14,6 +16,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,6 +27,7 @@ import (
 
 	"github.com/MetalBlockchain/metalgo/api/info"
 	"github.com/MetalBlockchain/metalgo/ids"
+	"github.com/MetalBlockchain/metalgo/staking"
 	"github.com/MetalBlockchain/metalgo/utils/constants"
 	"github.com/MetalBlockchain/metalgo/utils/crypto/secp256k1"
 	"github.com/MetalBlockchain/metalgo/utils/formatting/address"
@@ -60,6 +64,8 @@ func main() {
 		err = cmdImport(os.Args[2:])
 	case "create":
 		err = cmdCreate(os.Args[2:])
+	case "node-id":
+		err = cmdNodeID(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
@@ -116,6 +122,27 @@ func cmdKey(args []string) error {
 		return err
 	}
 	fmt.Println(addr)
+	return nil
+}
+
+// cmdNodeID prints the NodeID of a staking certificate.
+func cmdNodeID(args []string) error {
+	fs := flag.NewFlagSet("node-id", flag.ExitOnError)
+	certPath := fs.String("cert", "", "the node's staking certificate (staker.crt)")
+	_ = fs.Parse(args)
+	raw, err := os.ReadFile(*certPath)
+	if err != nil {
+		return err
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return errors.New("not a PEM certificate")
+	}
+	cert, err := staking.ParseCertificate(block.Bytes)
+	if err != nil {
+		return err
+	}
+	fmt.Println(ids.NodeIDFromCert(cert))
 	return nil
 }
 

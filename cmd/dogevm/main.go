@@ -49,6 +49,7 @@ Peg (users):
 Bridge (peg signers):
   dogevm signers -required M -total N -out FILE
       create a signer set, and print the peg addresses and genesis config
+  dogevm signers-check -signers FILE          check a signer set's private keys match it; print its peg addresses
   dogevm bridge -signers FILE [-once]         run the bridge
   dogevm audit -signers FILE                  check the peg is fully backed
   dogevm refund -signers FILE -list           deposits that are held or not yet credited
@@ -131,6 +132,7 @@ func main() {
 		"signer":          cmdSigner,
 		"signer-key":      cmdSignerKey,
 		"signer-setup":    cmdSignerSetup,
+		"signers-check":   cmdSignersCheck,
 	}
 	run, ok := commands[cmd]
 	if !ok {
@@ -365,6 +367,41 @@ func cmdSigners(args []string) error {
 		"dogecoinvmReserve":    vmAddr.EncodeAddress(),
 		"dogecoinPegAddress":   dogeAddr.EncodeAddress(),
 		"genesisConfigSnippet": map[string]any{"pegReserveAddress": vmAddr.EncodeAddress(), "pegReserveBlocks": *blocks},
+	})
+	return nil
+}
+
+// cmdSignersCheck checks every private key in a signer set belongs to it, and
+// prints the peg addresses the set controls. Restoring a backup uses it to
+// show the restored keys are the ones holding the peg.
+func cmdSignersCheck(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("signers-check", flag.ExitOnError)
+	signersPath := fs.String("signers", "", "peg signer set file")
+	if err := parseFlags(fs, &s, args); err != nil {
+		return err
+	}
+	if err := required(map[string]string{"signers": *signersPath}); err != nil {
+		return err
+	}
+	signers, err := readSignerSet(*signersPath)
+	if err != nil {
+		return err
+	}
+	for i, key := range signers.privKeys {
+		if signers.indexOf(key.PubKey()) < 0 {
+			return fmt.Errorf("private key %d is not one of the set's public keys", i)
+		}
+	}
+	vmAddr, _ := signers.address(s.vmParams)
+	dogeAddr, _ := signers.address(s.dogeParams)
+	printJSON(map[string]any{
+		"required":           signers.Required,
+		"publicKeys":         len(signers.PublicKeys),
+		"privateKeys":        len(signers.privKeys),
+		"dogecoinPegAddress": dogeAddr.EncodeAddress(),
+		"dogecoinvmReserve":  vmAddr.EncodeAddress(),
+		"fingerprint":        signers.fingerprint(),
 	})
 	return nil
 }
