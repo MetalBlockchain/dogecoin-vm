@@ -79,7 +79,7 @@ cmd_run() {
     "$DOGE_DIR/dogecoin.conf"
     /etc/caddy/Caddyfile
   )
-  for unit in /etc/systemd/system/{metal-mainnet,dogecoind-main,dogevm-bridge-main,dogevm-web-main,dogevm-monitor-main}.service; do
+  for unit in /etc/systemd/system/{metal-mainnet,dogecoind-main,dogevm-bridge-main,dogevm-web-main,dogevm-monitor-main,dogevm-signer-1,dogevm-signer-2,dogevm-signer-3}.service; do
     [[ -f $unit ]] && files+=("$unit")
   done
   for f in "${files[@]}"; do
