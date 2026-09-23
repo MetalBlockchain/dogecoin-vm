@@ -407,3 +407,27 @@ dialog.review::backdrop { background: rgba(13, 21, 36, 0.6); }
 .review-problem { color: var(--error); font-weight: 600; }
 .review-source { font-size: var(--step--1); color: var(--ink-soft); }
 .review-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.75rem; margin-top: 1.25rem; }
+
+/* Setup checklist: a real sequence, so the steps are numbered. */
+
+.setup { margin: 1.5rem 0; padding: 1.25rem 1.25rem 0.5rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface-sunk); }
+.setup-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+.setup-head h2 { font-size: var(--step-1); margin: 0; }
+.setup-steps { list-style: none; counter-reset: setup; padding: 0; margin: 0.75rem 0 0; }
+.setup-steps li { counter-increment: setup; position: relative; padding: 0 0 0.9rem 2.25rem; }
+.setup-steps li::before {
+  content: counter(setup);
+  position: absolute; left: 0; top: 0;
+  width: 1.5rem; height: 1.5rem; border-radius: 50%;
+  display: grid; place-items: center;
+  font: 700 var(--step--1)/1 var(--sans);
+  background: var(--surface); color: var(--ink-soft); border: 1px solid var(--rule);
+}
+.setup-steps li.current::before { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.setup-steps li.done::before { content: "✓"; background: var(--vm-wash); color: var(--vm-ink); border-color: transparent; }
+.setup-title { margin: 0; font-weight: 600; line-height: 1.5rem; }
+.setup-steps li:not(.current) .setup-title { color: var(--ink-soft); font-weight: 500; }
+.setup-steps li:not(.current) .setup-text { display: none; }
+.setup-text { margin: 0.2rem 0 0; color: var(--ink-soft); }
+.setup-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 0.75rem; }
+.setup-reopen { margin: 1rem 0 0; }

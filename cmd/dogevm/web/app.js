@@ -5,6 +5,7 @@ const $ = (id) => document.getElementById(id);
 const KEY_STORE = 'dogevm.key';
 const PASSKEY_STORE = 'dogevm.key.passkey'; // the key, encrypted to a passkey
 const WITHDRAW_STORE = 'dogevm.withdrawals';
+const SETUP_STORE = 'dogevm.setup'; // per address: {backedUp, hidden}
 
 let info = null;
 let key = null; // Uint8Array, or null
@@ -12,6 +13,10 @@ let depositShownFor = null;
 let utxos = []; // DogecoinVM
 let dogeUtxos = []; // Dogecoin
 let dogeState = 'unknown'; // unknown | ready | syncing | off
+// What the setup checklist knows of each network: whether the key has ever
+// had DOGE there. null until the balance has loaded.
+let seenVm = null;
+let seenDoge = null;
 
 // generation counts key changes. Work started for one key checks it before
 // touching the page, so a slow response never shows under another key.
@@ -271,6 +276,8 @@ function setKey(newKey, mode = 'store') {
   utxos = [];
   dogeUtxos = [];
   dogeState = 'unknown';
+  seenVm = null;
+  seenDoge = null;
   depositShownFor = null;
   let warning = '';
   if (key && mode === 'store') {
@@ -315,6 +322,7 @@ function renderKey() {
   $('no-key').hidden = has || locked;
   $('has-key').hidden = !has;
   renderPasskey();
+  renderSetup();
   for (const el of document.querySelectorAll('.needs-key')) el.hidden = has;
   for (const el of document.querySelectorAll('.with-key')) el.hidden = !has;
   if (!has) return;
@@ -357,6 +365,8 @@ async function refreshWallet() {
     const pending = chain.parseDoge(a.pending);
     $('balance-pending').textContent = pending > 0n ? `${tidy(a.pending)} DOGE arriving in the next block` : '';
     renderHistory($('history'), a.history, 'Nothing yet. Move DOGE over from Dogecoin on the Deposit tab.');
+    seenVm = a.history.length > 0 || chain.parseDoge(a.confirmed) > 0n;
+    renderSetup();
   } catch (err) {
     if (gen !== generation) return;
     $('balance').textContent = '…';
@@ -416,6 +426,8 @@ async function refreshDogeWallet() {
     $('doge-pending').textContent = pending === 0n ? ''
       : a.pending.startsWith('-') ? `${tidy(a.pending)} DOGE leaving, waiting for a block` : `${tidy(a.pending)} DOGE arriving, waiting for a block`;
     renderHistory($('doge-history'), a.history, 'Nothing yet. Send DOGE to your address from any Dogecoin wallet.');
+    seenDoge = a.history.length > 0 || chain.parseDoge(a.confirmed) > 0n;
+    renderSetup();
     $('doge-import').hidden = false;
     $('move-available').textContent = `Available on Dogecoin: ${tidy(a.confirmed)} DOGE.`;
   } catch (err) {
@@ -451,6 +463,129 @@ $('doge-import-form').addEventListener('submit', async (e) => {
   }
 });
 
+// --- setup checklist -------------------------------------------------------------
+
+// The checklist walks a new wallet through backing up, protecting, funding
+// and a first round trip. Each step ticks itself off from what the wallet
+// can see, and points at the controls that already do the work.
+const setupStore = () => `${SETUP_STORE}.${myAddress()}`;
+function setupState() {
+  try { return JSON.parse(store.get(setupStore()) || '{}'); } catch { return {}; }
+}
+function saveSetup(change) {
+  if (!key) return;
+  store.set(setupStore(), JSON.stringify({ ...setupState(), ...change }));
+  renderSetup();
+}
+
+// goTo shows a control, opening its tab or section first, and focuses it.
+function goTo(tab, id) {
+  if (tab) selectTab(tab);
+  const el = $(id);
+  el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  el.focus({ preventScroll: true });
+}
+
+function setupSteps() {
+  const state = setupState();
+  const protectedByPasskey = store.get(PASSKEY_STORE) !== null;
+  const funded = seenDoge === true || seenVm === true;
+  const steps = [
+    {
+      title: 'Back up your key',
+      text: "It's your wallet on both networks. Without a copy, DOGE here can't be recovered if this browser's data is cleared.",
+      done: state.backedUp === true,
+      actions: [
+        ['Show my key', () => { $('key-details').open = true; goTo(null, 'key-details'); }],
+        ["I've saved it", () => saveSetup({ backedUp: true })],
+      ],
+    },
+    passkey.available() && {
+      title: 'Protect it with a passkey',
+      text: 'Optional. Your key is then kept encrypted, and opening the wallet takes your passkey, for example in 1Password.',
+      done: protectedByPasskey,
+      actions: [['Protect with a passkey', () => $('passkey-protect').click()]],
+    },
+    {
+      title: 'Get DOGE on Dogecoin',
+      text: dogeState === 'syncing'
+        ? "Send DOGE to your address above from any wallet or exchange. It shows here once the bridge's Dogecoin node has caught up."
+        : 'Send DOGE to your address above from any wallet or exchange.',
+      done: funded,
+      actions: [['Copy my address', async (button) => {
+        try {
+          await navigator.clipboard.writeText(myDogeAddress());
+          button.textContent = 'Copied';
+          setTimeout(() => { button.textContent = 'Copy my address'; }, 2000);
+        } catch {
+          goTo(null, 'my-address');
+          getSelection().selectAllChildren($('my-address'));
+        }
+      }]],
+    },
+    {
+      title: 'Move it to DogecoinVM',
+      text: 'Move DOGE across the bridge from the Deposit tab. Payments on DogecoinVM are final in about two seconds.',
+      done: seenVm === true,
+      actions: [['Go to Deposit', () => goTo('deposit', 'move-amount')]],
+    },
+    {
+      title: 'Withdraw some back',
+      text: 'Send DOGE back to your own Dogecoin address to complete the round trip.',
+      done: savedWithdrawals().length > 0,
+      actions: [['Go to Withdraw', () => goTo('withdraw', 'withdraw-to')]],
+    },
+  ];
+  return steps.filter(Boolean);
+}
+
+function renderSetup() {
+  if (!key || !info) {
+    $('setup').hidden = true;
+    $('setup-reopen').hidden = true;
+    return;
+  }
+  const steps = setupSteps();
+  const finished = steps.every((s) => s.done);
+  const hidden = setupState().hidden === true || finished;
+  $('setup').hidden = hidden;
+  $('setup-reopen').hidden = !hidden || finished;
+  if (hidden) return;
+  const next = steps.findIndex((s) => !s.done);
+  $('setup-steps').replaceChildren(...steps.map((s, i) => {
+    const li = document.createElement('li');
+    li.className = s.done ? 'done' : i === next ? 'current' : '';
+    const title = document.createElement('p');
+    title.className = 'setup-title';
+    title.textContent = s.title;
+    if (s.done) title.append(Object.assign(document.createElement('span'), { className: 'visually-hidden', textContent: ' (done)' }));
+    li.append(title);
+    if (!s.done) {
+      const text = document.createElement('p');
+      text.className = 'setup-text';
+      text.textContent = s.text;
+      li.append(text);
+      if (i === next) {
+        const row = document.createElement('div');
+        row.className = 'setup-actions';
+        s.actions.forEach(([label, run], n) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          if (n === 0) b.className = 'primary';
+          b.textContent = label;
+          b.addEventListener('click', () => run(b));
+          row.append(b);
+        });
+        li.append(row);
+      }
+    }
+    return li;
+  }));
+}
+
+$('setup-hide').addEventListener('click', () => { saveSetup({ hidden: true }); $('setup-show').focus(); });
+$('setup-show').addEventListener('click', () => { saveSetup({ hidden: false }); $('setup-title').focus(); });
+
 // --- passkey ---------------------------------------------------------------------
 
 function renderPasskey() {
@@ -480,6 +615,7 @@ $('passkey-protect').addEventListener('click', async (e) => {
     store.remove(KEY_STORE);
     showResult($('passkey-result'), 'Done. Copy the encrypted backup and keep it somewhere safe.', true);
     renderPasskey();
+    renderSetup();
   } catch (err) {
     showResult($('passkey-result'), err.message, false);
   } finally {
@@ -519,6 +655,8 @@ $('import-form').addEventListener('submit', async (e) => {
     } else {
       setKey(chain.parseKey(value));
     }
+    // An imported key is one the viewer already has a copy of.
+    saveSetup({ backedUp: true });
     $('import-key').value = '';
   } catch (err) {
     $('import-key').setCustomValidity(err.message);

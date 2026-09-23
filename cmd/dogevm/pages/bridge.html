@@ -122,6 +122,13 @@
             </div>
           </div>
           <p class="notice" id="key-warning" role="alert" hidden></p>
+          <section class="setup" id="setup" aria-labelledby="setup-title" hidden>
+            <div class="setup-head">
+              <h2 id="setup-title" tabindex="-1">Get set up</h2>
+              <button type="button" class="link-button" id="setup-hide">Hide</button>
+            </div>
+            <ol class="setup-steps" id="setup-steps"></ol>
+          </section>
           <div class="passkey" id="passkey-section" hidden>
             <p id="passkey-status"></p>
             <div class="inline">
@@ -147,6 +154,8 @@
             <button class="primary" type="submit">Send</button>
             <p class="result" id="send-result" aria-live="polite"></p>
           </form>
+
+          <p class="setup-reopen" id="setup-reopen" hidden><button type="button" class="link-button" id="setup-show">Show the setup steps</button></p>
 
           <section class="history">
             <h2>Recent activity</h2>
