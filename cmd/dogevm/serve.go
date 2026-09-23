@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -709,6 +710,9 @@ func cmdServe(args []string) error {
 		go idx.run(make(chan struct{}))
 	}
 
+	// Go does not know the web app manifest's type, and the page is served
+	// with nosniff.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 	static, err := fs.Sub(webFiles, "web")
 	if err != nil {
 		return err

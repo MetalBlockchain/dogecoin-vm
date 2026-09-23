@@ -386,6 +386,9 @@ button.copy { font-size: var(--step--1); padding: 0.2rem 0.6rem; vertical-align:
 .doge-import { margin-top: 1rem; }
 .doge-import summary { cursor: pointer; color: var(--ink-soft); }
 .move-form { margin-bottom: 2rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--rule); }
+.passkey { margin-top: 1.25rem; padding: 1rem 1.1rem; border: 1px solid var(--rule); border-radius: 4px; }
+.passkey p { margin-top: 0; }
+.passkey code { display: block; margin-top: 0.75rem; word-break: break-all; font-size: 0.75rem; color: var(--ink-soft); }
 .link-button { background: none; border: 0; padding: 0; color: var(--vm-ink); text-decoration: underline; text-underline-offset: 0.15em; font: inherit; cursor: pointer; justify-self: start; }
 
 /* Lists */

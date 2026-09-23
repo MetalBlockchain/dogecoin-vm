@@ -1,8 +1,10 @@
 import * as chain from './chain.js';
 import { startExplorer } from './explorer.js';
+import * as passkey from './passkey.js';
 
 const $ = (id) => document.getElementById(id);
 const KEY_STORE = 'dogevm.key';
+const PASSKEY_STORE = 'dogevm.key.passkey'; // the key, encrypted to a passkey
 const WITHDRAW_STORE = 'dogevm.withdrawals';
 
 let info = null;
@@ -139,7 +141,7 @@ document.addEventListener('click', async (e) => {
     getSelection().selectAllChildren($(target.dataset.copy));
     target.textContent = 'Press Ctrl+C';
   }
-  setTimeout(() => { target.textContent = 'Copy'; }, 2000);
+  setTimeout(() => { target.textContent = target.dataset.label || 'Copy'; }, 2000);
 });
 
 // --- network and peg ---------------------------------------------------------
@@ -260,7 +262,10 @@ const myAddress = () => chain.encodeAddress(myDest(), info.dogecoinvmVersions);
 const myDogeAddress = () => chain.encodeAddress(myDest(), info.dogecoinVersions);
 
 // setKey switches keys. It clears everything shown for the previous key.
-function setKey(newKey) {
+// mode is 'store' (keep the key in this browser), 'unlocked' (a passkey
+// opened it; keep nothing new) or 'lock' (forget it until unlocked again).
+// setKey(null) with the default mode removes the key from the browser.
+function setKey(newKey, mode = 'store') {
   key = newKey;
   generation++;
   utxos = [];
@@ -268,15 +273,18 @@ function setKey(newKey) {
   dogeState = 'unknown';
   depositShownFor = null;
   let warning = '';
-  if (key) {
+  if (key && mode === 'store') {
     if (!store.set(KEY_STORE, chain.hex(key))) {
       warning = "This browser won't keep your key: it will be gone when you close the page. Back it up now, under \"Show or remove your key\".";
     }
-  } else {
+  } else if (!key && mode === 'store') {
     store.remove(KEY_STORE);
+    store.remove(PASSKEY_STORE);
   }
-  $('create-key').disabled = Boolean(key);
-  $('import-submit').disabled = Boolean(key);
+  const held = Boolean(key) || store.get(PASSKEY_STORE) !== null;
+  $('create-key').disabled = held;
+  $('import-submit').disabled = held;
+  $('passkey-result').textContent = '';
   $('key-warning').textContent = warning;
   $('key-warning').hidden = !warning;
   hideSecrets();
@@ -302,8 +310,11 @@ function setKey(newKey) {
 
 function renderKey() {
   const has = key !== null;
-  $('no-key').hidden = has;
+  const locked = !has && store.get(PASSKEY_STORE) !== null;
+  $('locked').hidden = !locked;
+  $('no-key').hidden = has || locked;
   $('has-key').hidden = !has;
+  renderPasskey();
   for (const el of document.querySelectorAll('.needs-key')) el.hidden = has;
   for (const el of document.querySelectorAll('.with-key')) el.hidden = !has;
   if (!has) return;
@@ -427,17 +438,69 @@ $('doge-import-form').addEventListener('submit', async (e) => {
   }
 });
 
+// --- passkey ---------------------------------------------------------------------
+
+function renderPasskey() {
+  const section = $('passkey-section');
+  section.hidden = !key || !passkey.available();
+  if (section.hidden) return;
+  const backup = store.get(PASSKEY_STORE);
+  $('passkey-status').textContent = backup
+    ? 'Protected with a passkey: this browser keeps your key only in encrypted form. Keep the encrypted backup somewhere safe; with your passkey it restores this wallet on another device.'
+    : 'Protect this wallet with a passkey. Your key is then kept encrypted, and opening the wallet takes Face ID, Touch ID or your security key.';
+  $('passkey-protect').hidden = Boolean(backup);
+  $('passkey-lock').hidden = !backup;
+  $('passkey-backup-copy').hidden = !backup;
+  $('passkey-backup').textContent = backup || '';
+}
+
+$('passkey-protect').addEventListener('click', async (e) => {
+  e.target.disabled = true;
+  try {
+    const backup = await passkey.protect(key);
+    if (!store.set(PASSKEY_STORE, backup)) throw new Error("This browser won't store the encrypted key, so nothing was changed.");
+    store.remove(KEY_STORE);
+    showResult($('passkey-result'), 'Done. Copy the encrypted backup and keep it somewhere safe.', true);
+    renderPasskey();
+  } catch (err) {
+    showResult($('passkey-result'), err.message, false);
+  } finally {
+    e.target.disabled = false;
+  }
+});
+
+$('passkey-lock').addEventListener('click', () => setKey(null, 'lock'));
+
+$('unlock-key').addEventListener('click', async (e) => {
+  e.target.disabled = true;
+  try {
+    setKey(await passkey.unlock(store.get(PASSKEY_STORE)), 'unlocked');
+  } catch (err) {
+    showResult($('unlock-result'), err.message, false);
+  } finally {
+    e.target.disabled = false;
+  }
+});
+
 $('create-key').addEventListener('click', () => {
   // Never replace a key this browser already holds.
-  if (key || store.get(KEY_STORE)) return;
+  if (key || store.get(KEY_STORE) || store.get(PASSKEY_STORE)) return;
   setKey(chain.newPrivateKey());
 });
 
-$('import-form').addEventListener('submit', (e) => {
+$('import-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!info || key || store.get(KEY_STORE)) return;
+  if (!info || key || store.get(KEY_STORE) || store.get(PASSKEY_STORE)) return;
+  const value = $('import-key').value;
   try {
-    setKey(chain.parseKey($('import-key').value));
+    if (passkey.isBackup(value)) {
+      // A passkey backup: open it with its passkey, and keep it encrypted.
+      const restored = await passkey.unlock(value);
+      if (!store.set(PASSKEY_STORE, value.trim())) throw new Error("This browser won't store the encrypted key.");
+      setKey(restored, 'unlocked');
+    } else {
+      setKey(chain.parseKey(value));
+    }
     $('import-key').value = '';
   } catch (err) {
     $('import-key').setCustomValidity(err.message);
@@ -722,7 +785,7 @@ async function start() {
       $('wallet-start').className = 'result error';
     }
   }
-  if (!saved) {
+  if (!saved && store.get(PASSKEY_STORE) === null) {
     $('create-key').disabled = false;
     $('import-submit').disabled = false;
   }

@@ -6,6 +6,12 @@
   <title>DogecoinVM bridge</title>
   <meta name="description" content="Move DOGE between Dogecoin and DogecoinVM on Metal Blockchain, one for one.">
   <link rel="icon" href="dogecoin.svg" type="image/svg+xml">
+  <!-- Installable as an app. There is deliberately no service worker: a
+       wallet should always load its current code from the server. -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="theme-color" content="#16233a">
+  <meta name="apple-mobile-web-app-title" content="DogecoinVM">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://metaldoge.com/">
   <meta property="og:title" content="DogecoinVM bridge">
@@ -86,6 +92,15 @@
 
       <!-- Wallet -->
       <div class="panel" role="tabpanel" id="panel-wallet" aria-labelledby="tab-wallet">
+        <div id="locked" hidden>
+          <h2>Unlock your wallet</h2>
+          <p>This wallet is protected with a passkey. Unlock it with Face ID, Touch ID or your security key.</p>
+          <div class="actions">
+            <button class="primary" id="unlock-key">Unlock with passkey</button>
+          </div>
+          <p class="result" id="unlock-result" aria-live="polite"></p>
+        </div>
+
         <div id="no-key">
           <h2>Start with a key</h2>
           <p>Your key stays in this browser and nowhere else. Back it up once you have it: if this browser's data is cleared, the key and its DOGE are gone.</p>
@@ -94,7 +109,7 @@
             <button class="primary" id="create-key" disabled>Create a new key</button>
           </div>
           <form id="import-form" class="stack">
-            <label for="import-key">Or import a key you already have (WIF or hex)</label>
+            <label for="import-key">Or import a key you already have (WIF, hex, or a passkey backup)</label>
             <div class="inline">
               <input id="import-key" autocomplete="off" spellcheck="false" placeholder="c…, 9… or 64 hex characters">
               <button type="submit" id="import-submit" disabled>Import key</button>
@@ -122,6 +137,16 @@
             </div>
           </div>
           <p class="notice" id="key-warning" role="alert" hidden></p>
+          <div class="passkey" id="passkey-section" hidden>
+            <p id="passkey-status"></p>
+            <div class="inline">
+              <button id="passkey-protect">Protect with a passkey</button>
+              <button id="passkey-lock" hidden>Lock now</button>
+              <button class="copy" id="passkey-backup-copy" data-copy="passkey-backup" data-label="Copy encrypted backup" hidden>Copy encrypted backup</button>
+            </div>
+            <code id="passkey-backup" hidden></code>
+            <p class="result" id="passkey-result" aria-live="polite"></p>
+          </div>
 
           <form id="send-form" class="stack">
             <h2>Send DOGE</h2>
