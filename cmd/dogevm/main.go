@@ -1,0 +1,460 @@
+// Command dogevm is a wallet and two-way peg bridge for DogecoinVM.
+//
+// Connection settings come from flags or environment variables:
+//
+//	DOGEVM_RPC        DogecoinVM JSON-RPC URL, e.g. http://127.0.0.1:9650/ext/bc/dogecoinvm/rpc
+//	DOGEVM_RPC_USER   DogecoinVM RPC user
+//	DOGEVM_RPC_PASS   DogecoinVM RPC password
+//	DOGEVM_NETWORK    DogecoinVM network: testnet (default) or mainnet
+//	DOGECOIN_RPC      Dogecoin Core JSON-RPC URL, e.g. http://127.0.0.1:18332
+//	DOGECOIN_RPC_USER Dogecoin Core RPC user
+//	DOGECOIN_RPC_PASS Dogecoin Core RPC password
+//	DOGECOIN_NETWORK  Dogecoin network: regtest, testnet (default) or mainnet
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
+	"github.com/MetalBlockchain/btcvm/btcd/chaincfg"
+)
+
+const usage = `dogevm: DogecoinVM wallet and two-way peg bridge
+
+Wallet (DogecoinVM):
+  dogevm keygen                               new key, shown for both chains
+  dogevm balance -address ADDR                DogecoinVM balance
+  dogevm send -key KEY -to ADDR -amount DOGE  send DOGE on DogecoinVM
+
+Peg (users):
+  dogevm peg-in -signers FILE -to VMADDR -amount DOGE
+      deposit from the Dogecoin Core wallet at DOGECOIN_RPC to the peg,
+      credited to VMADDR on DogecoinVM
+  dogevm peg-out -signers FILE -key KEY -to DOGEADDR -amount DOGE
+      send DOGE from DogecoinVM back to DOGEADDR on Dogecoin
+
+Bridge (peg signers):
+  dogevm signers -required M -total N -out FILE
+      create a signer set, and print the peg addresses and genesis config
+  dogevm bridge -signers FILE [-once]         run the bridge
+  dogevm audit -signers FILE                  check the peg is fully backed
+
+Run "dogevm COMMAND -h" for a command's flags. Connection settings come from
+the DOGEVM_* and DOGECOIN_* environment variables; see the package docs.
+`
+
+// settings holds the connection flags shared by every command.
+type settings struct {
+	vmRPC, vmUser, vmPass, vmNetwork     string
+	dogeRPC, dogeUser, dogePass, dogeNet string
+	vmParams, dogeParams                 *chaincfg.Params
+}
+
+func envOr(name, def string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return def
+}
+
+func (s *settings) register(fs *flag.FlagSet) {
+	fs.StringVar(&s.vmRPC, "vm-rpc", envOr("DOGEVM_RPC", "http://127.0.0.1:9650/ext/bc/dogecoinvm/rpc"), "DogecoinVM JSON-RPC URL")
+	fs.StringVar(&s.vmUser, "vm-user", os.Getenv("DOGEVM_RPC_USER"), "DogecoinVM RPC user")
+	fs.StringVar(&s.vmPass, "vm-pass", os.Getenv("DOGEVM_RPC_PASS"), "DogecoinVM RPC password")
+	fs.StringVar(&s.vmNetwork, "vm-network", envOr("DOGEVM_NETWORK", "testnet"), "DogecoinVM network: testnet or mainnet")
+	fs.StringVar(&s.dogeRPC, "doge-rpc", envOr("DOGECOIN_RPC", "http://127.0.0.1:44555"), "Dogecoin Core JSON-RPC URL")
+	fs.StringVar(&s.dogeUser, "doge-user", os.Getenv("DOGECOIN_RPC_USER"), "Dogecoin Core RPC user")
+	fs.StringVar(&s.dogePass, "doge-pass", os.Getenv("DOGECOIN_RPC_PASS"), "Dogecoin Core RPC password")
+	fs.StringVar(&s.dogeNet, "doge-network", envOr("DOGECOIN_NETWORK", "testnet"), "Dogecoin network: regtest, testnet or mainnet")
+}
+
+func (s *settings) resolve() error {
+	var err error
+	if s.vmParams, err = dogevmParams(s.vmNetwork); err != nil {
+		return err
+	}
+	s.dogeParams, err = dogecoinParams(s.dogeNet)
+	return err
+}
+
+func (s *settings) vmChain() *vmChain {
+	return &vmChain{rpc: newRPCClient(s.vmRPC, s.vmUser, s.vmPass)}
+}
+
+func (s *settings) dogeRPCClient() *rpcClient {
+	return newRPCClient(s.dogeRPC, s.dogeUser, s.dogePass)
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
+	}
+	cmd, args := os.Args[1], os.Args[2:]
+	commands := map[string]func([]string) error{
+		"keygen":  cmdKeygen,
+		"balance": cmdBalance,
+		"send":    cmdSend,
+		"peg-in":  cmdPegIn,
+		"peg-out": cmdPegOut,
+		"signers": cmdSigners,
+		"bridge":  cmdBridge,
+		"audit":   cmdAudit,
+	}
+	run, ok := commands[cmd]
+	if !ok {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
+	}
+	if err := run(args); err != nil {
+		fmt.Fprintln(os.Stderr, "dogevm "+cmd+":", err)
+		os.Exit(1)
+	}
+}
+
+func printJSON(v any) {
+	out, _ := json.MarshalIndent(v, "", "  ")
+	fmt.Println(string(out))
+}
+
+func parseFlags(fs *flag.FlagSet, s *settings, args []string) error {
+	s.register(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	return s.resolve()
+}
+
+func required(values map[string]string) error {
+	for name, v := range values {
+		if v == "" {
+			return fmt.Errorf("-%s is required", name)
+		}
+	}
+	return nil
+}
+
+func cmdKeygen(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("keygen", flag.ExitOnError)
+	if err := parseFlags(fs, &s, args); err != nil {
+		return err
+	}
+	key, err := newKey()
+	if err != nil {
+		return err
+	}
+	report, err := describeKey(key, s.vmParams, s.dogeParams)
+	if err != nil {
+		return err
+	}
+	printJSON(report)
+	return nil
+}
+
+func cmdBalance(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("balance", flag.ExitOnError)
+	address := fs.String("address", "", "DogecoinVM address")
+	if err := parseFlags(fs, &s, args); err != nil {
+		return err
+	}
+	if err := required(map[string]string{"address": *address}); err != nil {
+		return err
+	}
+	addr, err := btcutil.DecodeAddress(*address, s.vmParams)
+	if err != nil {
+		return err
+	}
+	confirmed, pending, err := balance(s.vmChain(), addr)
+	if err != nil {
+		return err
+	}
+	printJSON(map[string]string{
+		"address":   addr.EncodeAddress(),
+		"confirmed": formatDoge(confirmed),
+		"pending":   formatDoge(pending),
+	})
+	return nil
+}
+
+func cmdSend(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("send", flag.ExitOnError)
+	keyFlag := fs.String("key", "", "sender private key (WIF or hex)")
+	to := fs.String("to", "", "DogecoinVM destination address")
+	amountFlag := fs.String("amount", "", "amount in DOGE")
+	if err := parseFlags(fs, &s, args); err != nil {
+		return err
+	}
+	if err := required(map[string]string{"key": *keyFlag, "to": *to, "amount": *amountFlag}); err != nil {
+		return err
+	}
+	key, err := parseKey(*keyFlag)
+	if err != nil {
+		return err
+	}
+	dest, err := btcutil.DecodeAddress(*to, s.vmParams)
+	if err != nil {
+		return err
+	}
+	amount, err := parseDoge(*amountFlag)
+	if err != nil {
+		return err
+	}
+	txid, err := payFromKey(s.vmChain(), s.vmParams, key, destinationScript(dest), amount, nil)
+	if err != nil {
+		return err
+	}
+	printJSON(map[string]string{"txid": txid.String()})
+	return nil
+}
+
+func cmdPegIn(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("peg-in", flag.ExitOnError)
+	signersPath := fs.String("signers", "", "peg signer set file")
+	to := fs.String("to", "", "DogecoinVM address to credit")
+	amountFlag := fs.String("amount", "", "amount in DOGE")
+	if err := parseFlags(fs, &s, args); err != nil {
+		return err
+	}
+	if err := required(map[string]string{"signers": *signersPath, "to": *to, "amount": *amountFlag}); err != nil {
+		return err
+	}
+	signers, err := readSignerSet(*signersPath)
+	if err != nil {
+		return err
+	}
+	destAddr, err := btcutil.DecodeAddress(*to, s.vmParams)
+	if err != nil {
+		return fmt.Errorf("-to must be a DogecoinVM %s address: %w", s.vmNetwork, err)
+	}
+	dest, err := destinationOf(destAddr)
+	if err != nil {
+		return err
+	}
+	amount, err := parseDoge(*amountFlag)
+	if err != nil {
+		return err
+	}
+	pegAddr, err := signers.address(s.dogeParams)
+	if err != nil {
+		return err
+	}
+	txid, err := depositFromDogecoinCore(s.dogeRPCClient(), pegAddr, dest, amount)
+	if err != nil {
+		return err
+	}
+	printJSON(map[string]string{
+		"dogecoinTxid": txid,
+		"pegAddress":   pegAddr.EncodeAddress(),
+		"creditTo":     destAddr.EncodeAddress(),
+	})
+	return nil
+}
+
+func cmdPegOut(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("peg-out", flag.ExitOnError)
+	signersPath := fs.String("signers", "", "peg signer set file")
+	keyFlag := fs.String("key", "", "sender private key on DogecoinVM (WIF or hex)")
+	to := fs.String("to", "", "Dogecoin address to pay")
+	amountFlag := fs.String("amount", "", "amount in DOGE")
+	if err := parseFlags(fs, &s, args); err != nil {
+		return err
+	}
+	if err := required(map[string]string{"signers": *signersPath, "key": *keyFlag, "to": *to, "amount": *amountFlag}); err != nil {
+		return err
+	}
+	signers, err := readSignerSet(*signersPath)
+	if err != nil {
+		return err
+	}
+	key, err := parseKey(*keyFlag)
+	if err != nil {
+		return err
+	}
+	destAddr, err := btcutil.DecodeAddress(*to, s.dogeParams)
+	if err != nil {
+		return fmt.Errorf("-to must be a Dogecoin %s address: %w", s.dogeNet, err)
+	}
+	dest, err := destinationOf(destAddr)
+	if err != nil {
+		return err
+	}
+	amount, err := parseDoge(*amountFlag)
+	if err != nil {
+		return err
+	}
+	txid, err := payFromKey(s.vmChain(), s.vmParams, key, signers.pkScript(), amount,
+		nullData(encodeDestination(tagPegOut, dest)))
+	if err != nil {
+		return err
+	}
+	printJSON(map[string]string{"dogecoinvmTxid": txid.String(), "payTo": destAddr.EncodeAddress()})
+	return nil
+}
+
+func cmdSigners(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("signers", flag.ExitOnError)
+	req := fs.Int("required", 2, "signatures required")
+	total := fs.Int("total", 3, "number of signers")
+	out := fs.String("out", "", "file to write the signer set to (contains private keys)")
+	blocks := fs.Int("reserve-blocks", 1, "pegReserveBlocks for the genesis config (9 billion DOGE each)")
+	if err := parseFlags(fs, &s, args); err != nil {
+		return err
+	}
+	if err := required(map[string]string{"out": *out}); err != nil {
+		return err
+	}
+	if _, err := os.Stat(*out); err == nil {
+		return fmt.Errorf("%s already exists; refusing to overwrite a signer set", *out)
+	}
+	signers, err := newSignerSet(*req, *total)
+	if err != nil {
+		return err
+	}
+	if err := signers.write(*out); err != nil {
+		return err
+	}
+	vmAddr, _ := signers.address(s.vmParams)
+	dogeAddr, _ := signers.address(s.dogeParams)
+	printJSON(map[string]any{
+		"file":                 *out,
+		"dogecoinvmReserve":    vmAddr.EncodeAddress(),
+		"dogecoinPegAddress":   dogeAddr.EncodeAddress(),
+		"genesisConfigSnippet": map[string]any{"pegReserveAddress": vmAddr.EncodeAddress(), "pegReserveBlocks": *blocks},
+	})
+	return nil
+}
+
+// bridgeFlags registers the bridge's policy flags on fs.
+func bridgeFlags(fs *flag.FlagSet) *bridge {
+	b := &bridge{
+		logf: func(format string, args ...any) {
+			fmt.Printf("%s "+format+"\n", append([]any{time.Now().Format(time.RFC3339)}, args...)...)
+		},
+	}
+	fs.Int64Var(&b.depositConfirmations, "confirmations", 6, "Dogecoin confirmations before a deposit is credited")
+	fs.Int64Var(&b.vmFee, "vm-fee", koinuPerDoge/100, "koinu deducted from each credit for the DogecoinVM fee")
+	fs.Int64Var(&b.dogeFee, "doge-fee", koinuPerDoge, "koinu deducted from each peg-out for the Dogecoin fee")
+	fs.Int64Var(&b.minDeposit, "min-deposit", koinuPerDoge, "smallest deposit credited, in koinu")
+	fs.Int64Var(&b.minPegOut, "min-peg-out", 2*koinuPerDoge, "smallest peg-out paid, in koinu")
+	return b
+}
+
+// connect points b at the chains and signer set.
+func (b *bridge) connect(s *settings, signers *signerSet) {
+	b.signers = signers
+	b.vm = s.vmChain()
+	b.doge = &dogeChain{rpc: s.dogeRPCClient()}
+	b.vmParams, b.dogeParams = s.vmParams, s.dogeParams
+}
+
+// watchPeg makes Dogecoin Core track the peg address.
+func watchPeg(b *bridge, rescan bool) error {
+	pegAddr, err := b.dogePegAddress()
+	if err != nil {
+		return err
+	}
+	return b.doge.(*dogeChain).watch(pegAddr, rescan)
+}
+
+func cmdBridge(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("bridge", flag.ExitOnError)
+	signersPath := fs.String("signers", "", "peg signer set file")
+	once := fs.Bool("once", false, "process what is pending, then exit")
+	interval := fs.Duration("interval", 10*time.Second, "time between polls")
+	rescan := fs.Bool("rescan", false, "rescan Dogecoin for past deposits when importing the peg address")
+	s.register(fs)
+	b := bridgeFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := s.resolve(); err != nil {
+		return err
+	}
+	if err := required(map[string]string{"signers": *signersPath}); err != nil {
+		return err
+	}
+	signers, err := readSignerSet(*signersPath)
+	if err != nil {
+		return err
+	}
+	b.connect(&s, signers)
+	if err := watchPeg(b, *rescan); err != nil {
+		return fmt.Errorf("importing the peg address into Dogecoin Core: %w", err)
+	}
+
+	for {
+		for {
+			done, err := b.step()
+			if err != nil {
+				if !*once {
+					b.logf("error: %v", err)
+					break
+				}
+				return err
+			}
+			if done == "" {
+				break
+			}
+			b.logf("%s", done)
+		}
+		if *once {
+			return nil
+		}
+		time.Sleep(*interval)
+	}
+}
+
+func cmdAudit(args []string) error {
+	var s settings
+	fs := flag.NewFlagSet("audit", flag.ExitOnError)
+	signersPath := fs.String("signers", "", "peg signer set file (public keys are enough)")
+	s.register(fs)
+	b := bridgeFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := s.resolve(); err != nil {
+		return err
+	}
+	if err := required(map[string]string{"signers": *signersPath}); err != nil {
+		return err
+	}
+	signers, err := readSignerSet(*signersPath)
+	if err != nil {
+		return err
+	}
+	b.connect(&s, signers)
+	if err := watchPeg(b, false); err != nil {
+		return err
+	}
+	state, err := b.load()
+	if err != nil {
+		return err
+	}
+	a := b.audit(state)
+	report := map[string]any{"solvent": a.solvent()}
+	for name, v := range map[string]int64{
+		"circulating": a.Circulating, "pendingPegIns": a.PendingPegIns,
+		"pendingPegOuts": a.PendingPegOuts, "locked": a.Locked, "required": a.Required,
+		"surplus": a.Surplus, "unclaimedOnDogecoin": a.UnclaimedOnDoge,
+		"unclaimedOnDogecoinVM": a.UnclaimedOnVM,
+	} {
+		report[name] = formatDoge(v)
+	}
+	printJSON(report)
+	if !a.solvent() {
+		return errInsolvent
+	}
+	return nil
+}

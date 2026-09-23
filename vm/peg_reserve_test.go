@@ -216,3 +216,19 @@ func TestPegReserveConfigValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyChainConfig(t *testing.T) {
+	require := require.New(t)
+
+	cfg := btcd.Config{TestNet: true, RPCUser: "genesis", DataDir: "/genesis"}
+	require.NoError(applyChainConfig(&cfg, []byte(`{"rpcUser":"node","addrIndex":true}`)))
+	require.Equal("node", cfg.RPCUser)
+	require.True(cfg.AddrIndex)
+	require.Equal("/genesis", cfg.DataDir, "absent keys keep their genesis value")
+	require.True(cfg.TestNet)
+
+	for _, key := range consensusConfigKeys {
+		err := applyChainConfig(&cfg, []byte(`{"`+key+`":true}`))
+		require.ErrorContains(err, "consensus setting", key)
+	}
+}

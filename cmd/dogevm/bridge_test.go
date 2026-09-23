@@ -1,0 +1,356 @@
+package main
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
+	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/btcvm/btcd/wire"
+)
+
+// fakeChain is an in-memory ledger: it checks that inputs exist and are
+// unspent, but not signatures.
+type fakeChain struct {
+	txs []*chainTx
+}
+
+func (c *fakeChain) output(op wire.OutPoint) (*wire.TxOut, bool) {
+	for _, t := range c.txs {
+		if t.tx.TxHash() == op.Hash && int(op.Index) < len(t.tx.TxOut) {
+			return t.tx.TxOut[op.Index], true
+		}
+	}
+	return nil, false
+}
+
+func (c *fakeChain) spent(op wire.OutPoint) bool {
+	for _, t := range c.txs {
+		for _, in := range t.tx.TxIn {
+			if in.PreviousOutPoint == op {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *fakeChain) txsFor(address btcutil.Address) ([]chainTx, error) {
+	script := destinationScript(address)
+	var out []chainTx
+	for _, t := range c.txs {
+		match := false
+		for _, o := range t.tx.TxOut {
+			match = match || bytes.Equal(o.PkScript, script)
+		}
+		for _, in := range t.tx.TxIn {
+			if prev, ok := c.output(in.PreviousOutPoint); ok && bytes.Equal(prev.PkScript, script) {
+				match = true
+			}
+		}
+		if match {
+			out = append(out, *t)
+		}
+	}
+	return out, nil
+}
+
+func (c *fakeChain) unspent(address btcutil.Address, minConf int64) ([]utxo, error) {
+	script := destinationScript(address)
+	var out []utxo
+	for _, t := range c.txs {
+		if t.confirmations < minConf {
+			continue
+		}
+		hash := t.tx.TxHash()
+		for i, o := range t.tx.TxOut {
+			op := wire.OutPoint{Hash: hash, Index: uint32(i)}
+			if bytes.Equal(o.PkScript, script) && !c.spent(op) {
+				out = append(out, utxo{outPoint: op, value: o.Value, pkScript: o.PkScript, confirmations: t.confirmations})
+			}
+		}
+	}
+	return out, nil
+}
+
+func (c *fakeChain) send(tx *wire.MsgTx) (chainhash.Hash, error) {
+	var in, out int64
+	for _, txIn := range tx.TxIn {
+		prev, ok := c.output(txIn.PreviousOutPoint)
+		if !ok || c.spent(txIn.PreviousOutPoint) {
+			return chainhash.Hash{}, fmt.Errorf("input %v missing or spent", txIn.PreviousOutPoint)
+		}
+		in += prev.Value
+	}
+	for _, o := range tx.TxOut {
+		out += o.Value
+	}
+	if out > in {
+		return chainhash.Hash{}, errors.New("outputs exceed inputs")
+	}
+	c.txs = append(c.txs, &chainTx{tx: tx})
+	return tx.TxHash(), nil
+}
+
+// add puts tx on the chain with the given confirmations, without checks.
+func (c *fakeChain) add(tx *wire.MsgTx, confirmations int64) {
+	c.txs = append(c.txs, &chainTx{tx: tx, confirmations: confirmations})
+}
+
+func (c *fakeChain) mine() {
+	for _, t := range c.txs {
+		t.confirmations++
+	}
+}
+
+type harness struct {
+	t        *testing.T
+	b        *bridge
+	vm, doge *fakeChain
+	nextCoin uint32
+}
+
+const doge = koinuPerDoge
+
+func newHarness(t *testing.T) *harness {
+	signers, err := newSignerSet(2, 3)
+	require.NoError(t, err)
+	h := &harness{t: t, vm: &fakeChain{}, doge: &fakeChain{}}
+	h.b = &bridge{
+		signers: signers, vm: h.vm, doge: h.doge,
+		vmParams: &dogecoinTestNet, dogeParams: &dogecoinRegTest,
+		depositConfirmations: 6,
+		vmFee:                doge / 100,
+		dogeFee:              doge,
+		minDeposit:           doge,
+		minPegOut:            2 * doge,
+		logf:                 t.Logf,
+	}
+	var err2 error
+	h.b.vmParams, err2 = dogevmParams("testnet")
+	require.NoError(t, err2)
+
+	// The consensus-created reserve.
+	coinbase := wire.NewMsgTx(1)
+	coinbase.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{}, wire.MaxPrevOutIndex), []byte{1}, nil))
+	coinbase.AddTxOut(wire.NewTxOut(9_000_000_000*doge, signers.pkScript()))
+	h.vm.add(coinbase, 1)
+	return h
+}
+
+// coin returns a fresh funding outpoint from nowhere, for user payments the
+// fake chain does not check.
+func (h *harness) coin() *wire.OutPoint {
+	h.nextCoin++
+	return wire.NewOutPoint(&chainhash.Hash{0xff, byte(h.nextCoin)}, 0)
+}
+
+func (h *harness) user(b byte) destination {
+	var d destination
+	d.hash[0] = b
+	return d
+}
+
+// deposit makes a Dogecoin deposit to the peg, tagged for dest if non-nil.
+func (h *harness) deposit(value int64, dest *destination, confirmations int64) *wire.MsgTx {
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+	tx.AddTxOut(wire.NewTxOut(value, h.b.signers.pkScript()))
+	if dest != nil {
+		tx.AddTxOut(nullData(encodeDestination(tagDeposit, *dest)))
+	}
+	h.doge.add(tx, confirmations)
+	return tx
+}
+
+// pegOut makes a DogecoinVM payment to the reserve asking for dest.
+func (h *harness) pegOut(value int64, dest destination) *wire.MsgTx {
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+	tx.AddTxOut(wire.NewTxOut(value, h.b.signers.pkScript()))
+	tx.AddTxOut(nullData(encodeDestination(tagPegOut, dest)))
+	h.vm.add(tx, 1)
+	return tx
+}
+
+func (h *harness) step() string {
+	h.t.Helper()
+	did, err := h.b.step()
+	require.NoError(h.t, err)
+	return did
+}
+
+func (h *harness) audit() audit {
+	s, err := h.b.load()
+	require.NoError(h.t, err)
+	return h.b.audit(s)
+}
+
+// paidTo returns what the last transaction on c pays to dest.
+func paidTo(c *fakeChain, dest destination) int64 {
+	var total int64
+	for _, o := range c.txs[len(c.txs)-1].tx.TxOut {
+		if bytes.Equal(o.PkScript, dest.pkScript()) {
+			total += o.Value
+		}
+	}
+	return total
+}
+
+func TestPegInCreditsOnceAfterConfirmations(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	alice := h.user(1)
+
+	h.deposit(100*doge, &alice, 5)
+	require.Empty(h.step(), "credited before 6 confirmations")
+
+	h.doge.mine()
+	require.NotEmpty(h.step())
+	require.Equal(int64(100*doge-doge/100), paidTo(h.vm, alice))
+
+	// While the release is in the mempool, and after it is accepted,
+	// the deposit is not credited again.
+	require.Empty(h.step())
+	h.vm.mine()
+	require.Empty(h.step())
+
+	a := h.audit()
+	require.True(a.solvent())
+	require.Equal(int64(100*doge), a.Circulating)
+	require.Equal(int64(100*doge), a.Locked)
+	require.Zero(a.PendingPegIns)
+	require.Zero(a.Surplus)
+}
+
+func TestSpoofedReleaseTagIsIgnored(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	alice := h.user(1)
+	dep := h.deposit(100*doge, &alice, 6)
+
+	// Anyone can pay the reserve with a release tag; it must not count as
+	// crediting the deposit.
+	spoof := wire.NewMsgTx(1)
+	spoof.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+	spoof.AddTxOut(wire.NewTxOut(doge, h.b.signers.pkScript()))
+	spoof.AddTxOut(nullData(encodeRelease(wire.OutPoint{Hash: dep.TxHash(), Index: 0})))
+	h.vm.add(spoof, 1)
+
+	require.NotEmpty(h.step())
+	require.Equal(int64(100*doge-doge/100), paidTo(h.vm, alice))
+}
+
+func TestRoundTrip(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	alice, aliceOnDoge := h.user(1), h.user(2)
+
+	h.deposit(100*doge, &alice, 6)
+	require.NotEmpty(h.step())
+	h.vm.mine()
+
+	req := h.pegOut(40*doge, aliceOnDoge)
+	require.NotEmpty(h.step())
+	require.Equal(int64(39*doge), paidTo(h.doge, aliceOnDoge), "40 DOGE less the 1 DOGE fee")
+	payment := h.doge.txs[len(h.doge.txs)-1].tx
+	paidFor, ok := parsePayment(payment)
+	require.True(ok)
+	require.Equal(req.TxHash(), paidFor)
+
+	// Paid once, even before the payment confirms.
+	require.Empty(h.step())
+	h.doge.mine()
+	require.Empty(h.step())
+
+	a := h.audit()
+	require.True(a.solvent(), "%+v", a)
+	require.Equal(int64(60*doge), a.Circulating)
+	require.Equal(int64(60*doge), a.Locked)
+	require.Zero(a.Surplus)
+}
+
+func TestUntaggedDepositsAreNotCredited(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	alice := h.user(1)
+
+	h.deposit(100*doge, nil, 6)  // no destination
+	h.deposit(doge/2, &alice, 6) // below the minimum
+	require.Empty(h.step())
+
+	a := h.audit()
+	require.True(a.solvent())
+	require.Zero(a.Circulating)
+	require.Equal(int64(100*doge+doge/2), a.UnclaimedOnDoge)
+	require.Equal(a.UnclaimedOnDoge, a.Surplus)
+}
+
+func TestBridgeHaltsWhenInsolvent(t *testing.T) {
+	h := newHarness(t)
+	alice := h.user(1)
+
+	// Reserve released with nothing locked on Dogecoin, as if a signer key
+	// were compromised.
+	reserve, err := h.vm.unspent(mustAddr(h.b.vmReserveAddress()), 1)
+	require.NoError(t, err)
+	theft := wire.NewMsgTx(1)
+	theft.AddTxIn(wire.NewTxIn(&reserve[0].outPoint, nil, nil))
+	theft.AddTxOut(wire.NewTxOut(50*doge, alice.pkScript()))
+	theft.AddTxOut(wire.NewTxOut(reserve[0].value-50*doge, h.b.signers.pkScript()))
+	h.vm.add(theft, 1)
+	h.deposit(10*doge, &alice, 6)
+
+	_, err = h.b.step()
+	require.ErrorIs(t, err, errInsolvent)
+}
+
+func mustAddr(a btcutil.Address, err error) btcutil.Address {
+	if err != nil {
+		panic(err)
+	}
+	return a
+}
+
+func TestTagsRoundTrip(t *testing.T) {
+	require := require.New(t)
+	d := destination{kind: destP2SH}
+	d.hash[19] = 9
+
+	tx := wire.NewMsgTx(1)
+	tx.AddTxOut(nullData(encodeDestination(tagPegOut, d)))
+	got, ok := parseDestinationTag(tx, tagPegOut)
+	require.True(ok)
+	require.Equal(d, got)
+	_, ok = parseDestinationTag(tx, tagDeposit)
+	require.False(ok, "wrong tag")
+
+	// Two OP_RETURNs are ambiguous and ignored.
+	tx.AddTxOut(nullData(encodeDestination(tagPegOut, d)))
+	_, ok = parseDestinationTag(tx, tagPegOut)
+	require.False(ok)
+}
+
+func TestParseDoge(t *testing.T) {
+	for in, want := range map[string]int64{
+		"1": doge, "0.00000001": 1, "123.45": 12345 * doge / 100, "10000000000": 10_000_000_000 * doge,
+	} {
+		got, err := parseDoge(in)
+		require.NoError(t, err, in)
+		require.Equal(t, want, got, in)
+		require.Equal(t, in, trimZeros(formatDoge(got)), in)
+	}
+	for _, bad := range []string{"", "1.2.3", "-1", "abc", "10000000001"} {
+		_, err := parseDoge(bad)
+		require.Error(t, err, bad)
+	}
+}
+
+func trimZeros(s string) string {
+	s = string(bytes.TrimRight([]byte(s), "0"))
+	return string(bytes.TrimSuffix([]byte(s), []byte(".")))
+}

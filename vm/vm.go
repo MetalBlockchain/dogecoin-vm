@@ -35,8 +35,17 @@ var (
 )
 
 const (
-	Name = "btcvm"
+	Name = "dogecoinvm"
 )
+
+// ID is the VM ID nodes use to find this plugin: Name, zero-padded to 32
+// bytes. The plugin binary must be installed in the node's plugin directory
+// under this ID.
+var ID = func() ids.ID {
+	var id ids.ID
+	copy(id[:], Name)
+	return id
+}()
 
 var Version = &version.Semantic{
 	Major: 0,
@@ -111,6 +120,31 @@ func parseGenesisBytes(data []byte) (*genesisBytes, error) {
 	return &genesis, nil
 }
 
+// consensusConfigKeys are genesis settings every node must agree on, which a
+// node's chain config may not override.
+var consensusConfigKeys = []string{"mainNet", "testNet", "pegReserveAddress", "pegReserveBlocks"}
+
+// applyChainConfig overlays the node's chain config (JSON with the same keys
+// as the genesis "config" object) onto the genesis config.
+func applyChainConfig(genesisConfig *btcd.Config, configBytes []byte) error {
+	if len(configBytes) == 0 {
+		return nil
+	}
+
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(configBytes, &keys); err != nil {
+		return err
+	}
+	for _, key := range consensusConfigKeys {
+		if _, ok := keys[key]; ok {
+			return fmt.Errorf("%q is a consensus setting and must be set in the genesis", key)
+		}
+	}
+
+	// Unmarshal onto the genesis config so absent keys keep their values.
+	return json.Unmarshal(configBytes, genesisConfig)
+}
+
 // Initialize initializes the VM
 func (vm *VM) Initialize(
 	ctx context.Context,
@@ -141,6 +175,12 @@ func (vm *VM) Initialize(
 	gb, err := parseGenesisBytes(genesisBytes)
 	if err != nil {
 		return fmt.Errorf("failed to parse genesis: %w", err)
+	}
+
+	// Node-local settings (RPC credentials, indexes, data paths) come from
+	// the chain config, which unlike the genesis is private to the node.
+	if err := applyChainConfig(&gb.Config, configBytes); err != nil {
+		return fmt.Errorf("failed to parse chain config: %w", err)
 	}
 
 	config, _, err := btcd.LoadConfig(vm.ctx.NodeID.String(), &gb.Config)
