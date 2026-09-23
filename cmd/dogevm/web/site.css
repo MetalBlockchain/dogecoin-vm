@@ -75,8 +75,8 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .nav-cta svg { width: 1em; height: 1em; margin-right: 0.35rem; }
 @media (max-width: 40rem) {
   .site-header { padding: 0.75rem 1rem; }
-  .site-nav { order: 1; flex-wrap: nowrap; justify-content: space-between; gap: 0; width: calc(100% + 0.8rem); margin: 0 -0.4rem; }
-  .site-nav a { padding: 0.45rem 0.4rem; }
+  .site-nav { order: 1; flex-wrap: nowrap; gap: 0.35rem; width: 100%; margin-left: -0.5rem; }
+  .site-nav a { padding: 0.45rem 0.5rem; }
   .nav-cta { margin-left: 0; }
   .nav-more { display: none; }
 }
