@@ -22,6 +22,7 @@ import (
 )
 
 // all: includes files starting with _, such as noble-hashes/_md.js.
+//
 //go:embed all:web
 var webFiles embed.FS
 

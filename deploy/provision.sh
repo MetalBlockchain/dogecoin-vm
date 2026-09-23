@@ -2,14 +2,14 @@
 # Provisions a public DogecoinVM test network on a fresh Ubuntu 24.04 x86_64
 # host. Run as root:
 #
-#   DOMAIN=rpc.example.org deploy/provision.sh
+#   DOMAIN=example.org deploy/provision.sh
 #
 # It installs Go, metalgo v1.13.5, DogecoinVM and Dogecoin Core 1.14.9 (on
 # Dogecoin testnet), creates the DogecoinVM chain on a single-node network,
-# and runs the node, Dogecoin Core and the peg bridge under systemd. Caddy
-# serves the chain's JSON-RPC over HTTPS at https://$DOMAIN/rpc, for a
-# limited RPC user that can read and broadcast but not administer. DOMAIN
-# defaults to <ip>.sslip.io.
+# and runs the node, Dogecoin Core, the peg bridge and the web wallet under
+# systemd. Caddy serves the web wallet at https://<ip>.sslip.io and, if
+# DOMAIN is set, at https://$DOMAIN, each with the chain's JSON-RPC at /rpc
+# for a limited user that can read and broadcast but not administer.
 #
 # This is a test network: one process holds every peg signer key.
 set -euo pipefail
@@ -25,7 +25,8 @@ PUBLIC_RPC_USER=${PUBLIC_RPC_USER:-public}
 PUBLIC_RPC_PASS=${PUBLIC_RPC_PASS:-public}
 
 IP=$(curl -s4 https://ifconfig.me)
-DOMAIN=${DOMAIN:-${IP//./-}.sslip.io}
+SSLIP=${IP//./-}.sslip.io
+DOMAIN=${DOMAIN:-}
 HOME_DIR=/opt/dogevm
 STATE=/var/lib/dogevm
 DOGE_DATA=/var/lib/dogecoin
@@ -163,10 +164,34 @@ RestartSec=30
 WantedBy=multi-user.target
 EOF
 
-log "Caddy on https://$DOMAIN"
-cat >/etc/caddy/Caddyfile <<EOF
-$DOMAIN {
-	# Only the chain's JSON-RPC is public; metalgo's own APIs are not.
+# The faucet's DogecoinVM key. Fund it by pegging in testnet DOGE.
+[[ -f "$STATE/faucet.json" ]] || as_dogevm dogevm keygen -doge-network testnet >"$STATE/faucet.json"
+chown dogevm:dogevm "$STATE/faucet.json" && chmod 600 "$STATE/faucet.json"
+FAUCET_KEY=$(jq -r .privateKeyHex "$STATE/faucet.json")
+
+cat >/etc/systemd/system/dogevm-web.service <<UNIT
+[Unit]
+Description=DogecoinVM web wallet and API (testnet)
+After=dogevm-node.service dogecoind.service
+
+[Service]
+User=dogevm
+Environment=HOME=$HOME_DIR
+EnvironmentFile=$STATE/bridge.env
+ExecStart=/usr/local/bin/dogevm serve -signers $STATE/signers.json -listen 127.0.0.1:8080 -confirmations 6 -faucet-key $FAUCET_KEY -faucet-amount 100
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+log "Caddy"
+# Only the web wallet and the chain's JSON-RPC are public; metalgo's own
+# APIs are not.
+site() {
+  cat <<SITE
+$1 {
 	handle /rpc {
 		rewrite * /ext/bc/$CHAIN_ID/rpc
 		reverse_proxy 127.0.0.1:9650 {
@@ -174,10 +199,16 @@ $DOMAIN {
 		}
 	}
 	handle {
-		respond "DogecoinVM test network. JSON-RPC at /rpc (user $PUBLIC_RPC_USER)." 200
+		reverse_proxy 127.0.0.1:8080
 	}
 }
-EOF
+SITE
+}
+{
+  site "$SSLIP"
+  [[ -n "$DOMAIN" ]] && site "$DOMAIN"
+  true
+} >/etc/caddy/Caddyfile
 
 ufw allow OpenSSH >/dev/null
 ufw allow 80,443/tcp >/dev/null
@@ -186,13 +217,16 @@ ufw --force enable >/dev/null
 systemctl daemon-reload
 systemctl enable --now dogecoind dogevm-node >/dev/null
 systemctl restart dogevm-node
-systemctl enable dogevm-bridge >/dev/null
+systemctl enable dogevm-bridge dogevm-web >/dev/null
+systemctl restart dogevm-web
 systemctl restart caddy
 
 log "done"
 cat <<EOF
 
-DogecoinVM JSON-RPC:  https://$DOMAIN/rpc   (user $PUBLIC_RPC_USER, password $PUBLIC_RPC_PASS)
+Web wallet:           https://$SSLIP${DOMAIN:+  and  https://$DOMAIN}
+DogecoinVM JSON-RPC:  https://$SSLIP/rpc${DOMAIN:+  and  https://$DOMAIN/rpc}   (user $PUBLIC_RPC_USER, password $PUBLIC_RPC_PASS)
+Faucet address:       $(jq -r .dogecoinvmAddress "$STATE/faucet.json")   (fund it by pegging in)
 Chain ID:             $CHAIN_ID
 Peg address:          $(jq -r .dogecoinPegAddress "$STATE/signers.out")   (Dogecoin testnet)
 Reserve address:      $(jq -r .dogecoinvmReserve "$STATE/signers.out")   (DogecoinVM)
