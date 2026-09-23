@@ -21,12 +21,22 @@ type rpcClient struct {
 	nextID     atomic.Uint64
 }
 
+// rpcIdleTimeout is how long an idle connection to a node is kept.
+const rpcIdleTimeout = 20 * time.Second
+
 func newRPCClient(url, user, pass string) *rpcClient {
 	return &rpcClient{
 		url:  url,
 		user: user,
 		pass: pass,
-		http: &http.Client{Timeout: 60 * time.Second},
+		http: &http.Client{
+			Timeout: 60 * time.Second,
+			// Dogecoin Core closes a connection idle for 30 seconds
+			// (-rpcservertimeout). Dropping ours sooner means a request
+			// never goes out on one the server is closing, which fails
+			// with EOF.
+			Transport: &http.Transport{IdleConnTimeout: rpcIdleTimeout},
+		},
 	}
 }
 
