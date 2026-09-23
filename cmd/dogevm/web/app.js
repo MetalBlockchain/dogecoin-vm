@@ -184,24 +184,22 @@ async function refreshStatus() {
     // rather than a block number that looks like the chain tip.
     const sync = s.dogecoinSync;
     const syncing = Boolean(sync && sync.syncing);
-    $('sync-meter').hidden = !syncing;
-    $('sync-of').hidden = !syncing;
+    const offline = Boolean(sync && sync.available === false);
+    $('sync-meter').hidden = !syncing || offline;
+    $('sync-of').hidden = !syncing && !offline;
     $('deposit-sync').hidden = !syncing;
     $('doge-height').textContent = s.dogecoinHeight.toLocaleString('en-US');
-    if (sync && sync.available === false) {
-      $('doge-height-label').textContent = 'Dogecoin node offline';
+    if (offline) {
       $('doge-height').textContent = '–';
+      $('sync-of').textContent = "The bridge's Dogecoin node is offline.";
     } else if (syncing) {
       // Dogecoin Core's progress is weighted by transactions. Early blocks
       // are nearly empty, so a block count races ahead and then stalls.
       const pct = Math.min(99, Math.floor(sync.progress * 100));
-      $('doge-height-label').textContent = 'Dogecoin node syncing';
       $('sync-fill').style.width = `${pct}%`;
-      $('sync-of').textContent = `of ${sync.headers.toLocaleString('en-US')} (${pct}%)`;
+      $('sync-of').textContent = `Node catching up: ${pct}%. Latest block ${sync.headers.toLocaleString('en-US')}.`;
       $('deposit-sync').textContent =
         `The bridge's Dogecoin node is catching up (${pct}%). It sees and credits new deposits only once it reaches the present.`;
-    } else {
-      $('doge-height-label').textContent = 'Dogecoin block';
     }
     if (!s.audit) {
       $('verdict').textContent = 'The bridge cannot read both chains right now.';
