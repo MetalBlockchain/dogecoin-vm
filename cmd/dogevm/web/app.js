@@ -8,7 +8,9 @@ const WITHDRAW_STORE = 'dogevm.withdrawals';
 let info = null;
 let key = null; // Uint8Array, or null
 let depositShownFor = null;
-let utxos = [];
+let utxos = []; // DogecoinVM
+let dogeUtxos = []; // Dogecoin
+let dogeState = 'unknown'; // unknown | ready | syncing | off
 
 // generation counts key changes. Work started for one key checks it before
 // touching the page, so a slow response never shows under another key.
@@ -255,12 +257,15 @@ async function refreshStatus() {
 
 const myDest = () => chain.keyDestination(key);
 const myAddress = () => chain.encodeAddress(myDest(), info.dogecoinvmVersions);
+const myDogeAddress = () => chain.encodeAddress(myDest(), info.dogecoinVersions);
 
 // setKey switches keys. It clears everything shown for the previous key.
 function setKey(newKey) {
   key = newKey;
   generation++;
   utxos = [];
+  dogeUtxos = [];
+  dogeState = 'unknown';
   depositShownFor = null;
   let warning = '';
   if (key) {
@@ -279,12 +284,16 @@ function setKey(newKey) {
   $('balance').textContent = '…';
   $('balance-pending').textContent = '';
   $('history').replaceChildren();
+  $('doge-balance').textContent = '…';
+  $('doge-pending').textContent = '';
+  $('doge-history').replaceChildren();
+  $('doge-import').hidden = true;
   $('deposit-address').textContent = '…';
   $('deposit-verified').textContent = '';
   $('deposit-qr').replaceChildren();
   $('deposits').replaceChildren();
   $('withdrawals').replaceChildren();
-  for (const id of ['send-result', 'withdraw-result', 'faucet-result']) {
+  for (const id of ['send-result', 'withdraw-result', 'faucet-result', 'move-result', 'doge-import-result']) {
     $(id).textContent = '';
     $(id).className = 'result';
   }
@@ -299,7 +308,15 @@ function renderKey() {
   for (const el of document.querySelectorAll('.with-key')) el.hidden = !has;
   if (!has) return;
   $('my-address').textContent = myAddress();
+  // On mainnet the two networks share address versions, so one key has the
+  // same address on both.
+  const same = myAddress() === myDogeAddress();
+  $('address-label').textContent = same ? 'Your address' : 'Your DogecoinVM address';
+  $('address-note').textContent = same ? 'The same on Dogecoin and DogecoinVM: one key, two networks.' : '';
+  $('doge-address-line').hidden = same;
+  $('my-doge-address').textContent = same ? '' : myDogeAddress();
   refreshWallet();
+  refreshDogeWallet();
   if (!$('panel-deposit').hidden) showDeposit();
   if (!$('panel-withdraw').hidden) renderWithdrawals();
 }
@@ -328,21 +345,84 @@ async function refreshWallet() {
     $('balance').textContent = tidy(a.confirmed);
     const pending = chain.parseDoge(a.pending);
     $('balance-pending').textContent = pending > 0n ? `${tidy(a.pending)} DOGE arriving in the next block` : '';
-    $('history').replaceChildren(...(a.history.length === 0
-      ? [empty('Nothing yet. Deposit DOGE from Dogecoin on the Deposit tab.')]
-      : a.history.map((h) => {
-        const sent = h.net.startsWith('-');
-        return item(
-          { text: short(h.txid), class: 'mono' },
-          `${sent ? '−' : '+'}${tidy(h.net)} DOGE${h.confirmations > 0 ? '' : ' (pending)'}`,
-        );
-      })));
+    renderHistory($('history'), a.history, 'Nothing yet. Move DOGE over from Dogecoin on the Deposit tab.');
   } catch (err) {
     if (gen !== generation) return;
     $('balance').textContent = '…';
     $('balance-pending').textContent = `Can't load your balance: ${err.message}`;
   }
 }
+
+function renderHistory(list, history, emptyText) {
+  list.replaceChildren(...(history.length === 0
+    ? [empty(emptyText)]
+    : history.map((h) => {
+      const sent = h.net.startsWith('-');
+      return item(
+        { text: short(h.txid), class: 'mono' },
+        `${sent ? '−' : '+'}${tidy(h.net)} DOGE${h.confirmations > 0 ? '' : ' (pending)'}`,
+      );
+    })));
+}
+
+// refreshDogeWallet shows the key's Dogecoin balance, registering the
+// address with the bridge's Dogecoin index first if need be.
+async function refreshDogeWallet() {
+  if (!key || !info.dogeWallet) {
+    $('doge-balance').textContent = '–';
+    $('doge-pending').textContent = 'Not available from this bridge.';
+    dogeState = 'off';
+    return;
+  }
+  const gen = generation;
+  const address = myDogeAddress();
+  try {
+    let a;
+    try {
+      a = await api(`/api/doge/address/${address}`);
+    } catch (err) {
+      if (err.status !== 404) throw err;
+      await api('/api/doge/watch', { address });
+      a = await api(`/api/doge/address/${address}`);
+    }
+    if (gen !== generation) return;
+    dogeState = 'ready';
+    dogeUtxos = a.utxos;
+    $('doge-balance').textContent = tidy(a.confirmed);
+    const pending = chain.parseDoge(a.pending.replace('-', ''));
+    $('doge-pending').textContent = pending === 0n ? ''
+      : a.pending.startsWith('-') ? `${tidy(a.pending)} DOGE leaving, waiting for a block` : `${tidy(a.pending)} DOGE arriving, waiting for a block`;
+    renderHistory($('doge-history'), a.history, 'Nothing yet. Send DOGE to your address from any Dogecoin wallet.');
+    $('doge-import').hidden = false;
+    $('move-available').textContent = `Available on Dogecoin: ${tidy(a.confirmed)} DOGE.`;
+  } catch (err) {
+    if (gen !== generation) return;
+    dogeState = err.status === 503 ? 'syncing' : 'unknown';
+    $('doge-balance').textContent = '…';
+    $('doge-pending').textContent = err.status === 503
+      ? "Shows once the bridge's Dogecoin node has caught up."
+      : `Can't load your Dogecoin balance: ${err.message}`;
+    $('move-available').textContent = $('doge-pending').textContent;
+  }
+}
+
+$('doge-import-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = e.submitter;
+  button.disabled = true;
+  try {
+    const txid = $('doge-import-txid').value.trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(txid)) throw new Error('A transaction ID is 64 hexadecimal characters.');
+    const r = await api('/api/doge/import', { address: myDogeAddress(), txid });
+    showResult($('doge-import-result'), `Added ${r.imported} payment${r.imported === 1 ? '' : 's'}.`, true);
+    $('doge-import-form').reset();
+    refreshDogeWallet();
+  } catch (err) {
+    showResult($('doge-import-result'), err.message, false);
+  } finally {
+    button.disabled = false;
+  }
+});
 
 $('create-key').addEventListener('click', () => {
   // Never replace a key this browser already holds.
@@ -367,24 +447,42 @@ $('forget-key').addEventListener('click', () => {
   if (confirm('Remove this key from the browser? Without a backup, its DOGE is gone.')) setKey(null);
 });
 
-const getRawTx = async (txid) => (await api(`/api/rawtx/${txid}`)).hex;
+// Each network's coins, and where to check and broadcast its transactions.
+const networks = {
+  vm: {
+    utxos: () => utxos,
+    getRawTx: async (txid) => (await api(`/api/rawtx/${txid}`)).hex,
+    broadcast: '/api/tx',
+    refresh: () => refreshWallet(),
+  },
+  doge: {
+    utxos: () => dogeUtxos,
+    getRawTx: async (txid) => (await api(`/api/doge/rawtx/${txid}`)).hex,
+    broadcast: '/api/doge/tx',
+    refresh: () => refreshDogeWallet(),
+  },
+};
 
-// pay signs a payment, calls beforeBroadcast with its txid (so a record
-// exists even if the broadcast response is lost), and broadcasts it. It
-// returns {txid, unknown}: unknown is true if the bridge never answered, so
-// the payment may or may not have gone through.
-async function pay(script, amount, data, beforeBroadcast) {
-  const built = await chain.buildPayment({ key, utxos, getRawTx, script, amount, data });
+// pay signs a payment on a network ('vm' or 'doge'), calls beforeBroadcast
+// with its txid (so a record exists even if the broadcast response is lost),
+// and broadcasts it. It returns {txid, unknown}: unknown is true if the
+// bridge never answered, so the payment may or may not have gone through.
+async function pay(script, amount, data, beforeBroadcast, network = 'vm') {
+  const net = networks[network];
+  if (network === 'doge' && dogeState !== 'ready') {
+    throw new Error("Your Dogecoin balance isn't available yet; try again once it shows.");
+  }
+  const built = await chain.buildPayment({ key, utxos: net.utxos(), getRawTx: net.getRawTx, script, amount, data });
   if (beforeBroadcast) beforeBroadcast(built.txid);
   try {
-    const { txid } = await api('/api/tx', { hex: built.hex });
+    const { txid } = await api(net.broadcast, { hex: built.hex });
     if (txid !== built.txid) throw new Error(`the bridge reported txid ${txid}, expected ${built.txid}`);
   } catch (err) {
     if (err.status === 0 || err.status >= 500) return { txid: built.txid, unknown: true };
     err.rejected = true;
     throw err;
   } finally {
-    setTimeout(refreshWallet, 1500);
+    setTimeout(net.refresh, 1500);
   }
   return { txid: built.txid, unknown: false };
 }
@@ -397,12 +495,16 @@ $('send-form').addEventListener('submit', async (e) => {
   const button = e.submitter;
   button.disabled = true;
   try {
-    const to = chain.decodeAddress($('send-to').value, info.dogecoinvmVersions);
+    const network = document.querySelector('input[name=send-network]:checked').value;
+    const versions = network === 'doge' ? info.dogecoinVersions : info.dogecoinvmVersions;
+    const to = chain.decodeAddress($('send-to').value, versions);
     const amount = chain.parseDoge($('send-amount').value);
-    const { txid, unknown } = await pay(chain.pkScript(to), amount);
+    const { txid, unknown } = await pay(chain.pkScript(to), amount, undefined, undefined, network);
+    const where = network === 'doge' ? 'on Dogecoin' : 'on DogecoinVM';
     if (unknown) showResult($('send-result'), unknownOutcome(txid), false);
-    else showResult($('send-result'), `Sent. Transaction ${short(txid)}.`, true);
-    $('send-form').reset();
+    else showResult($('send-result'), `Sent ${where}. Transaction ${short(txid)}.`, true);
+    $('send-to').value = '';
+    $('send-amount').value = '';
   } catch (err) {
     showResult($('send-result'), err.message, false);
   } finally {
@@ -449,6 +551,41 @@ async function showDeposit() {
   }
   refreshDeposits();
 }
+
+// The one-click deposit: pay the personal deposit address from the key's own
+// Dogecoin balance. The address is the one this page derives from the
+// signers' keys, and it is registered with the bridge first.
+$('move-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = e.submitter;
+  button.disabled = true;
+  try {
+    const amount = chain.parseDoge($('move-amount').value);
+    const min = chain.parseDoge(info.minDeposit);
+    const max = chain.parseDoge(info.maxDeposit);
+    if (amount < min) throw new Error(`The smallest deposit is ${tidy(info.minDeposit)} DOGE.`);
+    if (max > 0n && amount > max) {
+      throw new Error(`During the beta a deposit can be at most ${tidy(info.maxDeposit)} DOGE; a larger one is held for a refund.`);
+    }
+    if (depositShownFor !== myAddress()) await showDeposit();
+    if (depositShownFor !== myAddress()) throw new Error("Your deposit address couldn't be checked, so nothing was sent. See below.");
+    const expected = chain.depositAddress(myDest(), info.signers, info.dogecoinVersions);
+    const script = chain.pkScript(chain.decodeAddress(expected, info.dogecoinVersions));
+    const { txid, unknown } = await pay(script, amount, undefined, undefined, 'doge');
+    if (unknown) {
+      showResult($('move-result'), unknownOutcome(txid), false);
+    } else {
+      showResult($('move-result'),
+        `Sent to your deposit address. It's credited on DogecoinVM after ${info.depositConfirmations} Dogecoin confirmations, about ${info.depositConfirmations} minutes. Transaction ${short(txid)}.`, true);
+    }
+    $('move-amount').value = '';
+    setTimeout(refreshDeposits, 3000);
+  } catch (err) {
+    showResult($('move-result'), err.message, false);
+  } finally {
+    button.disabled = false;
+  }
+});
 
 function depositStatus(d) {
   switch (d.status) {
@@ -509,6 +646,12 @@ $('withdraw-form').addEventListener('submit', async (e) => {
     button.disabled = false;
     renderWithdrawals();
   }
+});
+
+$('withdraw-to-mine').addEventListener('click', () => {
+  if (!key) return;
+  $('withdraw-to').value = myDogeAddress();
+  $('withdraw-amount').focus();
 });
 
 async function renderWithdrawals() {
@@ -586,6 +729,7 @@ async function start() {
   setInterval(() => {
     refreshStatus();
     refreshWallet();
+    refreshDogeWallet();
     refreshDeposits();
     if (!$('panel-withdraw').hidden) renderWithdrawals();
   }, 15000);

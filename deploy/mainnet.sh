@@ -109,7 +109,7 @@ ENV
     alerts="-telegram-token-file $SECRETS/telegram-token -telegram-chat $(cat "$SECRETS/telegram-chat")"
   for unit in bridge web monitor; do
     local exec="$BIN/dogevm bridge $policy -interval 30s"
-    [[ $unit == web ]] && exec="$BIN/dogevm serve $policy ${health% -webhook*} -listen 127.0.0.1:8081"
+    [[ $unit == web ]] && exec="$BIN/dogevm serve $policy ${health% -webhook*} -doge-index $STATE/dogeindex -listen 127.0.0.1:8081"
     [[ $unit == monitor ]] && exec="$BIN/dogevm monitor $policy $health $alerts"
     cat >"/etc/systemd/system/dogevm-$unit-main.service" <<UNIT
 [Unit]

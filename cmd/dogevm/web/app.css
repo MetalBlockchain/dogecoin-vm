@@ -365,6 +365,27 @@ button.copy { font-size: var(--step--1); padding: 0.2rem 0.6rem; vertical-align:
 .balance { margin: 1rem 0 0; font-size: var(--step-3); font-weight: 700; }
 .balance .unit { font-size: var(--step-1); color: var(--ink-soft); }
 .balance-pending { margin: 0.25rem 0 0; color: var(--ink-soft); }
+.address-note { margin: 0.25rem 0 0; color: var(--ink-soft); font-size: var(--step--1); }
+/* The two balances, one per network, in each network's colour. */
+.balances { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 1rem; }
+.balance-tile { padding: 0.9rem 1rem; border-radius: 4px; border-left: 4px solid; }
+.balance-tile .balance { margin: 0.2rem 0 0; font-size: var(--step-2); }
+.tile-doge { background: var(--coin-wash); border-color: var(--coin); }
+.tile-vm { background: var(--vm-wash); border-color: var(--vm); }
+.tile-label { margin: 0; font-weight: 500; }
+.tile-doge .tile-label { color: var(--coin-ink); }
+.tile-vm .tile-label { color: var(--vm-ink); }
+@media (max-width: 30rem) { .balances { grid-template-columns: 1fr; } }
+.network-choice { border: 0; padding: 0; margin: 0.25rem 0 0; display: grid; gap: 0.35rem; }
+.network-choice legend { font-weight: 500; margin-bottom: 0.35rem; padding: 0; }
+.network-choice label { font-weight: 400; margin: 0; display: flex; gap: 0.5rem; align-items: baseline; }
+.history-chain { font-size: var(--step-0); margin: 1.25rem 0 0.5rem; }
+.history-chain.chain-doge { color: var(--coin-ink); }
+.history-chain.chain-vm { color: var(--vm-ink); }
+.doge-import { margin-top: 1rem; }
+.doge-import summary { cursor: pointer; color: var(--ink-soft); }
+.move-form { margin-bottom: 2rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--rule); }
+.link-button { background: none; border: 0; padding: 0; color: var(--vm-ink); text-decoration: underline; text-underline-offset: 0.15em; font: inherit; cursor: pointer; justify-self: start; }
 
 /* Lists */
 

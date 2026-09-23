@@ -104,16 +104,33 @@
 
         <div id="has-key" hidden>
           <div class="account">
-            <p class="account-label">Your DogecoinVM address</p>
-            <p class="address address-vm"><span id="my-address"></span> <button class="copy" data-copy="my-address" aria-label="Copy your DogecoinVM address">Copy</button></p>
-            <p class="balance"><span class="amount" id="balance">…</span> <span class="unit">DOGE</span></p>
-            <p class="balance-pending" id="balance-pending"></p>
+            <p class="account-label" id="address-label">Your address</p>
+            <p class="address"><span id="my-address"></span> <button class="copy" data-copy="my-address" aria-label="Copy your address">Copy</button></p>
+            <p class="address-note" id="address-note"></p>
+            <p class="address address-doge" id="doge-address-line" hidden>On Dogecoin: <span id="my-doge-address"></span> <button class="copy" data-copy="my-doge-address" aria-label="Copy your Dogecoin address">Copy</button></p>
+            <div class="balances">
+              <div class="balance-tile tile-doge">
+                <p class="tile-label">On Dogecoin</p>
+                <p class="balance"><span class="amount" id="doge-balance">…</span> <span class="unit">DOGE</span></p>
+                <p class="balance-pending" id="doge-pending"></p>
+              </div>
+              <div class="balance-tile tile-vm">
+                <p class="tile-label">On DogecoinVM</p>
+                <p class="balance"><span class="amount" id="balance">…</span> <span class="unit">DOGE</span></p>
+                <p class="balance-pending" id="balance-pending"></p>
+              </div>
+            </div>
           </div>
           <p class="notice" id="key-warning" role="alert" hidden></p>
 
           <form id="send-form" class="stack">
-            <h2>Send DOGE on DogecoinVM</h2>
-            <label for="send-to">To DogecoinVM address</label>
+            <h2>Send DOGE</h2>
+            <fieldset class="network-choice">
+              <legend>Send on</legend>
+              <label><input type="radio" name="send-network" value="vm" checked> DogecoinVM <span class="muted">final in seconds</span></label>
+              <label><input type="radio" name="send-network" value="doge"> Dogecoin <span class="muted">a confirmation about every minute</span></label>
+            </fieldset>
+            <label for="send-to">To address</label>
             <input id="send-to" autocomplete="off" spellcheck="false" required>
             <label for="send-amount">Amount (DOGE)</label>
             <input id="send-amount" inputmode="decimal" autocomplete="off" required>
@@ -123,7 +140,19 @@
 
           <section class="history">
             <h2>Recent activity</h2>
+            <h3 class="history-chain chain-vm">On DogecoinVM</h3>
             <ol id="history"></ol>
+            <h3 class="history-chain chain-doge">On Dogecoin</h3>
+            <ol id="doge-history"></ol>
+            <details class="doge-import" id="doge-import" hidden>
+              <summary>Missing an older Dogecoin payment?</summary>
+              <p>This wallet sees Dogecoin payments from when it first opened. Add an earlier one by its transaction ID, and the bridge's own Dogecoin node checks it.</p>
+              <form id="doge-import-form" class="inline">
+                <input id="doge-import-txid" autocomplete="off" spellcheck="false" placeholder="Transaction ID" aria-label="Transaction ID" required>
+                <button type="submit">Add payment</button>
+              </form>
+              <p class="result" id="doge-import-result" aria-live="polite"></p>
+            </details>
           </section>
 
           <details class="key-details" id="key-details">
@@ -141,6 +170,15 @@
         <p class="needs-key">Create or import a key on the Wallet tab first.</p>
         <div class="with-key">
           <p class="notice" id="deposit-sync" hidden></p>
+          <form id="move-form" class="stack move-form">
+            <h3>Move from your Dogecoin balance</h3>
+            <p class="muted" id="move-available">Your Dogecoin balance appears on the Wallet tab.</p>
+            <label for="move-amount">Amount (DOGE)</label>
+            <input id="move-amount" inputmode="decimal" autocomplete="off" required>
+            <button class="primary" type="submit">Move to DogecoinVM</button>
+            <p class="result" id="move-result" aria-live="polite"></p>
+          </form>
+          <h3>Or send from any Dogecoin wallet</h3>
           <p>Send DOGE to this Dogecoin address from any wallet. After <span id="confs-needed">6</span> confirmations it appears in your DogecoinVM wallet, less a <span id="vm-fee">0.01</span> DOGE fee. The minimum is <span id="min-deposit">1</span> DOGE.<span id="deposit-limits"></span></p>
           <div class="deposit-address">
             <div id="deposit-qr" class="qr" aria-hidden="true"></div>
@@ -163,6 +201,7 @@
           <p>The bridge pays your Dogecoin address once the withdrawal is in a DogecoinVM block, less a <span id="doge-fee">1</span> DOGE Dogecoin fee. The minimum is <span id="min-pegout">2</span> DOGE.</p>
           <label for="withdraw-to">To Dogecoin address</label>
           <input id="withdraw-to" autocomplete="off" spellcheck="false" required>
+          <button type="button" class="link-button" id="withdraw-to-mine">Use my Dogecoin address</button>
           <label for="withdraw-amount">Amount (DOGE)</label>
           <input id="withdraw-amount" inputmode="decimal" autocomplete="off" required>
           <button class="primary" type="submit">Withdraw</button>
