@@ -25,32 +25,42 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="site.css">
   <script src="theme.js"></script>
+  <script type="module" src="site.js"></script>
   <script type="module" src="app.js"></script>
 </head>
 <body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header">
+    <a class="site-brand" href="/"><img src="dogecoin.svg" alt="" width="32" height="32">DogecoinVM</a>
+    <nav class="site-nav" aria-label="Site">
+      <a href="/" id="nav-bridge">Bridge</a>
+      <a href="/explorer" id="nav-explorer">Explorer</a>
+      <a href="/roadmap">Roadmap</a>
+      <a href="/docs">Docs</a>
+      <a class="nav-cta" href="/download">Download for Mac</a>
+    </nav>
+  </header>
   <p class="network-band" id="network-band" role="note" hidden></p>
   <p class="pause-band" id="pause-band" role="alert" hidden></p>
+  <span id="content" tabindex="-1"></span>
 
-  <header class="masthead">
-    <div class="brand">
-      <img class="brand-coin" src="dogecoin.svg" alt="" width="64" height="64">
-      <h1>DogecoinVM <span class="masthead-sub" id="network-name">bridge</span></h1>
-    </div>
+  <section class="intro" id="intro" aria-labelledby="hero-title">
+    <h1 class="hero-title" id="hero-title">Use DOGE on DogecoinVM <span class="beta-pill" id="network-name">beta</span></h1>
+    <p class="pitch">DogecoinVM is a Dogecoin-compatible chain running on Metal Blockchain. Move DOGE over one for one, pay in seconds, and move it back to Dogecoin.</p>
     <dl class="heights">
       <div class="height height-doge"><dt id="doge-height-label">Dogecoin block</dt><dd id="doge-height">…</dd><span class="sync-meter" id="sync-meter" hidden><span id="sync-fill"></span></span><span class="sync-of" id="sync-of" hidden></span></div>
       <div class="height height-vm"><dt>DogecoinVM block</dt><dd id="vm-height">…</dd></div>
     </dl>
-  </header>
-
-  <section class="intro" id="intro" aria-label="How it works">
-    <p class="pitch">Move DOGE to a fast chain on Metal Blockchain, one for one, and back again.</p>
     <ol class="steps">
-      <li><span><strong>Deposit</strong> DOGE from any Dogecoin wallet to your own deposit address.</span></li>
+      <li><span><strong>Deposit</strong> DOGE from any Dogecoin wallet, or move it in one click from this wallet.</span></li>
       <li><span><strong>Use it</strong> on DogecoinVM, where a payment is final in seconds.</span></li>
-      <li><span><strong>Withdraw</strong> back to any Dogecoin address whenever you like.</span></li>
+      <li><span><strong>Withdraw</strong> back to Dogecoin. The bridge pays it once it's final on DogecoinVM.</span></li>
     </ol>
   </section>
+
+  <h1 class="page-heading" id="explorer-heading" hidden>Explorer</h1>
 
   <main class="explorer-view" id="explorer-view" hidden></main>
 
@@ -70,6 +80,7 @@
           <span class="gauge-value amount" id="circulating">…</span>
         </div>
       </div>
+      <p class="peg-capacity" id="peg-capacity"></p>
       <p class="peg-verdict" id="verdict" aria-live="polite">Checking the peg…</p>
       <dl class="peg-pending">
         <div><dt>Deposits waiting to be credited</dt><dd class="amount" id="pending-in">…</dd></div>
@@ -80,6 +91,7 @@
         <div><dt>Share on DogecoinVM</dt><dd class="amount" id="supply-share">…</dd></div>
       </dl>
       <p class="peg-signers" id="signers"></p>
+      <p class="peg-more"><a href="/explorer">See every locked output in the explorer</a></p>
     </aside>
 
     <section class="console" aria-label="Wallet">
@@ -276,9 +288,13 @@
     </section>
   </div>
 
-  <footer class="footer">
-    <button class="theme-toggle" id="theme-toggle" type="button">Theme: light</button>
-    <p>DogecoinVM runs on Metal Blockchain. The bridge is run by a set of signers, who hold the DOGE locked on Dogecoin. <a href="https://github.com/paulgnz/dogecoin-vm">Source and docs</a>.</p>
+  <footer class="site-footer">
+    <p>Developed by Paul Grey @ <a href="https://metallicus.com">metallicus.com</a>. DogecoinVM runs on Metal Blockchain; the bridge's signers hold the DOGE locked on Dogecoin.</p>
+    <nav aria-label="More">
+      <a href="https://github.com/paulgnz/dogecoin-vm">Source</a>
+      <a href="https://github.com/paulgnz/dogecoin-vm/security/advisories/new">Report a security issue</a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Change theme">Theme: light</button>
+    </nav>
   </footer>
 </body>
 </html>

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DogecoinVM docs</title>
+  <meta name="description" content="How DogecoinVM and its DOGE bridge work: deposits, withdrawals, fees and timings, trust and limits, wallets and the API.">
+  <link rel="icon" href="dogecoin.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="site.css">
+  <script src="theme.js"></script>
+  <script type="module" src="site.js"></script>
+  <script type="module" src="docs.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header">
+    <a class="site-brand" href="/"><img src="dogecoin.svg" alt="" width="32" height="32">DogecoinVM</a>
+    <nav class="site-nav" aria-label="Site">
+      <a href="/">Bridge</a>
+      <a href="/explorer">Explorer</a>
+      <a href="/roadmap">Roadmap</a>
+      <a href="/docs" aria-current="page">Docs</a>
+      <a class="nav-cta" href="/download">Download for Mac</a>
+    </nav>
+  </header>
+
+  <main class="page" id="content" tabindex="-1">
+    <h1>How DogecoinVM works</h1>
+    <p class="lede">DogecoinVM is a Dogecoin-compatible chain running on Metal Blockchain, joined to Dogecoin by a one-for-one DOGE bridge. This page covers how DOGE moves, what it costs, and what you're trusting.</p>
+
+    <nav class="toc" aria-label="On this page">
+      <a href="#chain">The chain</a>
+      <a href="#bridge">The bridge</a>
+      <a href="#fees">Fees, limits and timings</a>
+      <a href="#trust">Trust and limits</a>
+      <a href="#wallets">Wallets</a>
+      <a href="#developers">For developers</a>
+      <a href="#security">Security</a>
+    </nav>
+
+    <h2 id="chain">The chain</h2>
+    <p>DogecoinVM uses Dogecoin's transaction format and script language, and Dogecoin Core 1.14's fee and dust rules, without SegWit. It runs as its own Layer 1 on Metal Blockchain, whose Snowman consensus makes a transaction final as soon as it is in a block, in about two seconds. There are no reorganisations to wait out.</p>
+    <p>A key has the same address on Dogecoin and on DogecoinVM. The two balances are separate: coins on one network move to the other only through the bridge.</p>
+
+    <h2 id="bridge">The bridge</h2>
+    <h3>Deposits: Dogecoin to DogecoinVM</h3>
+    <p>Every wallet gets its own Dogecoin deposit address. Its script names your DogecoinVM address and is spendable only by the peg signers, so the bridge knows who to credit and nobody else can move the coins. Your wallet derives this address itself from the signers' public keys and refuses to show one that doesn't match. After <span data-info="depositConfirmations">…</span> Dogecoin confirmations, the same amount, less the bridge fee, is released to you on DogecoinVM from the peg reserve.</p>
+    <p>The web wallet and the Mac app can make the deposit for you from your Dogecoin balance. You can also send to your deposit address from any Dogecoin wallet or exchange.</p>
+    <h3>Withdrawals: DogecoinVM to Dogecoin</h3>
+    <p>A withdrawal sends DOGE back to the peg reserve with a note naming a Dogecoin address. Once it's final on DogecoinVM, the signers pay that address from the DOGE locked on Dogecoin, less the Dogecoin network fee.</p>
+    <h3>Proof of reserves</h3>
+    <p>Every DOGE on DogecoinVM is backed by DOGE locked on Dogecoin. The <a href="/explorer">explorer</a> lists every locked output, each linked to a public Dogecoin explorer, next to the amount circulating on DogecoinVM. The bridge refuses to move anything unless the locked DOGE covers what circulates plus what's pending.</p>
+
+    <h2 id="fees">Fees, limits and timings</h2>
+    <p>Live from the bridge:</p>
+    <dl class="facts-list" id="live-facts">
+      <dt>Confirmations before a deposit is credited</dt><dd><span data-info="depositConfirmations">…</span> (about as many minutes)</dd>
+      <dt>Bridge fee on each deposit</dt><dd><span data-info="vmFee" data-doge>…</span> DOGE</dd>
+      <dt>Dogecoin fee on each withdrawal</dt><dd><span data-info="dogeFee" data-doge>…</span> DOGE</dd>
+      <dt>Smallest deposit</dt><dd><span data-info="minDeposit" data-doge>…</span> DOGE</dd>
+      <dt>Largest deposit (beta)</dt><dd><span data-info="maxDeposit" data-doge>…</span> DOGE; larger ones are held for a refund</dd>
+      <dt>Most DOGE on DogecoinVM in total (beta)</dt><dd><span data-info="maxCirculating" data-doge>…</span> DOGE</dd>
+      <dt>Smallest withdrawal</dt><dd><span data-info="minPegOut" data-doge>…</span> DOGE</dd>
+      <dt>Signers</dt><dd><span data-info="signers">…</span></dd>
+      <dt>Peg address on Dogecoin</dt><dd><code data-info="pegAddress">…</code></dd>
+    </dl>
+    <p>Sending on DogecoinVM costs Dogecoin's usual 0.01 DOGE per kilobyte, a fraction of a DOGE, and is final in about two seconds. A Dogecoin block comes about every minute.</p>
+
+    <h2 id="trust">Trust and limits</h2>
+    <div class="callout"><p><strong>Beta, with real DOGE.</strong> The bridge is new and hasn't had an external audit. Keep amounts small.</p></div>
+    <ul>
+      <li><strong>Custody.</strong> The DOGE locked on Dogecoin and the reserve on DogecoinVM are held by a 2-of-3 multisig of peg signers. Any two of them could move it. Signer keys aren't yet held by independent operators; bringing them in is the next phase of the <a href="/roadmap">roadmap</a>, and the software and setup ceremony for it are built.</li>
+      <li><strong>What the signers check.</strong> In the separate-signer design, each signer checks every transaction against its own view of both chains, and signs only what is owed, exactly as it would build it.</li>
+      <li><strong>Caps.</strong> During the beta, deposits and the total on DogecoinVM are capped, so the amount at risk is known in advance.</li>
+      <li><strong>Pause.</strong> The bridge can be paused in an emergency: nothing is signed or paid, and the site shows why. Deposits and withdrawals made while paused are processed after it resumes.</li>
+      <li><strong>Refunds.</strong> A deposit that can't be credited, for example one over the beta limit, is held on Dogecoin and can be refunded.</li>
+      <li><strong>Backups.</strong> The bridge's keys and settings are backed up daily, encrypted to a key held off the server, and a backup has been restored and checked against the live keys.</li>
+    </ul>
+
+    <h2 id="wallets">Wallets</h2>
+    <p><strong>In the browser.</strong> The <a href="/">bridge page</a> is a wallet: your key is made in the browser and never leaves it. Protect it with a passkey, for example one saved in 1Password, and opening the wallet takes the passkey. Passkey protection needs a passkey provider that supports the PRF extension; older security keys don't. Every coin a payment spends is checked against the raw transaction that created it, so the server can't inflate a fee.</p>
+    <p><strong>On a Mac.</strong> The <a href="/download">Mac app</a> keeps the key encrypted to the Mac's Secure Enclave, shows every payment for review before Touch ID signs it, and updates itself.</p>
+    <p>Whichever you use, back up your key. It's your wallet on both networks, and without it the DOGE can't be recovered.</p>
+
+    <h2 id="developers">For developers</h2>
+    <p>The bridge serves a JSON API at this site, used by both wallets:</p>
+    <pre>GET  /api/info                 network, fees, limits and signers
+GET  /api/status               both chains' heights, sync, the peg audit
+GET  /api/reserves             every locked output on Dogecoin
+GET  /api/activity             recent deposits and withdrawals
+GET  /api/address/{address}    DogecoinVM balance, outputs and history
+GET  /api/tx/{txid}            a DogecoinVM transaction, described
+GET  /api/block/{height|hash}  a DogecoinVM block
+GET  /api/deposits/{address}   deposits for a DogecoinVM address
+GET  /api/pegout/{txid}        a withdrawal's status
+POST /api/deposit-address      {"address": …}: your deposit address
+POST /api/tx                   {"hex": …}: broadcast on DogecoinVM
+GET  /api/health               checks, for uptime monitors</pre>
+    <p>The source, including the chain, the bridge, both wallets' code and the deployment scripts, is on <a href="https://github.com/paulgnz/dogecoin-vm">GitHub</a>.</p>
+
+    <h2 id="security">Security</h2>
+    <p>Please report vulnerabilities privately through <a href="https://github.com/paulgnz/dogecoin-vm/security/advisories/new">GitHub's security advisories</a>, not in a public issue.</p>
+  </main>
+
+  <footer class="site-footer">
+    <p>Developed by Paul Grey @ <a href="https://metallicus.com">metallicus.com</a>.</p>
+    <nav aria-label="More">
+      <a href="https://github.com/paulgnz/dogecoin-vm">Source</a>
+      <a href="https://github.com/paulgnz/dogecoin-vm/security/advisories/new">Report a security issue</a>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Change theme">Theme: light</button>
+    </nav>
+  </footer>
+</body>
+</html>

@@ -148,7 +148,7 @@ code { font-family: var(--mono); font-size: 0.9em; }
 
 /* Page frame */
 
-.masthead, .intro, .layout, .lower, .footer {
+.masthead, .intro, .layout, .lower, .footer, .page-heading {
   max-width: 72rem;
   margin-left: auto;
   margin-right: auto;
@@ -190,7 +190,12 @@ code { font-family: var(--mono); font-size: 0.9em; }
 
 /* Introduction: what this is, in three steps. */
 
-.intro { padding-bottom: 1.75rem; }
+.intro { padding-top: 1.25rem; padding-bottom: 1.75rem; }
+.hero-title { font-size: var(--step-4); font-weight: 800; letter-spacing: -0.025em; line-height: 1.05; margin: 0 0 0.6rem; text-wrap: balance; }
+.beta-pill { display: inline-block; vertical-align: middle; font: 600 var(--step--1)/1 var(--sans); letter-spacing: 0.02em; padding: 0.35rem 0.6rem; border-radius: 99px; background: var(--band); color: var(--band-ink); position: relative; top: -0.3em; }
+.intro .heights { margin: 0 0 1.25rem; }
+.page-heading { font-size: var(--step-3); font-weight: 800; margin-top: 1.25rem; }
+@media (max-width: 40rem) { .hero-title { font-size: var(--step-3); } .intro .steps { display: none; } }
 .pitch { font-size: var(--step-1); max-width: 44rem; margin: 0 0 1.25rem; }
 .steps {
   list-style: none;
@@ -251,6 +256,9 @@ code { font-family: var(--mono); font-size: 0.9em; }
 }
 .peg h2 { color: var(--panel-ink); }
 .peg-lede { color: var(--panel-soft); margin-top: 0; }
+.peg-more { margin: 0.75rem 0 0; }
+.peg-capacity { margin: -0.5rem 0 1rem; color: var(--panel-soft); font-size: var(--step--1); }
+.peg-more a { color: var(--gauge-vm-ink); }
 /* The panel is navy in both themes, so its focus ring stays gold. */
 .peg { --focus: #f2b33d; }
 .gauge { display: grid; gap: 1.25rem; margin: 1.75rem 0 1.25rem; }

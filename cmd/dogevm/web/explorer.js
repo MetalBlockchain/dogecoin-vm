@@ -154,7 +154,7 @@ function page(gen, title, ...body) {
   if (gen !== routeGen) return;
   const heading = el('h2', { tabindex: '-1' }, title);
   $('explorer-view').replaceChildren(
-    el('p', {}, el('a', { href: '#' }, '← Back to the bridge')),
+    el('p', {}, el('a', { href: '#' }, onExplorerPage() ? '← Back to the explorer' : '← Back to the bridge')),
     heading, ...body.filter((b) => b !== null && b !== undefined));
   return heading;
 }
@@ -227,18 +227,29 @@ async function showAddress(gen, addr) {
   }
 }
 
+// The same page serves /, the bridge (wallet and peg), and /explorer
+// (activity, reserves, blocks and search). Transaction, block and address
+// pages (#/tx/…) open on either.
+const onExplorerPage = () => location.pathname.replace(/\/$/, '') === '/explorer';
+
 function route() {
   const gen = ++routeGen;
   const m = location.hash.match(/^#\/(tx|block|address)\/(.+)$/);
   const explorer = $('explorer-view');
-  const home = [$('intro'), $('home'), $('home-lower')];
+  const bridgeParts = [$('intro'), $('home')];
+  const explorerParts = [$('explorer-heading'), $('home-lower')];
+  const onExplorer = onExplorerPage();
+  $(onExplorer ? 'nav-explorer' : 'nav-bridge').setAttribute('aria-current', 'page');
+  $(onExplorer ? 'nav-bridge' : 'nav-explorer').removeAttribute('aria-current');
+  document.title = onExplorer ? 'DogecoinVM explorer' : 'DogecoinVM bridge';
   if (!m) {
     explorer.hidden = true;
-    home.forEach((n) => { n.hidden = false; });
+    bridgeParts.forEach((n) => { n.hidden = onExplorer; });
+    explorerParts.forEach((n) => { n.hidden = !onExplorer; });
     return;
   }
   explorer.hidden = false;
-  home.forEach((n) => { n.hidden = true; });
+  [...bridgeParts, ...explorerParts].forEach((n) => { n.hidden = true; });
   window.scrollTo(0, 0);
   let id;
   try {

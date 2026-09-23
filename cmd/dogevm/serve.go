@@ -756,6 +756,13 @@ func cmdServe(args []string) error {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /", http.FileServerFS(static))
+	// The site's pages at clean URLs. /explorer is the bridge page in
+	// explorer mode; /download/… (the Mac app's files) is served by Caddy.
+	for path, file := range map[string]string{
+		"/explorer": "index.html", "/roadmap": "roadmap.html", "/docs": "docs.html", "/download": "download.html",
+	} {
+		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, static, file) })
+	}
 	mux.HandleFunc("GET /api/info", handle(srv.info))
 	mux.HandleFunc("GET /api/status", handle(srv.status))
 	mux.HandleFunc("GET /api/health", srv.healthHandler)

@@ -122,22 +122,6 @@ document.querySelector('[role=tablist]').addEventListener('keydown', (e) => {
   selectTab(next.id.replace('tab-', ''));
 });
 
-// Theme: light unless the viewer picks dark or their system setting.
-const THEME_STORE = 'dogevm.theme';
-const themes = ['light', 'dark', 'system'];
-function applyTheme(theme) {
-  if (theme === 'light') document.documentElement.removeAttribute('data-theme');
-  else document.documentElement.setAttribute('data-theme', theme);
-  $('theme-toggle').textContent = `Theme: ${theme}`;
-}
-applyTheme(themes.includes(store.get(THEME_STORE)) ? store.get(THEME_STORE) : 'light');
-$('theme-toggle').addEventListener('click', () => {
-  const current = document.documentElement.getAttribute('data-theme') || 'light';
-  const next = themes[(themes.indexOf(current) + 1) % themes.length];
-  store.set(THEME_STORE, next);
-  applyTheme(next);
-});
-
 document.addEventListener('click', async (e) => {
   const target = e.target.closest('button.copy');
   if (!target) return;
@@ -169,10 +153,10 @@ async function loadInfo() {
   band.hidden = false;
   $('import-key').placeholder = mainnet ? 'Q…, 6… or 64 hex characters' : 'c…, 9… or 64 hex characters';
   if (mainnet) {
-    $('network-name').textContent = 'bridge beta';
+    $('network-name').textContent = 'beta';
     band.textContent = 'Beta, with real DOGE. Keep amounts small: the bridge is new and has not been audited.';
   } else {
-    $('network-name').textContent = 'testnet bridge';
+    $('network-name').textContent = 'testnet';
     band.textContent = 'Testnet. These coins have no value, and the network may be reset at any time.';
   }
   const limits = [];
@@ -228,7 +212,14 @@ async function refreshStatus() {
     const a = s.audit;
     const locked = chain.parseDoge(a.locked);
     const circulating = chain.parseDoge(a.circulating);
-    const max = locked > circulating ? locked : circulating;
+    // During the beta the bars are drawn against the circulating cap, so
+    // they show how much of the beta's room is used.
+    const cap = chain.parseDoge(info.maxCirculating);
+    let max = locked > circulating ? locked : circulating;
+    if (cap > max) max = cap;
+    $('peg-capacity').textContent = cap > 0n
+      ? `Beta capacity: ${tidy(a.circulating)} of ${tidy(info.maxCirculating)} DOGE in use.`
+      : '';
     const pct = (v) => (max === 0n ? 0 : Number((v * 1000n) / max) / 10);
     $('locked').textContent = tidy(a.locked);
     $('circulating').textContent = tidy(a.circulating);

@@ -1,0 +1,147 @@
+/* The public roadmap page (/roadmap). */
+
+:root {
+  --bg: #f2f4f1;
+  --surface: #ffffff;
+  --sunk: #e7ece8;
+  --ink: #16233a;
+  --ink-soft: #4a576b;
+  --rule: #cdd5cf;
+  --coin: #7d5f10;
+  --coin-wash: #f4ecd6;
+  --vm: #1d6f6a;
+  --vm-wash: #d9ece9;
+  --plan: #5b5f86;
+  --plan-wash: #e4e5f1;
+  --sans: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1524; --surface: #15213a; --sunk: #0f192d; --ink: #e7ecf2; --ink-soft: #a3afc0;
+    --rule: #2a3a57; --coin: #e2c46d; --coin-wash: rgba(212,171,69,.14); --vm: #7fd0c7;
+    --vm-wash: rgba(79,179,169,.14); --plan: #b7badf; --plan-wash: rgba(150,155,210,.14);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1524; --surface: #15213a; --sunk: #0f192d; --ink: #e7ecf2; --ink-soft: #a3afc0;
+  --rule: #2a3a57; --coin: #e2c46d; --coin-wash: rgba(212,171,69,.14); --vm: #7fd0c7;
+  --vm-wash: rgba(79,179,169,.14); --plan: #b7badf; --plan-wash: rgba(150,155,210,.14);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 400 1rem/1.6 var(--sans);
+  padding: 0 20px; -webkit-font-smoothing: antialiased;
+}
+.page { max-width: 46rem; margin: 0 auto; padding-block: 3.5rem 5rem; }
+h1 { font-size: clamp(2rem, 5vw, 2.75rem); font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; margin: 0 0 1rem; text-wrap: balance; }
+h2 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.01em; margin: 3.5rem 0 0.75rem; text-wrap: balance; }
+h3 { font-size: 1.125rem; font-weight: 700; margin: 0 0 0.25rem; }
+p { margin: 0 0 1rem; max-width: 65ch; }
+.lede { font-size: 1.2rem; color: var(--ink-soft); }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+a { color: var(--vm); text-underline-offset: 0.15em; }
+:focus-visible { outline: 3px solid var(--vm); outline-offset: 2px; }
+.meta { color: var(--ink-soft); font-size: 0.9rem; margin-bottom: 2.5rem; }
+
+/* status chips encode state */
+.chip { display: inline-block; font: 500 0.75rem/1 var(--sans); letter-spacing: 0.03em; padding: 0.3rem 0.55rem; border-radius: 99px; white-space: nowrap; }
+.chip.live { background: var(--vm-wash); color: var(--vm); }
+.chip.wait { background: var(--coin-wash); color: var(--coin); }
+.chip.plan { background: var(--plan-wash); color: var(--plan); }
+.step-tag { font: 500 0.8rem var(--sans); color: var(--vm); margin-right: 0.35rem; }
+.step-tag.todo { color: var(--plan); }
+.keys { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.25rem 0; }
+.keys section { background: var(--surface); border: 1px solid var(--rule); padding: 1rem 1.25rem; border-radius: 3px; }
+.keys h3 { margin-bottom: 0.4rem; }
+.keys p { margin: 0; font-size: 0.95rem; }
+@media (max-width: 34rem) { .keys { grid-template-columns: 1fr; } }
+td code, li code, p code { font-family: var(--mono); font-size: 0.86em; background: var(--sunk); padding: 0.05rem 0.3rem; border-radius: 2px; white-space: nowrap; }
+
+/* The hero: the one place Doge appears. */
+.hero { display: grid; grid-template-columns: 1fr 14rem; gap: 2.5rem; align-items: center; margin-bottom: 0.5rem; padding-right: 2.5rem; }
+.hero-art { position: relative; width: 14rem; aspect-ratio: 1; }
+.doge-art { width: 100%; height: 100%; display: block; object-fit: contain; }
+.wow { position: absolute; font: 700 1rem/1 "Comic Neue", "Comic Sans MS", "Chalkboard SE", cursive; white-space: nowrap; }
+.wow-1 { top: 4%; left: -30%; color: #c2185b; transform: rotate(-8deg); }
+.wow-2 { top: 42%; right: -14%; color: #2e7d32; transform: rotate(6deg); }
+.wow-3 { bottom: 2%; left: -8%; color: #1565c0; transform: rotate(-4deg); }
+.wow-4 { top: 2%; right: -2%; color: #ef6c00; font-size: 1.25rem; transform: rotate(10deg); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wow-1 { color: #f48fb1; } :root:not([data-theme="light"]) .wow-2 { color: #a5d6a7; } :root:not([data-theme="light"]) .wow-3 { color: #90caf9; } :root:not([data-theme="light"]) .wow-4 { color: #ffcc80; } }
+:root[data-theme="dark"] .wow-1 { color: #f48fb1; } :root[data-theme="dark"] .wow-2 { color: #a5d6a7; } :root[data-theme="dark"] .wow-3 { color: #90caf9; } :root[data-theme="dark"] .wow-4 { color: #ffcc80; }
+@media (max-width: 40rem) {
+  .hero { grid-template-columns: 1fr; }
+  .hero-art { width: 9rem; margin: 0 auto 0 2.5rem; order: -1; }
+  .wow { font-size: 0.85rem; }
+}
+.headline { background: var(--surface); border: 1px solid var(--rule); border-left: 4px solid var(--coin); padding: 1.25rem 1.5rem; margin: 0 0 1rem; border-radius: 3px; }
+.headline p:last-child { margin: 0; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+.table-wrap { overflow-x: auto; margin: 0 0 1rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.7rem 0.75rem 0.7rem 0; border-bottom: 1px solid var(--rule); }
+th { font-weight: 500; color: var(--ink-soft); font-size: 0.85rem; }
+td:last-child, th:last-child { padding-right: 0; }
+td.state { width: 1%; }
+
+.ids { display: grid; gap: 0.4rem; background: var(--sunk); padding: 1rem 1.25rem; border-radius: 3px; margin: 0 0 1rem; }
+.ids div { display: grid; grid-template-columns: 11rem 1fr; gap: 1rem; }
+.ids dt { color: var(--ink-soft); font-size: 0.9rem; }
+.ids dd { margin: 0; font-family: var(--mono); font-size: 0.82rem; word-break: break-all; }
+@media (max-width: 34rem) { .ids div { grid-template-columns: 1fr; gap: 0; } }
+
+.flow { display: grid; gap: 1.25rem; margin: 1.25rem 0; }
+.flow section { background: var(--surface); border: 1px solid var(--rule); padding: 1.25rem 1.5rem; border-radius: 3px; }
+.flow ol { margin: 0.5rem 0 0; padding-left: 1.25rem; }
+.flow li { margin-bottom: 0.4rem; }
+.doge { color: var(--coin); font-weight: 500; }
+.vm { color: var(--vm); font-weight: 500; }
+
+ul.plain { padding-left: 1.25rem; margin: 0 0 1rem; }
+ul.plain li { margin-bottom: 0.5rem; max-width: 65ch; }
+
+/* phases: a real sequence, so they are numbered */
+.phases { list-style: none; padding: 0; margin: 1.5rem 0 0; counter-reset: phase; }
+.phase { position: relative; padding: 0 0 2.25rem 3.25rem; counter-increment: phase; }
+.phase::before {
+  content: counter(phase); position: absolute; left: 0; top: 0;
+  width: 2.1rem; height: 2.1rem; border-radius: 50%;
+  display: grid; place-items: center; font: 700 1rem var(--sans);
+  background: var(--plan-wash); color: var(--plan);
+}
+.phase.done::before { background: var(--vm-wash); color: var(--vm); content: "✓"; }
+.phase.now::before { background: var(--coin-wash); color: var(--coin); }
+.phase::after { content: ""; position: absolute; left: calc(1.05rem - 1px); top: 2.4rem; bottom: 0.3rem; width: 2px; background: var(--rule); }
+.phase:last-child::after { display: none; }
+.phase-head { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: baseline; margin-bottom: 0.4rem; }
+.phase ul { padding-left: 1.1rem; margin: 0.5rem 0 0.75rem; }
+.phase li { margin-bottom: 0.35rem; max-width: 62ch; }
+.gate { font-size: 0.92rem; color: var(--ink-soft); border-top: 1px dashed var(--rule); padding-top: 0.5rem; max-width: 62ch; }
+.gate strong { color: var(--ink); font-weight: 500; }
+
+pre.mermaid { background: var(--surface); border: 1px solid var(--rule); padding: 1rem; border-radius: 3px; overflow-x: auto; }
+/* The diagram keeps a light ground in both themes, so its colours read. */
+pre.mermaid, .diagram { background: #ffffff; border: 1px solid var(--rule); padding: 1rem; border-radius: 3px; overflow-x: auto; }
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; max-height: 28rem; width: auto; height: auto; }
+@media print {
+  @page { size: A4; margin: 14mm 14mm 16mm; }
+  :root { --bg: #ffffff; }
+  html, body { background: #ffffff; }
+  body { padding: 0; font-size: 10.5pt; }
+  .diagram svg { max-height: 105mm; }
+  .page { max-width: none; padding-block: 0; }
+  h2 { margin-top: 1.6rem; break-after: avoid; }
+  h3 { break-after: avoid; }
+  .headline, .flow section, .keys section, .phase, tr, .ids, .diagram, pre.mermaid { break-inside: avoid; }
+  a { color: inherit; }
+  footer { margin-top: 1.25rem; break-before: avoid; }
+  .phase { padding-bottom: 1.5rem; }
+}
+footer { margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); color: var(--ink-soft); font-size: 0.9rem; }
+
+/* The public page: images instead of inline SVG, for the site's content
+   security policy. */
+.diagram img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
