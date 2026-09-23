@@ -118,4 +118,3 @@ func runFunc(*cobra.Command, []string) error {
 	}
 	return nil
 }
-
