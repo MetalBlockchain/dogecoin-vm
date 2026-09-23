@@ -537,14 +537,9 @@ func LoadConfig(nodeId string, overrideCfg *Config) (*Config, []string, error) {
 	if !(preCfg.RegressionTest || preCfg.SimNet || preCfg.SigNet) ||
 		preCfg.ConfigFile != defaultConfigFile {
 
-		if _, err := os.Stat(preCfg.ConfigFile); os.IsNotExist(err) {
-			err := createDefaultConfigFile(preCfg.ConfigFile)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error creating a "+
-					"default config file: %v\n", err)
-			}
-		}
-
+		// Inside the VM, settings come from the genesis and chain config;
+		// a btcd config file is only read if one exists. btcd would
+		// otherwise copy its sample config next to the plugin binary.
 		err := flags.NewIniParser(parser).ParseFile(preCfg.ConfigFile)
 		if err != nil {
 			if _, ok := err.(*os.PathError); !ok {

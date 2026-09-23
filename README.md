@@ -4,11 +4,13 @@ A Dogecoin virtual machine for [Metal Blockchain](https://github.com/MetalBlockc
 
 DogecoinVM is a fork of [MetalBlockchain/btcvm](https://github.com/MetalBlockchain/btcvm), which embeds [btcd](https://github.com/btcsuite/btcd) as the ledger and script engine. It is a second ledger for existing DOGE, not a new coin:
 
-- **No premine and no block reward.** The genesis blocks pay nothing, and the coinbase can only claim transaction fees. DOGE is meant to enter the ledger by being locked on Dogecoin (see the roadmap).
+- **No premine and no block reward.** The genesis blocks pay nothing, and the coinbase can only claim transaction fees. DOGE enters the ledger only through a two-way peg with Dogecoin ([docs/BRIDGE.md](docs/BRIDGE.md)).
 - **Same addresses and keys as Dogecoin.** A `D…` address, WIF key or `dgpv`/`dgub` extended key is the same on both chains.
 - **No change to Dogecoin itself.** Dogecoin keeps running exactly as it does today.
 
 > **Status: early development, not ready for use.** Do not send real funds to anything built from this repository.
+
+**Try it:** [docs/TESTING.md](docs/TESTING.md) walks through a local Metal node running DogecoinVM, Dogecoin Core on regtest, and a DOGE round trip through the peg.
 
 ## Networks
 
@@ -47,12 +49,22 @@ Metal's Snowman consensus orders blocks, and btcd validates and stores them. The
 
 As a result, btcd's chain tip is always the last accepted block. Blocks propagate through Snowman, not gossip; only transactions are gossiped. Proof-of-work checks are disabled, since Snowman provides the security.
 
+## Two-way peg
+
+A peg reserve, created by consensus in the chain's first blocks and locked to an m-of-n signer multisig, backs every DOGE on DogecoinVM. The `dogevm` CLI ([`cmd/dogevm`](cmd/dogevm)) is a wallet and the bridge:
+
+- **Peg-in:** a Dogecoin deposit to the peg address is credited from the reserve.
+- **Peg-out:** DOGE paid back into the reserve is released on Dogecoin.
+- **Audit:** `dogevm audit` checks that DOGE locked on Dogecoin covers everything circulating on DogecoinVM.
+
+The peg is federated: the signers are trusted. See [docs/BRIDGE.md](docs/BRIDGE.md) for the design, message format and trust model.
+
 ## Roadmap
 
 1. ~~Dogecoin chain parameters~~ — done
 2. ~~Snowman block lifecycle~~ — done
 3. ~~Dogecoin fee and dust policy; disable SegWit and Taproot~~ — done
-4. Peg-in/peg-out, supply accounting in arbitrary precision, and Warp/ICM messaging
+4. Two-way peg: consensus peg reserve, wallet and bridge CLI, audit — done for development; distributed signing, Warp/ICM messaging and a public testnet to follow
 5. RPC responses shaped like Dogecoin Core's
 
 ## Building and testing
@@ -60,11 +72,13 @@ As a result, btcd's chain tip is always the last accepted block. Blocks propagat
 Requires Go 1.24+.
 
 ```bash
-go build ./vm/... ./cmd/... ./btcd/...
-go test ./vm/ ./btcd/            # DogecoinVM lifecycle and parameter tests
+go build ./...
+go test ./vm/ ./cmd/... ./btcd/ ./btcd/mempool/
 ```
 
-Some vendored btcd tests fail the same way on upstream btcvm, because proof of work is disabled there. Examples are `TestFullBlocks` and `TestUtxoCacheFlush`. The root package's `factory.go` doesn't build against metalgo v1.12.2 either, which is also inherited from upstream.
+The VM targets metalgo v1.13.5 (rpcchainvm protocol 43). Its VM ID is `mEUwHwfd8UTHf23UYkQxHvy1n1EGwWieXQnjmtzSryJRZckzu` (from the name `dogecoinvm`).
+
+Some vendored btcd tests fail the same way on upstream btcvm, because proof of work is disabled there. Examples are `TestFullBlocks` and `TestUtxoCacheFlush`.
 
 See [`docs/README.md`](docs/README.md) for the Makefile targets that build the plugin and run a local five-node network with `metal-network-runner`.
 

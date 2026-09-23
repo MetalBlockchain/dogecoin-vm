@@ -107,6 +107,12 @@ func (b *blockBuilder) needToBuild() bool {
 	if b.vm.hasProcessingBlocks() {
 		return false
 	}
+	// Blocks that create the peg reserve are built even with nothing in
+	// the mempool, or the reserve would wait for the first transaction.
+	next := b.vm.chain.BestSnapshot().Height + 1
+	if b.vm.config.ChainParams.PegReserveAt(next) > 0 {
+		return true
+	}
 	mempool := b.vm.btcdAdapter.TxMemPool()
 	if mempool == nil {
 		return false
