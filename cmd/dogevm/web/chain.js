@@ -260,10 +260,11 @@ async function verifiedInput(u, getRawTx, fromScript) {
   return { txid: u.txid, vout: u.vout, value: out.value };
 }
 
-// buildPayment spends key's P2PKH outputs (from the API's utxo list, each
-// checked with getRawTx) to pay amount to script, with an optional
-// OP_RETURN. It returns the signed hex, its txid and the fee.
-export async function buildPayment({ key, utxos, getRawTx, script, amount, data }) {
+// planPayment chooses which of key's P2PKH outputs (from the API's utxo
+// list, each checked with getRawTx) pay amount to script, with an optional
+// OP_RETURN, and returns the unsigned transaction: its inputs, outputs, the
+// total of the inputs, the fee, and the unsigned bytes to review.
+export async function planPayment({ key, utxos, getRawTx, script, amount, data }) {
   if (amount < HARD_DUST) throw new Error(`the smallest payment is ${formatDoge(HARD_DUST)} DOGE`);
   const from = keyDestination(key);
   const fromScript = pkScript(from);
@@ -300,13 +301,54 @@ export async function buildPayment({ key, utxos, getRawTx, script, amount, data 
     inputs: inputs.map((u) => ({ txid: u.txid, vout: u.vout, script: new Uint8Array() })),
     outputs,
   };
+  return { tx, inputTotal: total, fee, unsignedHex: hex(serialize(tx)) };
+}
+
+// signPlan signs a planned payment, and checks the signed transaction pays
+// exactly the outputs that were reviewed. It returns the signed hex, its
+// txid and the fee.
+export async function signPlan(plan, key) {
+  const fromScript = pkScript(keyDestination(key));
+  const tx = { ...plan.tx, inputs: plan.tx.inputs.map((i) => ({ ...i })) };
   const pub = secp.getPublicKey(key, true);
   for (let i = 0; i < tx.inputs.length; i++) {
     const sig = await secp.signAsync(sighash(tx, i, fromScript), key, { lowS: true });
     tx.inputs[i].script = concat(pushData(concat(derSignature(sig), Uint8Array.of(1))), pushData(pub));
   }
   const raw = serialize(tx);
-  return { hex: hex(raw), txid: txid(raw), fee };
+  const outs = (bytes) => JSON.stringify(parseOutputs(bytes).map((o) => [String(o.value), hex(o.script)]));
+  if (outs(raw) !== outs(unhex(plan.unsignedHex))) throw new Error('the signed transaction differs from the one reviewed; nothing was sent');
+  return { hex: hex(raw), txid: txid(raw), fee: plan.fee };
+}
+
+// buildPayment plans and signs a payment in one step.
+export async function buildPayment(args) {
+  return signPlan(await planPayment(args), args.key);
+}
+
+// reviewOutputs decodes a transaction's outputs from its bytes, for showing
+// before it is signed: each is {value, script, address} for a pay-to-hash
+// output, {value, script, data} for OP_RETURN, or {value, script} otherwise.
+export function reviewOutputs(txHex, versions) {
+  return parseOutputs(unhex(txHex)).map((o) => {
+    const s = o.script;
+    if (s.length === 25 && s[0] === 0x76 && s[1] === 0xa9 && s[2] === 0x14 && s[23] === 0x88 && s[24] === 0xac) {
+      return { ...o, address: encodeAddress({ kind: 0, hash: s.slice(3, 23) }, versions) };
+    }
+    if (s.length === 23 && s[0] === 0xa9 && s[1] === 0x14 && s[22] === 0x87) {
+      return { ...o, address: encodeAddress({ kind: 1, hash: s.slice(2, 22) }, versions) };
+    }
+    if (s[0] === 0x6a && s.length >= 2 && s[1] < 0x4c && s.length === 2 + s[1]) return { ...o, data: s.slice(2) };
+    return o;
+  });
+}
+
+// pegOutDestination reads the Dogecoin address from a DVMO tag, or returns
+// null if data isn't one.
+export function pegOutDestination(data, dogeVersions) {
+  const tag = new TextEncoder().encode('DVMO');
+  if (data.length !== 25 || tag.some((b, i) => data[i] !== b) || data[4] > 1) return null;
+  return encodeAddress({ kind: data[4], hash: data.slice(5) }, dogeVersions);
 }
 
 // pegOutData is the DVMO tag naming the Dogecoin address to pay.

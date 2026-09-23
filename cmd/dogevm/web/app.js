@@ -547,16 +547,108 @@ const networks = {
   },
 };
 
-// pay signs a payment on a network ('vm' or 'doge'), calls beforeBroadcast
-// with its txid (so a record exists even if the broadcast response is lost),
-// and broadcasts it. It returns {txid, unknown}: unknown is true if the
-// bridge never answered, so the payment may or may not have gone through.
-async function pay(script, amount, data, beforeBroadcast, network = 'vm') {
+// --- review before signing ----------------------------------------------------
+
+function reviewLine(label, address, value, note, cls) {
+  const li = document.createElement('li');
+  if (cls) li.className = cls;
+  const add = (tag, className, text) => {
+    const n = document.createElement(tag);
+    n.className = className;
+    n.textContent = text;
+    li.append(n);
+  };
+  add('span', 'review-label', label);
+  add('span', 'review-amount', value === null ? '' : `${chain.formatDoge(value)} DOGE`);
+  if (address) add('span', 'review-address', address);
+  if (note) add('p', 'review-note', note);
+  return li;
+}
+
+// review shows what a planned transaction does, decoded from its own bytes
+// rather than from the form, and resolves true only if the viewer confirms.
+// context names addresses the page expects: the peg reserve for a
+// withdrawal, the deposit address for a move.
+function review(plan, network, context = {}) {
+  const doge = network === 'doge';
+  const versions = doge ? info.dogecoinVersions : info.dogecoinvmVersions;
+  const mine = doge ? myDogeAddress() : myAddress();
+  const lines = [];
+  const problems = [];
+  let change = 0n;
+  let outTotal = 0n;
+  for (const o of chain.reviewOutputs(plan.unsignedHex, versions)) {
+    outTotal += o.value;
+    if (o.address === mine) {
+      change += o.value;
+      lines.push(reviewLine('Back to you (change)', o.address, o.value));
+    } else if (o.data) {
+      const dest = chain.pegOutDestination(o.data, info.dogecoinVersions);
+      if (dest && context.withdrawTo === dest) {
+        lines.push(reviewLine('The bridge then pays on Dogecoin', dest, null));
+      } else {
+        problems.push('The transaction carries a bridge instruction this page did not ask for.');
+      }
+    } else if (o.address && o.address === context.reserve) {
+      const gets = o.value - chain.parseDoge(info.dogeFee);
+      lines.push(reviewLine('To the bridge, to withdraw', o.address, o.value,
+        `You receive ${chain.formatDoge(gets > 0n ? gets : 0n)} DOGE on Dogecoin, after the ${tidy(info.dogeFee)} DOGE Dogecoin fee.`));
+    } else if (o.address && o.address === context.deposit) {
+      const gets = o.value - chain.parseDoge(info.vmFee);
+      lines.push(reviewLine('To your deposit address', o.address, o.value,
+        `Credited as ${chain.formatDoge(gets > 0n ? gets : 0n)} DOGE on DogecoinVM after ${info.depositConfirmations} Dogecoin confirmations, less the ${tidy(info.vmFee)} DOGE bridge fee.`));
+    } else if (o.address) {
+      lines.push(reviewLine('To', o.address, o.value));
+    } else {
+      problems.push('The transaction pays a script this page cannot read.');
+    }
+  }
+  if (outTotal + plan.fee !== plan.inputTotal) problems.push("The transaction's amounts don't add up.");
+  if (context.reserve && context.withdrawTo === undefined) problems.push('A withdrawal needs a Dogecoin address.');
+  lines.push(reviewLine('Network fee', null, plan.fee));
+  lines.push(reviewLine('Leaves your wallet', null, plan.inputTotal - change, null, 'review-total'));
+
+  $('review-network').textContent = doge ? 'On Dogecoin' : 'On DogecoinVM';
+  $('review-network').className = `review-network${doge ? ' doge' : ''}`;
+  $('review-lines').replaceChildren(...lines);
+  $('review-problem').hidden = problems.length === 0;
+  $('review-problem').textContent = problems.length ? `${problems.join(' ')} Don't send it.` : '';
+  $('review-confirm').disabled = problems.length > 0;
+
+  const dialog = $('review');
+  return new Promise((resolve) => {
+    dialog.returnValue = '';
+    dialog.addEventListener('close', () => resolve(problems.length === 0 && dialog.returnValue === 'confirm'), { once: true });
+    dialog.showModal();
+    $('review-cancel').focus();
+  });
+}
+
+// cancelled is the error a payment ends with when its review is dismissed.
+const cancelled = () => Object.assign(new Error('Cancelled. Nothing was sent.'), { cancelled: true });
+
+// showFailure shows why a payment didn't happen; a cancel isn't an error.
+function showFailure(el, err) {
+  if (!err.cancelled) return showResult(el, err.message, false);
+  el.textContent = err.message;
+  el.className = 'result';
+}
+
+// pay plans a payment on a network ('vm' or 'doge'), shows it for review,
+// signs it once confirmed, calls beforeBroadcast with its txid (so a record
+// exists even if the broadcast response is lost), and broadcasts it. It
+// returns {txid, unknown}: unknown is true if the bridge never answered, so
+// the payment may or may not have gone through.
+async function pay(script, amount, data, beforeBroadcast, network = 'vm', context = {}) {
   const net = networks[network];
   if (network === 'doge' && dogeState !== 'ready') {
     throw new Error("Your Dogecoin balance isn't available yet; try again once it shows.");
   }
-  const built = await chain.buildPayment({ key, utxos: net.utxos(), getRawTx: net.getRawTx, script, amount, data });
+  const gen = generation;
+  const plan = await chain.planPayment({ key, utxos: net.utxos(), getRawTx: net.getRawTx, script, amount, data });
+  if (!(await review(plan, network, context))) throw cancelled();
+  if (gen !== generation || !key) throw new Error('The wallet changed during review, so nothing was sent.');
+  const built = await chain.signPlan(plan, key);
   if (beforeBroadcast) beforeBroadcast(built.txid);
   try {
     const { txid } = await api(net.broadcast, { hex: built.hex });
@@ -589,7 +681,7 @@ $('send-form').addEventListener('submit', async (e) => {
     $('send-to').value = '';
     $('send-amount').value = '';
   } catch (err) {
-    showResult($('send-result'), err.message, false);
+    showFailure($('send-result'), err);
   } finally {
     button.disabled = false;
   }
@@ -654,7 +746,7 @@ $('move-form').addEventListener('submit', async (e) => {
     if (depositShownFor !== myAddress()) throw new Error("Your deposit address couldn't be checked, so nothing was sent. See below.");
     const expected = chain.depositAddress(myDest(), info.signers, info.dogecoinVersions);
     const script = chain.pkScript(chain.decodeAddress(expected, info.dogecoinVersions));
-    const { txid, unknown } = await pay(script, amount, undefined, undefined, 'doge');
+    const { txid, unknown } = await pay(script, amount, undefined, undefined, 'doge', { deposit: expected });
     if (unknown) {
       showResult($('move-result'), unknownOutcome, false, txid, 'doge');
     } else {
@@ -664,7 +756,7 @@ $('move-form').addEventListener('submit', async (e) => {
     $('move-amount').value = '';
     setTimeout(refreshDeposits, 3000);
   } catch (err) {
-    showResult($('move-result'), err.message, false);
+    showFailure($('move-result'), err);
   } finally {
     button.disabled = false;
   }
@@ -717,14 +809,14 @@ $('withdraw-form').addEventListener('submit', async (e) => {
     const { txid, unknown } = await pay(chain.pkScript(reserve), amount, chain.pegOutData(to), (id) => {
       pendingTxid = id;
       saveWithdrawals([{ txid: id, to: toText, amount: chain.formatDoge(amount) }, ...savedWithdrawals()]);
-    });
+    }, 'vm', { reserve: info.reserveAddress, withdrawTo: chain.encodeAddress(to, info.dogecoinVersions) });
     if (unknown) showResult($('withdraw-result'), unknownOutcome, false, txid);
     else showResult($('withdraw-result'), 'Withdrawal sent. The bridge pays out once it is in a block. Transaction:', true, txid);
     $('withdraw-form').reset();
   } catch (err) {
     // The bridge refused it, so it will never be paid; forget it.
     if (err.rejected && pendingTxid) saveWithdrawals(savedWithdrawals().filter((w) => w.txid !== pendingTxid));
-    showResult($('withdraw-result'), err.message, false);
+    showFailure($('withdraw-result'), err);
   } finally {
     button.disabled = false;
     renderWithdrawals();

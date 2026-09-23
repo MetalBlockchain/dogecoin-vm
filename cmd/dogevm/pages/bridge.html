@@ -233,4 +233,20 @@
       </div>
     </section>
   </main>
+
+  <!-- Every payment is shown here, decoded from the transaction itself, before
+       it is signed. -->
+  <dialog class="review" id="review" aria-labelledby="review-title">
+    <form method="dialog">
+      <h2 id="review-title">Check this payment</h2>
+      <p class="review-network" id="review-network"></p>
+      <ul class="review-lines" id="review-lines"></ul>
+      <p class="review-problem" id="review-problem" role="alert" hidden></p>
+      <p class="review-source">Read from the transaction itself, before signing. Nothing is sent until you confirm.</p>
+      <div class="review-actions">
+        <button value="cancel" id="review-cancel">Cancel</button>
+        <button class="primary" value="confirm" id="review-confirm">Confirm and send</button>
+      </div>
+    </form>
+  </dialog>
 {{end}}

@@ -179,3 +179,14 @@ func TestPageIDsUnique(t *testing.T) {
 	}
 	require.Greater(t, len(regexp.MustCompile(`\sid="`).FindAll(pages["/"], -1)), 50)
 }
+
+// TestWebReview runs the web wallet's review-before-signing checks.
+func TestWebReview(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	out, err := exec.Command(node, "testdata/review_check.mjs").CombinedOutput()
+	require.NoError(t, err, string(out))
+	require.Equal(t, "ok\n", string(out))
+}

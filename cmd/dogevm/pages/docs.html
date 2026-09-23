@@ -56,7 +56,7 @@
     </ul>
 
     <h2 id="wallets">Wallets</h2>
-    <p><strong>In the browser.</strong> The <a href="/">bridge page</a> is a wallet: your key is made in the browser and never leaves it. Protect it with a passkey, for example one saved in 1Password, and opening the wallet takes the passkey. Passkey protection needs a passkey provider that supports the PRF extension; older security keys don't. Every coin a payment spends is checked against the raw transaction that created it, so the server can't inflate a fee.</p>
+    <p><strong>In the browser.</strong> The <a href="/">bridge page</a> is a wallet: your key is made in the browser and never leaves it. Protect it with a passkey, for example one saved in 1Password, and opening the wallet takes the passkey. Passkey protection needs a passkey provider that supports the PRF extension; older security keys don't. Every coin a payment spends is checked against the raw transaction that created it, so the server can't inflate a fee. Before anything is signed, the wallet shows what the payment does (who's paid, the change back to you, a withdrawal's Dogecoin address, and the fee), read from the transaction itself, and signs only once you confirm.</p>
     <p><strong>On a Mac.</strong> The <a href="/download">Mac app</a> keeps the key encrypted to the Mac's Secure Enclave, shows every payment for review before Touch ID signs it, and updates itself.</p>
     <p>Whichever you use, back up your key. It's your wallet on both networks, and without it the DOGE can't be recovered.</p>
 
