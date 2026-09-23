@@ -11,7 +11,10 @@
 #     5 METAL prepays the validator's continuous fee for several months;
 #   - the peg signer set is in $SECRETS/signers.json.
 # Dogecoin Core (dogecoind-main.service) may still be syncing: deposits are
-# credited once it has caught up.
+# credited once it has caught up. Its data directory needs room for the whole
+# chain with -txindex: about 260 GB in late 2026, and growing. On a small
+# server, attach a volume (400 GB or more) and bind-mount it at
+# /var/lib/dogecoin-main before the node starts syncing.
 #
 # Alerts go to the Slack or Discord webhook URL in $SECRETS/alert-webhook, and
 # to Telegram if $SECRETS/telegram-token and $SECRETS/telegram-chat exist; https://<domain>/api/health serves the same checks for uptime

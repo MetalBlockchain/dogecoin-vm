@@ -196,7 +196,10 @@ async function refreshStatus() {
     $('sync-of').hidden = !syncing;
     $('deposit-sync').hidden = !syncing;
     $('doge-height').textContent = s.dogecoinHeight.toLocaleString('en-US');
-    if (syncing) {
+    if (sync && sync.available === false) {
+      $('doge-height-label').textContent = 'Dogecoin node offline';
+      $('doge-height').textContent = '–';
+    } else if (syncing) {
       // Dogecoin Core's progress is weighted by transactions. Early blocks
       // are nearly empty, so a block count races ahead and then stalls.
       const pct = Math.min(99, Math.floor(sync.progress * 100));

@@ -218,6 +218,8 @@ func (srv *server) status(*http.Request) (any, error) {
 			"progress": snap.dogeSync.VerificationProgress,
 			// Dogecoin Core reports progress just under 1 when caught up.
 			"syncing": snap.dogeSync.Headers > 0 && snap.dogeHeight < snap.dogeSync.Headers-6,
+			// No headers means Dogecoin Core did not answer.
+			"available": snap.dogeSync.Headers > 0,
 		},
 		"updated": snap.updated.UTC().Format(time.RFC3339),
 	}
