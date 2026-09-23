@@ -17,6 +17,9 @@ let dogeState = 'unknown'; // unknown | ready | syncing | off
 // had DOGE there. null until the balance has loaded.
 let seenVm = null;
 let seenDoge = null;
+// Confirmed balances as the API gives them, or null until loaded.
+let vmBalance = null;
+let dogeBalance = null;
 
 // generation counts key changes. Work started for one key checks it before
 // touching the page, so a slow response never shows under another key.
@@ -278,6 +281,8 @@ function setKey(newKey, mode = 'store') {
   dogeState = 'unknown';
   seenVm = null;
   seenDoge = null;
+  vmBalance = null;
+  dogeBalance = null;
   depositShownFor = null;
   let warning = '';
   if (key && mode === 'store') {
@@ -312,6 +317,7 @@ function setKey(newKey, mode = 'store') {
     $(id).textContent = '';
     $(id).className = 'result';
   }
+  renderAvailable();
   renderKey();
 }
 
@@ -365,6 +371,8 @@ async function refreshWallet() {
     const pending = chain.parseDoge(a.pending);
     $('balance-pending').textContent = pending > 0n ? `${tidy(a.pending)} DOGE arriving in the next block` : '';
     renderHistory($('history'), a.history, 'Nothing yet. Move DOGE over from Dogecoin on the Deposit tab.');
+    vmBalance = a.confirmed;
+    renderAvailable();
     seenVm = a.history.length > 0 || chain.parseDoge(a.confirmed) > 0n;
     renderSetup();
   } catch (err) {
@@ -398,6 +406,18 @@ function setDogeReady(ready, why = '') {
   $('move-form').querySelector('button[type=submit]').disabled = !ready;
 }
 
+// renderAvailable shows what can be spent next to the Send and Withdraw
+// forms, for the network chosen.
+function renderAvailable() {
+  const onDoge = document.querySelector('input[name=send-network]:checked').value === 'doge';
+  const vm = vmBalance === null ? 'Loading your DogecoinVM balance…' : `Available on DogecoinVM: ${tidy(vmBalance)} DOGE.`;
+  $('send-available').textContent = !onDoge ? vm
+    : dogeBalance === null ? ($('doge-pending').textContent || 'Loading your Dogecoin balance…')
+      : `Available on Dogecoin: ${tidy(dogeBalance)} DOGE.`;
+  $('withdraw-available').textContent = vm;
+}
+for (const radio of document.querySelectorAll('input[name=send-network]')) radio.addEventListener('change', renderAvailable);
+
 async function refreshDogeWallet() {
   if (!key || !info.dogeWallet) {
     $('doge-balance').textContent = '–';
@@ -426,6 +446,8 @@ async function refreshDogeWallet() {
     $('doge-pending').textContent = pending === 0n ? ''
       : a.pending.startsWith('-') ? `${tidy(a.pending)} DOGE leaving, waiting for a block` : `${tidy(a.pending)} DOGE arriving, waiting for a block`;
     renderHistory($('doge-history'), a.history, 'Nothing yet. Send DOGE to your address from any Dogecoin wallet.');
+    dogeBalance = a.confirmed;
+    renderAvailable();
     seenDoge = a.history.length > 0 || chain.parseDoge(a.confirmed) > 0n;
     renderSetup();
     $('doge-import').hidden = false;
@@ -439,6 +461,7 @@ async function refreshDogeWallet() {
       ? "Shows once the bridge's Dogecoin node has caught up."
       : `Can't load your Dogecoin balance: ${err.message}`;
     $('move-available').textContent = $('doge-pending').textContent;
+    renderAvailable();
     $('doge-history').replaceChildren(empty(err.status === 503
       ? "Your Dogecoin activity appears once the bridge's Dogecoin node has caught up."
       : "Can't load your Dogecoin activity right now."));
