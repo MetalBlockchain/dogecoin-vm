@@ -5,6 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DogecoinVM testnet bridge</title>
   <meta name="description" content="Move testnet DOGE between Dogecoin and DogecoinVM, and send it on DogecoinVM.">
+  <link rel="icon" href="dogecoin.svg" type="image/svg+xml">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://metaldoge.com/">
+  <meta property="og:title" content="DogecoinVM testnet bridge">
+  <meta property="og:description" content="Move DOGE between Dogecoin and a fast chain on Metal Blockchain, one for one.">
+  <meta property="og:image" content="https://metaldoge.com/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://metaldoge.com/og.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700;800&display=swap" rel="stylesheet">
@@ -15,7 +25,10 @@
   <p class="testnet-band" role="note">Testnet. These coins have no value, and the network may be reset at any time.</p>
 
   <header class="masthead">
-    <h1>DogecoinVM <span class="masthead-sub">testnet bridge</span></h1>
+    <div class="brand">
+      <img class="brand-coin" src="dogecoin.svg" alt="" width="64" height="64">
+      <h1>DogecoinVM <span class="masthead-sub">testnet bridge</span></h1>
+    </div>
     <dl class="heights" aria-live="polite">
       <div class="height height-doge"><dt>Dogecoin block</dt><dd id="doge-height">…</dd></div>
       <div class="height height-vm"><dt>DogecoinVM block</dt><dd id="vm-height">…</dd></div>

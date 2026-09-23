@@ -1,0 +1,96 @@
+<!doctype html>
+<!-- Source of web/og.png, the 1200x630 social preview. Render with
+     scripts/render-og.sh after changing it. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@500;800&display=block" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f2f4f1;
+    --ink: #16233a;
+    --ink-soft: #4a576b;
+    --coin: #b8912a;
+    --testnet: #f2b33d;
+  }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Schibsted Grotesk", sans-serif;
+    display: grid;
+    grid-template-columns: 1fr 470px;
+  }
+  .copy {
+    padding: 78px 56px 64px 76px;
+    display: flex;
+    flex-direction: column;
+  }
+  h1 {
+    margin: 0;
+    font-size: 104px;
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    line-height: 0.95;
+  }
+  .line {
+    margin: 30px 0 0;
+    font-size: 38px;
+    font-weight: 500;
+    line-height: 1.2;
+    color: var(--ink-soft);
+    max-width: 590px;
+  }
+  .foot {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    font-size: 30px;
+    font-weight: 500;
+  }
+  .testnet {
+    background: var(--testnet);
+    padding: 6px 16px;
+    border-radius: 3px;
+    font-size: 24px;
+    font-weight: 800;
+  }
+  .panel {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 56px 52px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 34px;
+  }
+  .coin { width: 176px; height: 176px; align-self: center; margin-bottom: 8px; }
+  .row { display: grid; gap: 12px; }
+  .label { font-size: 24px; font-weight: 500; }
+  .caption { margin: 0; font-size: 22px; line-height: 1.35; color: #c7cfdb; }
+  .bar { height: 26px; border-radius: 2px; }
+  .doge .bar { background: var(--coin); }
+  .vm .bar { background: #3fa39a; }
+</style>
+</head>
+<body>
+  <div class="copy">
+    <h1>DogecoinVM</h1>
+    <p class="line">Move DOGE between Dogecoin and a fast chain on Metal Blockchain, one for one.</p>
+    <div class="foot"><span>metaldoge.com</span><span class="testnet">Testnet</span></div>
+  </div>
+  <div class="panel">
+    <img class="coin" src="../web/dogecoin.svg" alt="">
+    <div class="row doge">
+      <div class="label">Locked on Dogecoin</div>
+      <div class="bar"></div>
+    </div>
+    <div class="row vm">
+      <div class="label">On DogecoinVM</div>
+      <div class="bar"></div>
+    </div>
+    <p class="caption">Every DOGE on DogecoinVM is backed by DOGE locked on Dogecoin.</p>
+  </div>
+</body>
+</html>

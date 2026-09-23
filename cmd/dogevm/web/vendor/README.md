@@ -9,3 +9,7 @@ Copied from the npm tarballs, whose sha512 integrity matched the registry:
 | @noble/hashes | 1.8.0 | `esm/{sha2,legacy,_md,_u64,utils,crypto}.js` | `sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==` |
 
 One change: `noble-hashes-1.8.0/utils.js` imports `./crypto.js` instead of the bare specifier `@noble/hashes/crypto`, so it loads in a browser without a bundler. All are MIT licensed (see each LICENSE, and the header of qrcode.mjs).
+
+## Assets
+
+- `../dogecoin.svg` is `share/pixmaps/dogecoin256.svg` from [dogecoin/dogecoin](https://github.com/dogecoin/dogecoin), used for the favicon, the masthead and the social preview image.
