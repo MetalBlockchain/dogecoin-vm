@@ -63,17 +63,17 @@ document.querySelector('[role=tablist]').addEventListener('keydown', (e) => {
   selectTab(next.id.replace('tab-', ''));
 });
 
-// Theme: follow the system unless the viewer picks light or dark.
+// Theme: light unless the viewer picks dark or their system setting.
 const THEME_STORE = 'dogevm.theme';
-const themes = ['system', 'light', 'dark'];
+const themes = ['light', 'dark', 'system'];
 function applyTheme(theme) {
-  if (theme === 'system') document.documentElement.removeAttribute('data-theme');
+  if (theme === 'light') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', theme);
   $('theme-toggle').textContent = `Theme: ${theme}`;
 }
-applyTheme(themes.includes(store.get(THEME_STORE)) ? store.get(THEME_STORE) : 'system');
+applyTheme(themes.includes(store.get(THEME_STORE)) ? store.get(THEME_STORE) : 'light');
 $('theme-toggle').addEventListener('click', () => {
-  const current = document.documentElement.getAttribute('data-theme') || 'system';
+  const current = document.documentElement.getAttribute('data-theme') || 'light';
   const next = themes[(themes.indexOf(current) + 1) % themes.length];
   store.set(THEME_STORE, next);
   applyTheme(next);

@@ -1,5 +1,7 @@
 /* DogecoinVM bridge. Color follows the chain throughout: gold is Dogecoin,
-   teal is DogecoinVM. Every color is a token, redefined for dark mode. */
+   teal is DogecoinVM. Every color is a token, redefined for dark mode.
+   Light is the default; data-theme="dark" forces dark, and
+   data-theme="system" follows the viewer's system setting. */
 
 :root {
   --bg: #f2f4f1;
@@ -51,7 +53,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root[data-theme="system"] {
     --bg: #0d1524;
     --surface: #15213a;
     --surface-sunk: #0f192d;

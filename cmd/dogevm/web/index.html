@@ -21,7 +21,7 @@
   <link rel="stylesheet" href="app.css">
   <script>
     // Apply a saved theme before first paint, so the page does not flash.
-    try { const t = localStorage.getItem('dogevm.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+    try { const t = localStorage.getItem('dogevm.theme'); if (t === 'dark' || t === 'system') document.documentElement.dataset.theme = t; } catch {}
   </script>
   <script type="module" src="app.js"></script>
 </head>
@@ -210,7 +210,7 @@
   </div>
 
   <footer class="footer">
-    <button class="theme-toggle" id="theme-toggle" type="button">Theme: system</button>
+    <button class="theme-toggle" id="theme-toggle" type="button">Theme: light</button>
     <p>DogecoinVM runs on Metal Blockchain. The bridge is run by a set of signers, who hold the DOGE locked on Dogecoin. <a href="https://github.com/paulgnz/dogecoin-vm">Source and docs</a>.</p>
   </footer>
 </body>
