@@ -18,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/big"
 	"os"
 	"time"
 
@@ -53,6 +54,10 @@ func main() {
 		err = cmdKey(os.Args[2:])
 	case "balance":
 		err = cmdBalance(os.Args[2:])
+	case "addresses":
+		err = cmdAddresses(os.Args[2:])
+	case "import":
+		err = cmdImport(os.Args[2:])
 	case "create":
 		err = cmdCreate(os.Args[2:])
 	default:
@@ -111,6 +116,76 @@ func cmdKey(args []string) error {
 		return err
 	}
 	fmt.Println(addr)
+	return nil
+}
+
+// cmdAddresses prints the key's addresses on the P-, X- and C-Chains. METAL
+// sent to the X- or C-Chain address can be moved to the P-Chain with import.
+func cmdAddresses(args []string) error {
+	fs := flag.NewFlagSet("addresses", flag.ExitOnError)
+	keyPath := fs.String("key", "", "P-Chain key file")
+	networkID := networkIDFlag(fs)
+	_ = fs.Parse(args)
+	key, err := readKey(*keyPath)
+	if err != nil {
+		return err
+	}
+	hrp := constants.GetHRP(uint32(*networkID))
+	p, _ := address.Format("P", hrp, key.Address().Bytes())
+	x, _ := address.Format("X", hrp, key.Address().Bytes())
+	fmt.Printf("P-Chain: %s\nX-Chain: %s\nC-Chain: %s\n", p, x, key.EthAddress().Hex())
+	return nil
+}
+
+// cmdImport moves the key's METAL from the C-Chain to the P-Chain: an export
+// on the C-Chain, then an import on the P-Chain. The C-Chain keeps -keep METAL
+// to pay the export fee.
+func cmdImport(args []string) error {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	keyPath := fs.String("key", "", "P-Chain key file")
+	uri := fs.String("uri", "https://api.metalblockchain.org", "API with the C- and P-Chains")
+	keep := fs.Float64("keep", 0.05, "METAL to leave on the C-Chain for the export fee")
+	_ = fs.Parse(args)
+	key, err := readKey(*keyPath)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	kc := secp256k1fx.NewKeychain(key)
+	wallet, err := primary.MakeWallet(ctx, *uri, kc, kc, primary.WalletConfig{})
+	if err != nil {
+		return err
+	}
+	cWallet, pWallet := wallet.C(), wallet.P()
+	cChainID := cWallet.Builder().Context().BlockchainID
+	owner := secp256k1fx.OutputOwners{Threshold: 1, Addrs: []ids.ShortID{key.Address()}}
+
+	// The C-Chain balance is in wei (18 decimals); atomic amounts are in
+	// nMETAL (9 decimals).
+	wei, err := cWallet.Builder().GetBalance()
+	if err != nil {
+		return err
+	}
+	have := new(big.Int).Div(wei, big.NewInt(1_000_000_000)).Uint64()
+	margin := uint64(*keep * float64(units.Avax))
+	if have > margin {
+		amount := have - margin
+		tx, err := cWallet.IssueExportTx(constants.PlatformChainID, []*secp256k1fx.TransferOutput{{
+			Amt: amount, OutputOwners: owner,
+		}})
+		if err != nil {
+			return fmt.Errorf("exporting from the C-Chain: %w", err)
+		}
+		log.Printf("exported %.4f METAL from the C-Chain in %s", float64(amount)/float64(units.Avax), tx.ID())
+	} else {
+		log.Printf("nothing to export from the C-Chain (%d nMETAL)", have)
+	}
+
+	tx, err := pWallet.IssueImportTx(cChainID, &owner)
+	if err != nil {
+		return fmt.Errorf("importing to the P-Chain: %w", err)
+	}
+	log.Printf("imported to the P-Chain in %s", tx.ID())
 	return nil
 }
 
