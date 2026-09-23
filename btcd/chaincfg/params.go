@@ -227,6 +227,10 @@ type Params struct {
 	// is reduced.
 	SubsidyReductionInterval int32
 
+	// NoBlockSubsidy, when set, makes the block subsidy zero at every
+	// height so the coinbase can only claim transaction fees.
+	NoBlockSubsidy bool
+
 	// TargetTimespan is the desired amount of time that should elapse
 	// before the block difficulty requirement is examined to determine how
 	// it should be changed in order to maintain the desired block

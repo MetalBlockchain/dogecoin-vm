@@ -202,6 +202,9 @@ func isBIP0030Node(node *blockNode) bool {
 // At the target block generation rate for the main network, this is
 // approximately every 4 years.
 func CalcBlockSubsidy(height int32, chainParams *chaincfg.Params) int64 {
+	if chainParams.NoBlockSubsidy {
+		return 0
+	}
 	if chainParams.SubsidyReductionInterval == 0 {
 		return baseSubsidy
 	}

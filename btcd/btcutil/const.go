@@ -12,5 +12,8 @@ const (
 	SatoshiPerBitcoin = 1e8
 
 	// MaxSatoshi is the maximum transaction amount allowed in satoshi.
-	MaxSatoshi = 21e6 * SatoshiPerBitcoin
+	// This is Dogecoin's MAX_MONEY (10 billion DOGE, see Dogecoin Core
+	// amount.h). It bounds single outputs and per-transaction totals, not
+	// total supply, which has already exceeded it.
+	MaxSatoshi = 10e9 * SatoshiPerBitcoin
 )

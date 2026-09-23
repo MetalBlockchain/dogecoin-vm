@@ -213,6 +213,18 @@ func (s *Server) ProcessBlockNoPoW(block *btcutil.Block) (bool, bool, error) {
 	return s.chain.ProcessBlock(block, blockchain.BFNoPoWCheck)
 }
 
+// Close flushes the UTXO cache and closes the block database. It must be
+// called after Stop, once nothing else is using the chain. btcd normally
+// flushes from the sync manager's shutdown path, which never runs here
+// because the peer handler is not started.
+func (s *Server) Close() error {
+	s.WaitForShutdown()
+	if err := s.chain.FlushUtxoCache(blockchain.FlushRequired); err != nil {
+		return fmt.Errorf("failed to flush utxo cache: %w", err)
+	}
+	return s.db.Close()
+}
+
 // SetOnTxAccepted sets a callback for when transactions are accepted
 func (s *Server) SetOnTxAccepted(callback func(*btcutil.Tx)) {
 	if s.txMemPool != nil {

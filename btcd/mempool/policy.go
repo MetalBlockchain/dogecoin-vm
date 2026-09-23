@@ -6,6 +6,8 @@ package mempool
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 	"time"
 
 	"github.com/MetalBlockchain/btcvm/btcd/blockchain"
@@ -64,6 +66,11 @@ func calcMinRequiredTxRelayFee(serializedSize int64, minRelayTxFee btcutil.Amoun
 	// free transaction relay fee).  minRelayTxFee is in Satoshi/kB so
 	// multiply by serializedSize (which is in bytes) and divide by 1000 to
 	// get minimum Satoshis.
+	// DogecoinVM amounts go up to 1e18 koinu, so guard the multiplication
+	// rather than relying on it wrapping negative.
+	if minRelayTxFee > 0 && serializedSize > math.MaxInt64/int64(minRelayTxFee) {
+		return btcutil.MaxSatoshi
+	}
 	minFee := (serializedSize * int64(minRelayTxFee)) / 1000
 
 	if minFee == 0 && minRelayTxFee > 0 {
@@ -272,7 +279,14 @@ func IsDust(txOut *wire.TxOut, minRelayTxFee btcutil.Amount) bool {
 	//
 	// The following is equivalent to (value/totalSize) * (1/3) * 1000
 	// without needing to do floating point math.
-	return txOut.Value*1000/GetDustThreshold(txOut) < int64(minRelayTxFee)
+	//
+	// This is txOut.Value*1000/threshold < minRelayTxFee, computed in big
+	// integers because Value*1000 overflows int64 for outputs above ~92M
+	// DOGE.
+	value := new(big.Int).Mul(big.NewInt(txOut.Value), big.NewInt(1000))
+	limit := new(big.Int).Mul(big.NewInt(int64(minRelayTxFee)),
+		big.NewInt(GetDustThreshold(txOut)))
+	return value.Cmp(limit) < 0
 }
 
 // CheckTransactionStandard performs a series of checks on a transaction to

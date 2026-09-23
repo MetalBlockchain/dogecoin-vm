@@ -69,10 +69,13 @@ type VM struct {
 
 	appSender common.AppSender
 
-	// Block management
-	preferred    ids.ID
-	lastAccepted ids.ID
-	blocksMu     sync.RWMutex
+	// Block management. btcd's chain tip is always lastAccepted; blocks
+	// that have been verified but not yet decided live in verifiedBlocks.
+	// See block_adapter.go.
+	preferred      ids.ID
+	lastAccepted   ids.ID
+	verifiedBlocks map[ids.ID]*BlockAdapter
+	blocksMu       sync.RWMutex
 
 	// Block building
 	buildBlockLock sync.Mutex
@@ -135,6 +138,7 @@ func (vm *VM) Initialize(
 	vm.toEngine = toEngine
 	vm.appSender = appSender
 	vm.shutdownChan = make(chan struct{})
+	vm.verifiedBlocks = make(map[ids.ID]*BlockAdapter)
 
 	// Parse genesis to get config
 	gb, err := parseGenesisBytes(genesisBytes)
@@ -199,7 +203,8 @@ func (vm *VM) Initialize(
 	vm.chain = vm.btcdAdapter.Chain()
 	vm.ctx.Log.Info("btcd adapter initialized successfully")
 
-	// Get the latest block from the chain and set it as lastAccepted
+	// btcd only ever connects accepted blocks (see block_adapter.go), so its
+	// tip is the last accepted block.
 	bestSnapshot := vm.chain.BestSnapshot()
 	if bestSnapshot != nil {
 		// Convert btcd hash to Metal ID
@@ -227,33 +232,9 @@ func (vm *VM) Initialize(
 		}
 	}
 
-	// Set the callback for relaying blocks via unified gossip
-	vm.btcdAdapter.OnBlockRelay = func(block *btcutil.Block) {
-		// Run gossip asynchronously to avoid blocking block processing
-		go func(b *btcutil.Block) {
-			// Use unified gossip if available
-			if vm.pushGossiper != nil {
-				item := NewBlockGossip(b)
-
-				// Check if we already gossiped this block to avoid continuous re-gossip
-				// The bloom filter tracks blocks we've seen/gossiped
-				if vm.btcSet != nil && vm.btcSet.bloom != nil {
-					if vm.btcSet.bloom.Has(item) {
-						vm.ctx.Log.Debug("Skipping block gossip - already in bloom filter",
-							zap.String("hash", b.Hash().String()),
-							zap.Int32("height", b.Height()),
-						)
-						return
-					}
-				}
-
-				vm.pushGossiper.Add(item)
-				vm.ctx.Log.Info("Gossiped block via unified gossip",
-					zap.String("hash", b.Hash().String()),
-					zap.Int32("height", b.Height()))
-			}
-		}(block)
-	}
+	// Blocks propagate through Snowman (PushQuery/Put/GetAncestors), never
+	// through gossip: a gossiped block would reach btcd without a vote.
+	vm.btcdAdapter.OnBlockRelay = func(*btcutil.Block) {}
 
 	vm.initialized = true
 
@@ -407,13 +388,27 @@ func (vm *VM) Shutdown(ctx context.Context) error {
 	vm.ctx.Log.Info("Waiting for gossip goroutines to finish")
 	vm.shutdownWg.Wait()
 
+	// Flush btcd's state and release its database now that nothing else can
+	// touch the chain.
+	if vm.btcdAdapter != nil {
+		if err := vm.btcdAdapter.Close(); err != nil {
+			vm.ctx.Log.Error("Error closing btcd database", zap.Error(err))
+		}
+	}
+
 	vm.stopped = true
 
 	vm.ctx.Log.Info("Bitcoin VM shutdown complete")
 	return nil
 }
 
-// BuildBlock builds a new block
+// errBlockProcessing is returned by BuildBlock while a verified block is
+// waiting to be decided. Blocks can only build on the last accepted block, so
+// building now would only create a competing sibling.
+var errBlockProcessing = errors.New("a verified block is still being decided")
+
+// BuildBlock builds a new block on top of the last accepted block. The block
+// is not written to btcd until it is accepted.
 func (vm *VM) BuildBlock(ctx context.Context) (snowman.Block, error) {
 	vm.ctx.Log.Info("BuildBlock called by Snowman engine")
 
@@ -422,6 +417,10 @@ func (vm *VM) BuildBlock(ctx context.Context) (snowman.Block, error) {
 
 	if vm.btcdAdapter == nil {
 		return nil, fmt.Errorf("btcd adapter not initialized")
+	}
+
+	if vm.hasProcessingBlocks() {
+		return nil, errBlockProcessing
 	}
 
 	// Get current block to track parent
@@ -459,19 +458,16 @@ func (vm *VM) BuildBlock(ctx context.Context) (snowman.Block, error) {
 
 	template.Block.Header.Nonce = 0
 	block := btcutil.NewBlock(template.Block)
+	block.SetHeight(template.Height)
 
-	isMainChain, isOrphan, err := vm.btcdAdapter.ProcessBlockNoPoW(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to process block: %w", err)
-	}
-
-	if isOrphan {
-		return nil, fmt.Errorf("generated block is orphan (parent missing)")
-	}
-
-	blockAdapter, err := NewBlockAdapter(vm, block)
+	blockAdapter, err := newBlockAdapter(vm, block)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create block adapter: %w", err)
+	}
+
+	if blockAdapter.Parent() != vm.LastAcceptedID() {
+		return nil, fmt.Errorf("block template built on %s, not the last accepted block",
+			blockAdapter.Parent())
 	}
 
 	if vm.blockBuilder != nil {
@@ -481,58 +477,79 @@ func (vm *VM) BuildBlock(ctx context.Context) (snowman.Block, error) {
 	vm.ctx.Log.Info("Built block",
 		zap.String("id", blockAdapter.ID().String()),
 		zap.Uint64("height", blockAdapter.Height()),
-		zap.Int("txs", len(block.Transactions())-1),
-		zap.Bool("mainChain", isMainChain))
+		zap.Int("txs", len(block.Transactions())-1))
 
 	return blockAdapter, nil
 }
 
-// ParseBlock parses a block from bytes
+// ParseBlock parses a block from bytes. It does not validate or store it.
 func (vm *VM) ParseBlock(ctx context.Context, blockBytes []byte) (snowman.Block, error) {
 	if !vm.initialized {
 		return nil, errNotInitialized
 	}
 
-	// Create block adapter from the serialized bytes
-	blockAdapter, err := NewBlockAdapterFromBytes(vm, blockBytes)
+	blockAdapter, err := parseBlockAdapter(vm, blockBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse block: %w", err)
 	}
 
-	vm.ctx.Log.Info("Successfully parsed block",
+	// Return the existing instance for a block that is already verified or
+	// accepted, so the engine sees one object per block ID.
+	if known, err := vm.getBlock(blockAdapter.ID()); err == nil {
+		return known, nil
+	}
+
+	vm.ctx.Log.Debug("Parsed block",
 		zap.String("blockID", blockAdapter.ID().String()),
 		zap.Uint64("height", blockAdapter.Height()),
 	)
 	return blockAdapter, nil
 }
 
-// GetBlock returns a block by ID
+// GetBlock returns a verified or accepted block by ID, or database.ErrNotFound.
 func (vm *VM) GetBlock(ctx context.Context, blockID ids.ID) (snowman.Block, error) {
 	if !vm.initialized {
 		return nil, errNotInitialized
 	}
 	vm.ctx.Log.Debug("getting block", zap.String("id", blockID.String()))
 
-	block, err := vm.getBlock(blockID)
-	if err != nil {
-		vm.ctx.Log.Error("failed to get block",
-			zap.String("id", blockID.String()),
-			zap.Error(err))
-		return nil, err
-	}
-
-	return block, nil
+	return vm.getBlock(blockID)
 }
 
-// getBlock returns a block by ID (internal)
-func (vm *VM) getBlock(blockID ids.ID) (snowman.Block, error) {
-	// Use the block adapter to fetch and wrap the Bitcoin block
-	blockAdapter, err := NewBlockAdapterFromID(vm, blockID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get block adapter: %w", err)
+// getBlock returns a verified or accepted block by ID (internal)
+func (vm *VM) getBlock(blockID ids.ID) (*BlockAdapter, error) {
+	vm.blocksMu.RLock()
+	blk, ok := vm.verifiedBlocks[blockID]
+	vm.blocksMu.RUnlock()
+	if ok {
+		return blk, nil
 	}
 
-	return blockAdapter, nil
+	return acceptedBlockAdapter(vm, blockID)
+}
+
+// hasProcessingBlocks reports whether any verified block is waiting to be
+// accepted or rejected.
+func (vm *VM) hasProcessingBlocks() bool {
+	vm.blocksMu.RLock()
+	defer vm.blocksMu.RUnlock()
+	return len(vm.verifiedBlocks) > 0
+}
+
+// LastAcceptedID returns the last accepted block ID.
+func (vm *VM) LastAcceptedID() ids.ID {
+	vm.blocksMu.RLock()
+	defer vm.blocksMu.RUnlock()
+	return vm.lastAccepted
+}
+
+// onBlockDecided wakes the block builder once no block is left to decide, so
+// transactions that were not in the decided block get built into the next
+// one. It must not be called with blocksMu held.
+func (vm *VM) onBlockDecided() {
+	if vm.blockBuilder != nil && vm.blockBuilder.needToBuild() {
+		vm.blockBuilder.signalCanBuild()
+	}
 }
 
 // getCurrentBlock returns the current best block from the blockchain
@@ -551,7 +568,9 @@ func (vm *VM) SetPreference(ctx context.Context, blockID ids.ID) error {
 		return errNotInitialized
 	}
 
+	vm.blocksMu.Lock()
 	vm.preferred = blockID
+	vm.blocksMu.Unlock()
 	vm.ctx.Log.Debug("set preference", zap.String("id", blockID.String()))
 	return nil
 }
@@ -562,7 +581,7 @@ func (vm *VM) LastAccepted(ctx context.Context) (ids.ID, error) {
 		return ids.Empty, errNotInitialized
 	}
 
-	return vm.lastAccepted, nil
+	return vm.LastAcceptedID(), nil
 }
 
 // GetBlockIDAtHeight returns the block ID at a given height
@@ -602,7 +621,7 @@ func (vm *VM) HealthCheck(ctx context.Context) (interface{}, error) {
 
 	return map[string]interface{}{
 		"initialized":  vm.initialized,
-		"lastAccepted": vm.lastAccepted.String(),
+		"lastAccepted": vm.LastAcceptedID().String(),
 	}, nil
 }
 

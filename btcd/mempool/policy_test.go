@@ -251,11 +251,13 @@ func TestDust(t *testing.T) {
 			false,
 		},
 		{
-			// Maximum int64 value causes overflow.
+			// Maximum int64 value. IsDust compares exactly rather
+			// than overflowing, and value*1000 exceeds
+			// fee*threshold, so this is not dust.
 			"maximum int64 value",
 			wire.TxOut{Value: 1<<63 - 1, PkScript: pkScript},
 			1<<63 - 1,
-			true,
+			false,
 		},
 		{
 			// Unspendable pkScript due to an invalid public key

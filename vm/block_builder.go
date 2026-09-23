@@ -166,8 +166,14 @@ func (b *blockBuilder) scheduleBlockBuild() {
 	}
 }
 
-// needToBuild returns true if there are pending transactions
+// needToBuild returns true if there are pending transactions and no verified
+// block is still being decided. Transactions stay in the mempool until their
+// block is accepted, so without the second check the builder would keep
+// building siblings of a block that is already in consensus.
 func (b *blockBuilder) needToBuild() bool {
+	if b.vm.hasProcessingBlocks() {
+		return false
+	}
 	mempool := b.vm.btcdAdapter.TxMemPool()
 	if mempool == nil {
 		return false

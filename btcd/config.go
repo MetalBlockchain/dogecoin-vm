@@ -174,6 +174,7 @@ type Config struct {
 	SigNet               bool          `json:"sigNet"               long:"signet"               description:"Use the signet test network"`
 	SigNetChallenge      string        `json:"sigNetChallenge"      long:"signetchallenge"      description:"Connect to a custom signet network defined by this challenge instead of using the global default signet network -- Can be specified multiple times"`
 	SigNetSeedNode       []string      `json:"sigNetSeedNode"       long:"signetseednode"       description:"Specify a seed node for the signet network instead of using the global default signet network seed nodes"`
+	MainNet              bool          `json:"mainNet"              long:"mainnet"              description:"Use the DogecoinVM main network (default is testnet)"`
 	TestNet              bool          `json:"testNet"              long:"testnet"              description:"Use the test network"`
 	TorIsolation         bool          `json:"torIsolation"         long:"torisolation"         description:"Enable Tor stream isolation by randomizing user credentials for each connection."`
 	TrickleInterval      time.Duration `json:"trickleInterval"      long:"trickleinterval"      description:"Minimum time between attempts to send new inventory to a connected peer"`
@@ -596,16 +597,19 @@ func LoadConfig(nodeId string, overrideCfg *Config) (*Config, []string, error) {
 	numNets := 0
 	// Count number of network flags passed; assign active network params
 	// while we're at it
+	if cfg.MainNet {
+		numNets++
+		activeNetParams = &dogecoinVMMainNetParams
+	}
 	if cfg.TestNet {
 		numNets++
-		activeNetParams = &btcVMTestNetParms
-		cfg.ChainParams = activeNetParams.Params
+		activeNetParams = &dogecoinVMTestNetParams
 	}
+	cfg.ChainParams = activeNetParams.Params
 
 	if numNets > 1 {
-		str := "%s: The testnet, regtest, segnet, signet and simnet " +
-			"params can't be used together -- choose one of the " +
-			"five"
+		str := "%s: The mainnet and testnet params can't be used " +
+			"together -- choose one"
 		err := fmt.Errorf(str, funcName)
 		fmt.Fprintln(os.Stderr, err)
 		fmt.Fprintln(os.Stderr, usageMessage)

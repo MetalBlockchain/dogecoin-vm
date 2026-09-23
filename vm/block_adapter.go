@@ -3,15 +3,34 @@ package vm
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/MetalBlockchain/metalgo/ids"
 	"github.com/MetalBlockchain/btcvm/btcd/blockchain"
 	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
-	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
 	"github.com/MetalBlockchain/btcvm/btcd/wire"
+	"github.com/MetalBlockchain/metalgo/database"
+	"github.com/MetalBlockchain/metalgo/ids"
 	"go.uber.org/zap"
+)
+
+// Block lifecycle
+//
+// btcd's chain state holds accepted blocks and nothing else, so its tip is
+// always the last accepted block. Parsing and verifying a block never write to
+// btcd: Verify checks the block against the tip with
+// CheckConnectBlockTemplate, which is read-only, and Accept is the only place
+// a block is connected. Reject therefore has nothing to undo.
+//
+// The cost is that a block can only be verified on top of the last accepted
+// block, so the chain never extends a block that is still being decided.
+
+var (
+	errParentNotAccepted = errors.New("parent is not the last accepted block")
+	errWrongHeight       = errors.New("block height is not parent height + 1")
+	errNonCanonicalBlock = errors.New("block bytes are not canonically encoded")
+	errNoCoinbase        = errors.New("block has no coinbase transaction")
 )
 
 // BlockAdapter wraps a Bitcoin block and implements the snowman.Block interface
@@ -25,102 +44,71 @@ type BlockAdapter struct {
 	bytes     []byte
 }
 
-// NewBlockAdapter creates a new block adapter from a Bitcoin block
-func NewBlockAdapter(vm *VM, btcBlock *btcutil.Block) (*BlockAdapter, error) {
-	// Convert block hash to Metal ID
-	blockHash := btcBlock.Hash()
-	id := hashToID(blockHash)
+// newBlockAdapter wraps btcBlock, which must already have its height set.
+func newBlockAdapter(vm *VM, btcBlock *btcutil.Block) (*BlockAdapter, error) {
+	if btcBlock.Height() == btcutil.BlockHeightUnknown {
+		return nil, fmt.Errorf("block %s has no height", btcBlock.Hash())
+	}
 
-	// Get parent block hash
-	msgBlock := btcBlock.MsgBlock()
-	parentHash := &msgBlock.Header.PrevBlock
-	parentID := hashToID(parentHash)
-
-	// Get block height
-	height := uint64(btcBlock.Height())
-
-	// Get timestamp
-	timestamp := msgBlock.Header.Timestamp
-
-	// Serialize block to bytes (use btcutil.Block's serialization)
 	bytes, err := btcBlock.Bytes()
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize block: %w", err)
 	}
 
+	header := &btcBlock.MsgBlock().Header
 	return &BlockAdapter{
 		vm:        vm,
 		btcBlock:  btcBlock,
-		id:        id,
-		parentID:  parentID,
-		height:    height,
-		timestamp: timestamp,
+		id:        hashToID(btcBlock.Hash()),
+		parentID:  hashToID(&header.PrevBlock),
+		height:    uint64(btcBlock.Height()),
+		timestamp: header.Timestamp,
 		bytes:     bytes,
 	}, nil
 }
 
-// NewBlockAdapterFromHash fetches a block by hash and creates an adapter
-func NewBlockAdapterFromHash(vm *VM, hash *chainhash.Hash) (*BlockAdapter, error) {
-	// Get block from blockchain (returns *btcutil.Block)
-	// Use BlockByHashAny to retrieve blocks from any chain (main or side)
-	block, err := vm.chain.BlockByHashAny(hash)
+// acceptedBlockAdapter returns the accepted block with the given ID, or
+// database.ErrNotFound.
+func acceptedBlockAdapter(vm *VM, blockID ids.ID) (*BlockAdapter, error) {
+	block, err := vm.chain.BlockByHash(idToHash(blockID))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block by hash: %w", err)
+		return nil, fmt.Errorf("%w: block %s: %v", database.ErrNotFound, blockID, err)
 	}
-
-	return NewBlockAdapter(vm, block)
+	return newBlockAdapter(vm, block)
 }
 
-// NewBlockAdapterFromID fetches a block by Metal ID and creates an adapter
-func NewBlockAdapterFromID(vm *VM, blockID ids.ID) (*BlockAdapter, error) {
-	// Convert Metal ID to Bitcoin hash
-	hash := idToHash(blockID)
-
-	return NewBlockAdapterFromHash(vm, hash)
-}
-
-// NewBlockAdapterFromBytes deserializes a block from bytes and processes it through btcd
-func NewBlockAdapterFromBytes(vm *VM, blockBytes []byte) (*BlockAdapter, error) {
-	// Deserialize the Bitcoin block from bytes
+// parseBlockAdapter decodes a block without validating it against the chain
+// or storing it. Its height is read from the BIP34 height in the coinbase,
+// which Verify checks against the parent.
+func parseBlockAdapter(vm *VM, blockBytes []byte) (*BlockAdapter, error) {
 	var msgBlock wire.MsgBlock
 	reader := bytes.NewReader(blockBytes)
-	err := msgBlock.BtcDecode(reader, 0, wire.WitnessEncoding)
-	if err != nil {
+	if err := msgBlock.BtcDecode(reader, 0, wire.WitnessEncoding); err != nil {
 		return nil, fmt.Errorf("failed to deserialize block: %w", err)
 	}
 
-	// Wrap in btcutil.Block
 	block := btcutil.NewBlock(&msgBlock)
-	blockHash := block.Hash()
 
-	vm.ctx.Log.Info("Deserialized block from bytes",
-		zap.String("blockHash", blockHash.String()))
-
-	// Process the block through btcd's validation and storage pipeline
-	// This ensures the block is validated and stored in the database
-	isMainChain, isOrphan, err := vm.chain.ProcessBlock(block, blockchain.BFNone)
+	// Reject bytes that decode to the same block ID but are not the block's
+	// canonical encoding, so each ID has exactly one byte representation.
+	canonical, err := block.Bytes()
 	if err != nil {
-		vm.ctx.Log.Error("Failed to process parsed block",
-			zap.String("blockHash", blockHash.String()),
-			zap.Error(err),
-		)
-		return nil, fmt.Errorf("failed to process block: %w", err)
+		return nil, fmt.Errorf("failed to serialize block: %w", err)
+	}
+	if !bytes.Equal(canonical, blockBytes) {
+		return nil, errNonCanonicalBlock
 	}
 
-	vm.ctx.Log.Info("Processed parsed block through btcd",
-		zap.String("blockHash", blockHash.String()),
-		zap.Bool("isMainChain", isMainChain),
-		zap.Bool("isOrphan", isOrphan),
-	)
-
-	// Now create the adapter using the stored block
-	// Use BlockByHashAny to retrieve it (works for main and side chains)
-	storedBlock, err := vm.chain.BlockByHashAny(blockHash)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve processed block: %w", err)
+	if len(msgBlock.Transactions) == 0 {
+		return nil, errNoCoinbase
 	}
+	height, err := blockchain.ExtractCoinbaseHeight(block.Transactions()[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to read block height: %w", err)
+	}
+	block.SetHeight(height)
 
-	return NewBlockAdapter(vm, storedBlock)
+	return newBlockAdapter(vm, block)
 }
 
 // ID returns the block ID
@@ -148,38 +136,83 @@ func (b *BlockAdapter) Bytes() []byte {
 	return b.bytes
 }
 
-// Verify verifies the block
+// Verify checks that the block is valid on top of the last accepted block. It
+// does not modify btcd's chain state.
 func (b *BlockAdapter) Verify(ctx context.Context) error {
-	// The block should already be validated by btcd when we retrieve it
-	// from the blockchain. We could add additional validation here if needed.
+	b.vm.blocksMu.Lock()
+	defer b.vm.blocksMu.Unlock()
+
+	if b.parentID != b.vm.lastAccepted {
+		return fmt.Errorf("%w: parent %s, last accepted %s",
+			errParentNotAccepted, b.parentID, b.vm.lastAccepted)
+	}
+
+	tipHeight := b.vm.chain.BestSnapshot().Height
+	if b.height != uint64(tipHeight)+1 {
+		return fmt.Errorf("%w: height %d, parent height %d",
+			errWrongHeight, b.height, tipHeight)
+	}
+
+	// Full consensus validation (sanity, BIP34 height, timestamps,
+	// difficulty bits, UTXO spends, scripts, coinbase value) against the
+	// tip, without connecting the block.
+	if err := b.vm.chain.CheckConnectBlockTemplate(b.btcBlock); err != nil {
+		return fmt.Errorf("block %s failed validation: %w", b.id, err)
+	}
+
+	b.vm.verifiedBlocks[b.id] = b
+
 	b.vm.ctx.Log.Debug("Block verified",
 		zap.String("id", b.id.String()),
 		zap.Uint64("height", b.height))
 	return nil
 }
 
-// Accept accepts the block
+// Accept connects the block to btcd's chain, making it the new tip.
 func (b *BlockAdapter) Accept(ctx context.Context) error {
-	b.vm.blocksMu.Lock()
-	defer b.vm.blocksMu.Unlock()
-
-	// Update last accepted
-	b.vm.lastAccepted = b.id
-	b.vm.preferred = b.id
+	if err := b.accept(); err != nil {
+		return err
+	}
+	b.vm.onBlockDecided()
 
 	b.vm.ctx.Log.Info("Block accepted",
 		zap.String("id", b.id.String()),
 		zap.Uint64("height", b.height))
-
-	// Note: Do NOT automatically signal block building here.
-	// Block building should only be triggered by new transactions arriving via onTxAccepted(),
-	// not by accepting blocks. This prevents spurious block building at startup.
-
 	return nil
 }
 
-// Reject rejects the block
+func (b *BlockAdapter) accept() error {
+	b.vm.blocksMu.Lock()
+	defer b.vm.blocksMu.Unlock()
+
+	if b.parentID != b.vm.lastAccepted {
+		return fmt.Errorf("%w: accepting %s with parent %s, last accepted %s",
+			errParentNotAccepted, b.id, b.parentID, b.vm.lastAccepted)
+	}
+
+	isMainChain, isOrphan, err := b.vm.btcdAdapter.ProcessBlockNoPoW(b.btcBlock)
+	if err != nil {
+		return fmt.Errorf("failed to connect accepted block %s: %w", b.id, err)
+	}
+	if isOrphan || !isMainChain {
+		return fmt.Errorf("accepted block %s did not become the chain tip (orphan=%t, mainChain=%t)",
+			b.id, isOrphan, isMainChain)
+	}
+
+	delete(b.vm.verifiedBlocks, b.id)
+	b.vm.lastAccepted = b.id
+	return nil
+}
+
+// Reject drops the block. It was never written to btcd, and its transactions
+// never left the mempool, so there is nothing to undo.
 func (b *BlockAdapter) Reject(ctx context.Context) error {
+	b.vm.blocksMu.Lock()
+	delete(b.vm.verifiedBlocks, b.id)
+	b.vm.blocksMu.Unlock()
+
+	b.vm.onBlockDecided()
+
 	b.vm.ctx.Log.Info("Block rejected",
 		zap.String("id", b.id.String()),
 		zap.Uint64("height", b.height))

@@ -5,10 +5,10 @@ package vm
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sync"
 
-	"github.com/MetalBlockchain/btcvm/btcd/blockchain"
 	"github.com/MetalBlockchain/btcvm/btcd/btcutil"
 	"github.com/MetalBlockchain/btcvm/btcd/chaincfg/chainhash"
 	"github.com/MetalBlockchain/btcvm/btcd/wire"
@@ -101,7 +101,7 @@ func (m *BTCGossipMarshaller) UnmarshalGossip(data []byte) (*BTCGossip, error) {
 
 // UnifiedBTCSet manages gossiped items (transactions and blocks)
 // Implements the gossip.Set[BTCGossip] interface
-// Blocks are stored in btcd's database, not cached here
+// Only transactions are gossiped; blocks propagate through Snowman
 type UnifiedBTCSet struct {
 	vm    *VM
 	bloom *gossip.BloomFilter
@@ -115,6 +115,8 @@ func NewUnifiedBTCSet(vm *VM, bloom *gossip.BloomFilter) *UnifiedBTCSet {
 		bloom: bloom,
 	}
 }
+
+var errBlockGossip = errors.New("blocks are not accepted via gossip")
 
 // Add adds a gossip item to the set and processes it
 func (s *UnifiedBTCSet) Add(item *BTCGossip) error {
@@ -167,50 +169,9 @@ func (s *UnifiedBTCSet) Add(item *BTCGossip) error {
 		}
 
 	case GossipItemTypeBlock:
-		if item.Block == nil {
-			return fmt.Errorf("nil block in gossip item")
-		}
-
-		blockHash := item.Block.Hash()
-		s.vm.ctx.Log.Debug("UnifiedBTCSet.Add: received block",
-			zap.String("blockHash", blockHash.String()))
-		if hasBlock, err := s.vm.chain.HaveBlock(blockHash); err != nil {
-			s.vm.ctx.Log.Error("UnifiedBTCSet.Add: failed to check for existing block",
-				zap.String("blockHash", blockHash.String()),
-				zap.Error(err),
-			)
-			return err
-		} else if hasBlock {
-			s.vm.ctx.Log.Debug("UnifiedBTCSet.Add: block already known",
-				zap.String("blockHash", blockHash.String()))
-			s.bloom.Add(item)
-			return nil
-		}
-
-		// Route through btcd's ProcessBlock for validation and storage
-		// This ensures blocks are properly validated, stored in the database,
-		// and added to the block index before being used by Snowman
-		isMainChain, isOrphan, err := s.vm.chain.ProcessBlock(item.Block, blockchain.BFNone)
-		if err != nil {
-			s.vm.ctx.Log.Debug("UnifiedBTCSet.Add: failed to process block",
-				zap.String("blockHash", blockHash.String()),
-				zap.Error(err),
-			)
-			// Don't return error - block may be orphan or duplicate
-			// Just log and continue
-		} else {
-			s.vm.ctx.Log.Info("UnifiedBTCSet.Add: processed block",
-				zap.String("blockHash", blockHash.String()),
-				zap.Bool("isMainChain", isMainChain),
-				zap.Bool("isOrphan", isOrphan),
-			)
-		}
-
-		// Add to bloom filter to track that we've seen this block
-		s.bloom.Add(item)
-
-		// Note: OnBlockRelay will be triggered automatically via blockchain
-		// notifications when the block is connected to the chain
+		// Blocks must only reach btcd through Snowman's Accept. Processing a
+		// gossiped block here would connect it without a vote.
+		return errBlockGossip
 
 	default:
 		return fmt.Errorf("unknown gossip item type: %d", item.ItemType)
@@ -263,7 +224,7 @@ func (s *UnifiedBTCSet) Iterate(f func(*BTCGossip) bool) {
 	}
 
 	// Note: Blocks are NOT included in pull gossip iteration
-	// Block propagation is handled exclusively via push gossip (OnBlockRelay)
+	// Block propagation is handled by Snowman consensus, not gossip
 	// and regossip (every 30s), which provides proper tracking and frequency limits.
 	// Including blocks here caused continuous re-gossip as Iterate() creates
 	// new BTCGossip objects that bypass the PushGossiper's tracking system.
