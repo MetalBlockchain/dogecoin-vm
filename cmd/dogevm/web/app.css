@@ -369,6 +369,7 @@ button.copy { font-size: var(--step--1); padding: 0.2rem 0.6rem; vertical-align:
 .empty { color: var(--ink-soft); }
 .status-done { color: var(--ok); font-weight: 500; }
 .status-waiting { color: var(--ink-soft); }
+.result:empty { display: none; }
 .status-held { color: var(--coin-ink); font-weight: 500; }
 .mono { font-family: var(--mono); font-size: 0.9em; word-break: break-all; }
 .result code, .transfers code, .history code, .io code { word-break: break-all; }

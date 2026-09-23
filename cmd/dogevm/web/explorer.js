@@ -154,7 +154,7 @@ function page(gen, title, ...body) {
   const heading = el('h2', { tabindex: '-1' }, title);
   $('explorer-view').replaceChildren(
     el('p', {}, el('a', { href: '#' }, '← Back to the bridge')),
-    heading, ...body);
+    heading, ...body.filter((b) => b !== null && b !== undefined));
   return heading;
 }
 const loading = (gen, title) => page(gen, title, el('p', { role: 'status' }, 'Loading…'));
