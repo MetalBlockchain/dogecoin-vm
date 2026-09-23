@@ -1,5 +1,20 @@
 # Running and testing DogecoinVM
 
+## Public testnet
+
+The quickest way in is the hosted test network, at **https://metaldoge.com**:
+
+- **Web wallet.** Create a key (it stays in your browser), then use the faucet or deposit Dogecoin testnet DOGE and withdraw it back. The page shows the live peg audit: DOGE locked on Dogecoin against DOGE circulating on DogecoinVM.
+- **JSON-RPC** at `https://metaldoge.com/rpc`, user `public`, password `public`. It can read and broadcast but not administer.
+- **CLI.** Point `dogevm` at it:
+  ```bash
+  export DOGEVM_RPC=https://metaldoge.com/rpc DOGEVM_RPC_USER=public DOGEVM_RPC_PASS=public DOGEVM_NETWORK=testnet
+  ./dogevm balance -address <your address>
+  ```
+- **Deposits.** Each DogecoinVM address gets its own Dogecoin testnet deposit address (Deposit tab). Send testnet DOGE there from any wallet, for example straight from a Dogecoin testnet faucet.
+
+It runs one Metal node, Dogecoin Core on Dogecoin testnet, the bridge and the web wallet, set up by [`deploy/provision.sh`](../deploy/provision.sh). The rest of this page runs the same stack on your own machine.
+
 This walks through a complete local setup: a Metal node running DogecoinVM, Dogecoin Core on regtest, and a DOGE round trip through the peg. Everything here was run on macOS (arm64); Linux works the same way.
 
 ## What you need

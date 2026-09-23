@@ -10,7 +10,7 @@ DogecoinVM is a fork of [MetalBlockchain/btcvm](https://github.com/MetalBlockcha
 
 > **Status: early development, not ready for use.** Do not send real funds to anything built from this repository.
 
-**Try it:** [docs/TESTING.md](docs/TESTING.md) walks through a local Metal node running DogecoinVM, Dogecoin Core on regtest, and a DOGE round trip through the peg.
+**Try it:** the public test network is at **https://metaldoge.com**: a web wallet, faucet and bridge, with JSON-RPC at `/rpc`. [docs/TESTING.md](docs/TESTING.md) covers it, and running the whole stack locally.
 
 ## Networks
 
