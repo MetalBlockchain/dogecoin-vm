@@ -16,6 +16,12 @@ curl -s https://metaldoge.com/api/health | jq '.status, (.checks[] | select(.ok 
 `status` should be `ok`, with nothing failing. The Dogecoin index then
 catches up too: the web wallet's Dogecoin balance appears.
 
+Then give memory back: the sync ran with a 6 GB cache (`dbcache=6000` in
+`/var/lib/dogecoin-main/dogecoin.conf`), which a synced node doesn't need on
+a 15 GB server shared with metalgo and the bridge. Set `dbcache=1000` and
+restart Dogecoin Core at a quiet moment (`systemctl restart dogecoind-main`;
+it takes a minute or two to come back).
+
 ## 1. The first deposit is credited
 
 The 1 DOGE deposit (Dogecoin transaction `74e053f6…`) is credited 20
