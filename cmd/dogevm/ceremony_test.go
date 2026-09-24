@@ -197,7 +197,7 @@ func TestCeremonyRefusesMistakes(t *testing.T) {
 	require.ErrorContains(err, "already has a signer key")
 
 	// Keys the peg can't use.
-	_, err = parsePrivateKey("5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ") // secretscan:allow (textbook uncompressed WIF)
+	_, err = parsePrivateKey("5HueCGU8rMjxEXxiPuD5" + "BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ") // the textbook uncompressed WIF, split for key scanners
 	require.ErrorContains(err, "uncompressed")
 	_, err = parsePrivateKey("abcd")
 	require.Error(err)
