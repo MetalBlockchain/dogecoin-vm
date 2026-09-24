@@ -18,7 +18,8 @@
       <dt>Released</dt><dd id="dl-date">…</dd>
       <dt>Size</dt><dd id="dl-size">…</dd>
       <dt>Requires</dt><dd>macOS 14 Sonoma or later, on a Mac with Apple silicon or an Intel Mac with a T2 chip</dd>
-      <dt>Signed</dt><dd>With a Developer ID, and notarized by Apple: it opens with no warnings</dd>
+      <dt>Signed</dt><dd>With a Developer ID (Paul Grey, UKU2H2D5Z7), and notarized by Apple: it opens with no warnings</dd>
+      <dt>Source</dt><dd>Open source, MIT licensed: <a href="https://github.com/paulgnz/dogecoin-vm-wallet">github.com/paulgnz/dogecoin-vm-wallet</a></dd>
       <dt>SHA-256</dt><dd class="sha" id="dl-sha">…</dd>
     </dl>
 
@@ -39,6 +40,13 @@
       <li>Open it, then create a wallet or import the key you use on this site.</li>
     </ol>
     <p>Prefer the browser? The <a href="/">bridge page</a> is a full wallet too, and imports the same key.</p>
+
+    <h2>Check what you're running</h2>
+    <p>The app is open source. Each <a href="https://github.com/paulgnz/dogecoin-vm-wallet/releases">release on GitHub</a> is tagged at the code it was built from and carries this same DMG, so you can match the download to its source. To check the copy on your Mac, run these in Terminal:</p>
+    <pre>shasum -a 256 ~/Downloads/DogecoinVM-Wallet.dmg
+codesign -dv "/Applications/DogecoinVM Wallet.app" 2>&amp;1 | grep -E "Authority=Developer|TeamIdentifier"
+spctl -a -vv "/Applications/DogecoinVM Wallet.app"</pre>
+    <p>The checksum should match the SHA-256 above, the signer should be Paul Grey (UKU2H2D5Z7), and <code>spctl</code> should say it's notarized. An antivirus alert about another Dogecoin app on your Mac, such as Dogecoin-Qt, isn't about this one.</p>
 
     <div class="callout"><p><strong>Beta.</strong> The app works with real DOGE and the bridge's beta limits. Keep amounts small, and back up your key from the app's Settings.</p></div>
   </main>
