@@ -128,6 +128,23 @@
   </div>
   <p>Each operator runs a full Dogecoin Core node, a DogecoinVM node and the signer service. The tests run the whole ceremony, then a deposit and a withdrawal signed by separate signers.</p>
 
+  <h3>How far the trust can be spread</h3>
+  <p>Releasing locked DOGE will always need a threshold of signers: Dogecoin's script can check signatures and time locks, but not what happened on another chain. So the bridge can be decentralised, with many independent signers, but not made trustless on the Dogecoin side until Dogecoin itself changes. What can change is how many parties must collude, who they are, and what it costs them.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Stage</th><th>What you trust</th><th class="state">State</th></tr></thead>
+    <tbody>
+      <tr><td>One operator</td><td>The beta: every key on one server, one operator. The caps limit what's at risk.</td><td class="state"><span class="chip wait">Today</span></td></tr>
+      <tr><td>Independent signers</td><td>That fewer than the threshold of known, separate key holders collude: 2 of 3, then 3 of 5.</td><td class="state"><span class="chip wait">Staged</span></td></tr>
+      <tr><td>Metal validators as signers</td><td>That no two-thirds of the chain's own validators collude: the same assumption that secures DogecoinVM itself.</td><td class="state"><span class="chip plan">Planned</span></td></tr>
+      <tr><td>Bonded signers</td><td>As above, but signing anything the rules don't allow forfeits collateral worth more than the signer could take.</td><td class="state"><span class="chip plan">Planned</span></td></tr>
+      <tr><td>Deposits on proofs</td><td>No one, for deposits: validators check the Dogecoin deposit themselves. Signers only guard withdrawals.</td><td class="state"><span class="chip plan">Planned</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p><strong>What an operator runs.</strong> Metal validators already run metalgo, so a signer adds a Dogecoin Core node with a transaction index (about 230 GB of SSD today, growing by roughly 25 to 30 GB a year, a few GB of memory, and a day or so to sync), DogecoinVM on their node, and the light signer service. It's packaged as one install plus the ceremony.</p>
+  <p><strong>Two limits.</strong> A Dogecoin multisig script holds at most about 15 keys, so a larger signer set needs threshold signatures, where many signers produce one ordinary signature together. And every change to the signer set moves the locked DOGE to a new multisig address, which is what key rotation does.</p>
+
   <h2>Safety built in today</h2>
   <ul class="plain">
     <li><strong>Consensus-enforced supply.</strong> Blocks that create reserve DOGE in the wrong amount, to the wrong address or at the wrong height are invalid, so no other code path can create DOGE.</li>
@@ -183,6 +200,7 @@
         <li><span class="step-tag">Built</span><strong>Setup ceremony</strong> (<code>dogevm signer-setup</code>): cards, a signer set with a fingerprint, service files and health checks. The existing keys can be imported, so the peg address and the funds stay where they are.</li>
         <li><span class="step-tag">Built</span><strong>Staged with the live keys.</strong> Each key in its own signer service and a coordinator that holds none, with the peg address unchanged. Next: move the live bridge onto them.</li>
         <li><span class="step-tag todo">Next</span><strong>Independent operators.</strong> At least two people or organisations besides us, each running their own Dogecoin and DogecoinVM nodes and a signer, brought in through the ceremony. Then grow from 2-of-3 to 3-of-5.</li>
+        <li><span class="step-tag todo">Next</span><strong>Metal validators as signers.</strong> A one-command install of the signer, a Dogecoin node and DogecoinVM for Metal validators, who already run the infrastructure. Grow to 5 to 7 validator signers with a two-thirds threshold, so the bridge is secured by the same operators as the chain.</li>
         <li><span class="step-tag todo">Next</span><strong>Key rotation.</strong> Move the locked DOGE and the reserve to a new signer set made entirely by the new operators, retiring the beta's keys.</li>
         <li><span class="step-tag todo">Next</span>Hardware-backed storage for signer keys.</li>
         <li><span class="step-tag todo">Next</span><strong>At least three validators</strong> run by different operators, with a validator manager, so validators can be added and replaced without relaunching the chain.</li>
@@ -225,6 +243,7 @@
       <div class="phase-head"><h3>Open up</h3><span class="chip plan">Planned</span></div>
       <ul>
         <li>Raise the caps in steps, with the proof of reserves at each step.</li>
+        <li><strong>Threshold signatures.</strong> Beyond about 15 signers, a Dogecoin multisig no longer fits, so every Metal validator could sign only through threshold ECDSA: many signers producing one ordinary signature. It's substantial cryptography, taken on once the signer set needs to grow past a multisig.</li>
         <li><strong>Atomic swaps.</strong> DogecoinVM runs Dogecoin's own script language, so DOGE on Dogecoin can be swapped for DOGE on DogecoinVM with hash-locked payments: both sides complete, or both are refunded. It needs no bridge and no signers, only someone on the other side of the swap, such as a market maker, which makes for fast, trustless exits alongside the bridge.</li>
         <li>Support for wallets and developer tools beyond the web wallet: standard RPC endpoints and a documented API.</li>
         <li>Public infrastructure: open RPC nodes and a hosted explorer with an uptime history.</li>
