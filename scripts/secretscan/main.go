@@ -35,7 +35,9 @@ type finding struct {
 var forbiddenFile = regexp.MustCompile(`(?i)(^|/)(` +
 	`(co)?signers[^/]*\.json|signing-log[^/]*\.json|faucet\.json|deposits\.json|p-chain-key\.json|` +
 	`[^/]*\.key|[^/]*\.pem|[^/]*\.p12|\.env(\.[^/]*)?|[^/]*\.env|` +
-	`telegram-token|rpc-password|secrets?(\.[^/]*)?|[^/]*\.wif|id_(rsa|ed25519|ecdsa)` +
+	`telegram-token|rpc-password|secrets?(\.[^/]*)?|[^/]*\.wif|id_(rsa|ed25519|ecdsa)|` +
+	// Sparkle's update-signing key, as generate_keys -x exports it.
+	`update-key[^/]*|[^/]*sparkle[^/]*key[^/]*|[^/]*private[-_]?key[^/]*` +
 	`)$`)
 
 // allowedFile matches committed files whose names look like secrets but are
@@ -55,6 +57,10 @@ var contentRules = []struct {
 	{"credential assignment", regexp.MustCompile(`(?i)\b(api[_-]?key|auth[_-]?token|bot[_-]?token|password|passwd|secret)\b["']?\s*[:=]\s*["']?[A-Za-z0-9+/_\-]{20,}`)},
 	{"GitHub token", regexp.MustCompile(`\b(ghp|gho|ghu|ghs|github_pat)_[A-Za-z0-9_]{30,}`)},
 	{"AWS access key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)},
+	// An exported Sparkle (EdDSA) private key is a bare base64 line: the
+	// 32-byte seed (44 characters) or seed and public key (88). The public key
+	// in Info.plist sits inside <string> tags, so it does not match.
+	{"Sparkle update-signing key", regexp.MustCompile(`^\s*([A-Za-z0-9+/]{43}=|[A-Za-z0-9+/]{86}==)\s*$`)},
 }
 
 // wifCandidate matches strings shaped like a WIF private key; isWIF then

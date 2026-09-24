@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,6 +24,10 @@ func TestScanLine(t *testing.T) {
 		{`5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ`, true}, // a textbook WIF
 		{`password: "hunter2hunter2hunter2hunter2"`, true},
 		{`-----BEGIN EC PRIVATE KEY-----`, true},
+		// A Sparkle key as generate_keys -x exports it: 32 bytes, base64. Built
+		// here so this file doesn't hold one.
+		{strings.Repeat("Ab3+", 10) + "Ab3=", true},
+		{`<key>SUPublicEDKey</key><string>` + strings.Repeat("Ab3+", 10) + `Ab3=</string>`, false},
 
 		// Not secrets.
 		{`peg address AAvNfukpAa4iTcRJPetxuxX8XxbC5gFqUM`, false},
@@ -78,6 +83,8 @@ func TestForbiddenFiles(t *testing.T) {
 		"secrets/telegram-token":           true,
 		"secrets.json":                     true,
 		"p-chain-key.json":                 true,
+		"update-key.txt":                   true,
+		"sparkle-private-key.txt":          true,
 		"cmd/dogevm/signers.go":            false,
 		"scripts/secretscan/main.go":       false,
 		".github/workflows/secretscan.yml": false,
