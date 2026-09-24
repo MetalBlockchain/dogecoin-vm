@@ -58,14 +58,25 @@ func refundAction(op wire.OutPoint, dest destination) action {
 	return action{Kind: actionRefund, Deposit: op.String(), To: encodeDest(dest)}
 }
 
-// key identifies the action in a signer's log: the same deposit is one
-// action however many times it is proposed.
-func (a action) key() string {
+// key identifies the action in a signer's log. Derive it from the parsed
+// value, rather than the coordinator's spelling, so equivalent encodings
+// (for example TXID:0 and TXID:00) cannot create separate log entries.
+func (a action) key() (string, error) {
 	switch a.Kind {
+	case actionRelease, actionRefund:
+		op, err := parseOutPoint(a.Deposit)
+		if err != nil {
+			return "", err
+		}
+		return a.Kind + ":" + op.String(), nil
 	case actionPayout:
-		return a.Kind + ":" + a.PegOut
+		txid, err := chainhash.NewHashFromStr(a.PegOut)
+		if err != nil {
+			return "", err
+		}
+		return a.Kind + ":" + txid.String(), nil
 	default:
-		return a.Kind + ":" + a.Deposit
+		return "", fmt.Errorf("unknown action %q", a.Kind)
 	}
 }
 
@@ -403,9 +414,14 @@ func (c *cosigner) handleSign(r *http.Request) (any, error) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return nil, err
 	}
+	key, err := req.Action.key()
+	if err != nil {
+		c.b.logf("refused %s: %v", req.Action.Kind, err)
+		return nil, err
+	}
 	tx, redeems, value, err := c.check(req)
 	if err != nil {
-		c.b.logf("refused %s: %v", req.Action.key(), err)
+		c.b.logf("refused %s: %v", key, err)
 		return nil, err
 	}
 	sigs, err := signInputs(tx, redeems, c.key)
@@ -413,10 +429,10 @@ func (c *cosigner) handleSign(r *http.Request) (any, error) {
 		return nil, err
 	}
 	// Record before answering: if the log cannot be written, sign nothing.
-	if err := c.log.record(req.Action.key(), tx, value); err != nil {
+	if err := c.log.record(key, tx, value); err != nil {
 		return nil, fmt.Errorf("writing the signing log: %w", err)
 	}
-	c.b.logf("signed %s in %v", req.Action.key(), tx.TxHash())
+	c.b.logf("signed %s in %v", key, tx.TxHash())
 	resp := signResponse{PublicKey: hex.EncodeToString(c.key.PubKey().SerializeCompressed())}
 	for _, s := range sigs {
 		resp.Signatures = append(resp.Signatures, hex.EncodeToString(s))
@@ -610,10 +626,14 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 	if encodeTx(want) != encodeTx(tx) {
 		return nil, nil, 0, errors.New("the proposal is not the transaction this signer would build for that action")
 	}
-	if err := c.log.permit(req.Action.key(), tx, unspent); err != nil {
+	key, err := req.Action.key()
+	if err != nil {
 		return nil, nil, 0, err
 	}
-	if c.maxDaily > 0 && !c.log.has(req.Action.key()) &&
+	if err := c.log.permit(key, tx, unspent); err != nil {
+		return nil, nil, 0, err
+	}
+	if c.maxDaily > 0 && !c.log.has(key) &&
 		c.log.volumeSince(time.Now().Add(-24*time.Hour))+value > c.maxDaily {
 		return nil, nil, 0, fmt.Errorf("signing would exceed this signer's %s DOGE daily limit", formatDoge(c.maxDaily))
 	}
@@ -754,7 +774,52 @@ func openSigningLog(path string) (*signingLog, error) {
 	if l.Actions == nil {
 		l.Actions = map[string]*loggedAction{}
 	}
+	if err := l.normalizeKeys(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	return l, nil
+}
+
+// normalizeKeys upgrades logs written before action keys were canonical. It
+// also merges aliases if a coordinator previously used more than one spelling
+// for the same action, preserving every transaction the signer signed.
+func (l *signingLog) normalizeKeys() error {
+	normalized := make(map[string]*loggedAction, len(l.Actions))
+	for rawKey, logged := range l.Actions {
+		if logged == nil {
+			return fmt.Errorf("signing-log action %q is null", rawKey)
+		}
+		kind, value, ok := strings.Cut(rawKey, ":")
+		if !ok {
+			return fmt.Errorf("invalid signing-log action key %q", rawKey)
+		}
+		a := action{Kind: kind}
+		switch kind {
+		case actionRelease, actionRefund:
+			a.Deposit = value
+		case actionPayout:
+			a.PegOut = value
+		default:
+			return fmt.Errorf("invalid signing-log action key %q", rawKey)
+		}
+		key, err := a.key()
+		if err != nil {
+			return fmt.Errorf("invalid signing-log action key %q: %w", rawKey, err)
+		}
+		if existing := normalized[key]; existing != nil {
+			if existing.Value != logged.Value {
+				return fmt.Errorf("signing-log aliases for %q have different values", key)
+			}
+			if logged.First < existing.First {
+				existing.First = logged.First
+			}
+			existing.Txs = append(existing.Txs, logged.Txs...)
+			continue
+		}
+		normalized[key] = logged
+	}
+	l.Actions = normalized
+	return nil
 }
 
 func (l *signingLog) has(key string) bool { return l.Actions[key] != nil }
