@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,6 +49,45 @@ func newCosignHarness(t *testing.T) *cosignHarness {
 		h.b.cosigners = append(h.b.cosigners, &remoteSigner{URL: srv.URL, Token: c.token})
 	}
 	return h
+}
+
+func TestActionKeyIsCanonical(t *testing.T) {
+	require := require.New(t)
+	op := wire.OutPoint{Hash: chainhash.Hash{0xab}, Index: 0}
+
+	releaseKey, err := (action{Kind: actionRelease, Deposit: op.String()}).key()
+	require.NoError(err)
+	aliasKey, err := (action{Kind: actionRelease, Deposit: op.Hash.String() + ":00"}).key()
+	require.NoError(err)
+	require.Equal(releaseKey, aliasKey)
+
+	payoutKey, err := (action{Kind: actionPayout, PegOut: op.Hash.String()}).key()
+	require.NoError(err)
+	aliasKey, err = (action{Kind: actionPayout, PegOut: strings.ToUpper(op.Hash.String())}).key()
+	require.NoError(err)
+	require.Equal(payoutKey, aliasKey)
+}
+
+func TestSigningLogMergesLegacyActionAliases(t *testing.T) {
+	require := require.New(t)
+	op := wire.OutPoint{Hash: chainhash.Hash{0xab}, Index: 0}
+	canonical, err := (action{Kind: actionRelease, Deposit: op.String()}).key()
+	require.NoError(err)
+	legacyAlias := actionRelease + ":" + op.Hash.String() + ":00"
+	path := filepath.Join(t.TempDir(), "signing-log.json")
+	l := &signingLog{Actions: map[string]*loggedAction{
+		canonical:   {Value: 100, First: 20, Txs: []loggedTx{{Txid: "first"}}},
+		legacyAlias: {Value: 100, First: 10, Txs: []loggedTx{{Txid: "second"}}},
+	}}
+	raw, err := json.Marshal(l)
+	require.NoError(err)
+	require.NoError(os.WriteFile(path, raw, 0o600))
+
+	reopened, err := openSigningLog(path)
+	require.NoError(err)
+	require.Len(reopened.Actions, 1)
+	require.Equal(int64(10), reopened.Actions[canonical].First)
+	require.Len(reopened.Actions[canonical].Txs, 2)
 }
 
 // releaseRequest is the proposal the coordinator would send to credit the
@@ -211,6 +252,11 @@ func TestSignerWontDoubleSign(t *testing.T) {
 	require.NoError(sign(first))
 	// Could confirm alongside the first: refused.
 	require.ErrorContains(sign(second), "could confirm alongside")
+	// A different textual encoding of the same deposit is the same action.
+	// The deposit output is vout 0, so appending a zero changes :0 to :00.
+	aliased := second
+	aliased.Action.Deposit += "0"
+	require.ErrorContains(sign(aliased), "could confirm alongside")
 	// The same transaction again is fine.
 	require.NoError(sign(first))
 
