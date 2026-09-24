@@ -24,3 +24,4 @@ secrets/
 # Local builds
 /cmd/dogevm/dogevm
 /dogevm
+/dogevm-plugin
