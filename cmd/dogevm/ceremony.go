@@ -412,6 +412,11 @@ func setupAssemble(args []string) error {
 	if fs.NArg() == 0 {
 		return errors.New("pass every signer's card.json")
 	}
+	tiers, err := parseConfirmationTiers(b.tiersFlag, b.depositConfirmations)
+	if err != nil {
+		return fmt.Errorf("-confirmation-tiers: %w", err)
+	}
+	b.confirmationTiers = tiers
 	p := newPrompter(*yes)
 
 	set := &signerSet{

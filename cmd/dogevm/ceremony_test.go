@@ -79,6 +79,7 @@ func ceremony(t *testing.T, h *harness) (coordKey string, set *signerSet, dirs [
 
 	setPath := filepath.Join(root, "signers.json")
 	assembleArgs := []string{"-yes", "-required", "2", "-doge-network", "regtest", "-vm-network", "testnet",
+		"-confirmations", "6", "-confirmation-tiers", "1:1",
 		"-coordinator-key", hex.EncodeToString(coord.PubKey().SerializeCompressed()),
 		"-out", setPath, "-cosigners-out", filepath.Join(root, "cosigners.json")}
 	require.NoError(setupAssemble(append(assembleArgs, cards...)))
@@ -86,6 +87,8 @@ func ceremony(t *testing.T, h *harness) (coordKey string, set *signerSet, dirs [
 	require.NoError(err)
 	require.Empty(set.PrivateKeys)
 	require.Equal(h.b.signers.PublicKeys, set.PublicKeys, "same keys, same order: the same peg address")
+	require.Equal([]confirmationTier{{UpTo: koinuPerDoge, Confirmations: 1}}, set.Policy.ConfirmationTiers,
+		"the confirmation tiers are part of the agreed policy")
 
 	for i, dir := range dirs {
 		if i == 0 {
