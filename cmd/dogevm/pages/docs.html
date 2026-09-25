@@ -43,6 +43,8 @@
       <dt>Peg address on Dogecoin</dt><dd><code data-info="pegAddress">…</code></dd>
     </dl>
     <p>Sending on DogecoinVM costs Dogecoin's usual 0.01 DOGE per kilobyte, a fraction of a DOGE, and is final in about two seconds. A Dogecoin block comes about every minute.</p>
+    <p>That speed is measured live. For every payment sent through this site, the bridge times how long it takes from receiving the payment to accepting the block that holds it. On DogecoinVM, an accepted block is final. It checks four times a second, so a figure can be up to a quarter of a second slow, never fast. The home page shows the median of the last 50 payments, and <code>/api/status</code> reports the median, the 90th percentile and the latest (<code>finality</code>).</p>
+
     <h3 id="where-fees-go">Where fees go</h3>
     <p><strong>In short: fees on DogecoinVM go to its validators, and the withdrawal fee goes to Dogecoin's miners. The bridge keeps nothing.</strong></p>
     <div class="table-wrap">
@@ -57,7 +59,6 @@
     </div>
     <p><strong>With several validators,</strong> each sets its own fee address. Metal takes turns choosing which validator proposes each block, weighted by stake, and that validator collects the fees in it. So fees spread across validators roughly in proportion to their stake. DogecoinVM only makes a block when there are payments, so a validator's share also depends on traffic. Today there is one validator.</p>
     <p><strong>No fee is destroyed or leaves the peg.</strong> Fees paid on DogecoinVM stay there as ordinary DOGE, backed by DOGE locked on Dogecoin like any other. The bridge's signers aren't paid from fees yet.</p>
-    <p>That speed is measured live. For every payment sent through this site, the bridge times how long it takes from receiving the payment to accepting the block that holds it. On DogecoinVM, an accepted block is final. It checks four times a second, so a figure can be up to a quarter of a second slow, never fast. The home page shows the median of the last 50 payments, and <code>/api/status</code> reports the median, the 90th percentile and the latest (<code>finality</code>).</p>
 
     <h2 id="trust">Trust and limits</h2>
     <div class="callout"><p><strong>Beta, with real DOGE.</strong> The bridge is new and hasn't had an external audit. Keep amounts small.</p></div>
