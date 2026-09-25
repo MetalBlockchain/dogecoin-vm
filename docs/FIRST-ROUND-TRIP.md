@@ -80,8 +80,8 @@ It copies each key to its own signer directory under
 checks the keys and their order match the live set's, and writes a service
 file per signer. It starts nothing. `rm -r` the directory undoes it.
 
-Already staged on 23 September 2026 (fingerprint `8590-c318-5693-769c-ce03`,
-peg address unchanged). Before starting the signers, refresh each one's copy
+Staged again on 25 September 2026 with the confirmation tiers in the policy
+(fingerprint `7c71-1377-b369-6632-ecd5`, peg address unchanged). Before starting the signers, refresh each one's copy
 of the deposit registry, since addresses registered after staging aren't in
 it:
 
