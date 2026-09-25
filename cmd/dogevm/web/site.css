@@ -143,3 +143,8 @@ code { font-family: var(--mono); font-size: 0.9em; }
 @media (max-width: 34rem) { .download-hero { flex-direction: column; align-items: flex-start; } }
 .download-hero img { width: 7rem; height: 7rem; flex: none; }
 .sha { font-family: var(--mono); font-size: 0.8rem; word-break: break-all; }
+
+.fees-table { width: 100%; border-collapse: collapse; font-size: 0.95rem; margin: 0.5rem 0 1rem; }
+.fees-table th, .fees-table td { text-align: left; vertical-align: top; padding: 0.6rem 0.75rem 0.6rem 0; border-bottom: 1px solid var(--rule); }
+.fees-table th { font-weight: 500; color: var(--ink-soft); font-size: 0.85rem; }
+.page .table-wrap { overflow-x: auto; }

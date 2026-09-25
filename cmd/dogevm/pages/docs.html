@@ -44,12 +44,19 @@
     </dl>
     <p>Sending on DogecoinVM costs Dogecoin's usual 0.01 DOGE per kilobyte, a fraction of a DOGE, and is final in about two seconds. A Dogecoin block comes about every minute.</p>
     <h3 id="where-fees-go">Where fees go</h3>
-    <ul>
-      <li><strong>Payments on DogecoinVM</strong> pay Dogecoin's usual fee, and it goes to the validator that built the block, as Dogecoin's fees go to the miner who finds it. Each validator sets its own fee address. Metal takes turns choosing which validator proposes each block, weighted by stake, so fees spread across validators roughly in proportion to their stake. DogecoinVM makes a block only when there are payments to include, so a validator's share follows the traffic as well as its stake.</li>
-      <li><strong>The bridge fee on deposits</strong> is the network fee of the transaction that credits the deposit, so it also goes to the validator that builds that block.</li>
-      <li><strong>The fee on withdrawals</strong> pays the Dogecoin network fee for the payout, so it goes to Dogecoin's miners.</li>
-    </ul>
-    <p>No fee is destroyed or leaves the peg. Fees paid on DogecoinVM stay there as ordinary DOGE, counted as circulating and backed by DOGE locked on Dogecoin like any other. The bridge takes no margin, and its signers aren't paid from fees yet.</p>
+    <p><strong>In short: fees on DogecoinVM go to its validators, and the withdrawal fee goes to Dogecoin's miners. The bridge keeps nothing.</strong></p>
+    <div class="table-wrap">
+    <table class="fees-table">
+      <thead><tr><th>Fee</th><th>When you pay it</th><th>How much</th><th>Who gets it</th></tr></thead>
+      <tbody>
+        <tr><td>Network fee</td><td>Any payment on DogecoinVM</td><td>0.01 DOGE per kB, usually about 0.002 DOGE</td><td>The validator that built the block</td></tr>
+        <tr><td>Bridge fee</td><td>Each deposit</td><td><span data-info="vmFee" data-doge>…</span> DOGE</td><td>The validator that built the block (it's the fee of the transaction that credits you)</td></tr>
+        <tr><td>Withdrawal fee</td><td>Each withdrawal</td><td><span data-info="dogeFee" data-doge>…</span> DOGE</td><td>Dogecoin's miners (it pays for the payout on Dogecoin)</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p><strong>With several validators,</strong> each sets its own fee address. Metal takes turns choosing which validator proposes each block, weighted by stake, and that validator collects the fees in it. So fees spread across validators roughly in proportion to their stake. DogecoinVM only makes a block when there are payments, so a validator's share also depends on traffic. Today there is one validator.</p>
+    <p><strong>No fee is destroyed or leaves the peg.</strong> Fees paid on DogecoinVM stay there as ordinary DOGE, backed by DOGE locked on Dogecoin like any other. The bridge's signers aren't paid from fees yet.</p>
     <p>That speed is measured live. For every payment sent through this site, the bridge times how long it takes from receiving the payment to accepting the block that holds it. On DogecoinVM, an accepted block is final. It checks four times a second, so a figure can be up to a quarter of a second slow, never fast. The home page shows the median of the last 50 payments, and <code>/api/status</code> reports the median, the 90th percentile and the latest (<code>finality</code>).</p>
 
     <h2 id="trust">Trust and limits</h2>
