@@ -282,7 +282,7 @@ func (srv *server) activityHandler(*http.Request) (any, error) {
 		e := map[string]any{
 			"type": "deposit", "time": d.time, "dogecoinTxid": d.outPoint.Hash.String(),
 			"vout": d.outPoint.Index, "amount": formatDoge(d.value),
-			"confirmations": d.confirmations, "required": srv.b.depositConfirmations, "status": status,
+			"confirmations": d.confirmations, "required": srv.b.confirmationsFor(d.value), "status": status,
 		}
 		if d.valid {
 			e["to"] = vmAddr(d.dest)

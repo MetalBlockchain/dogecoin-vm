@@ -104,7 +104,7 @@ ENV
   chown dogevm:dogevm "$SECRETS/bridge.env" && chmod 600 "$SECRETS/bridge.env"
 
   local policy="-signers $SECRETS/signers.json -confirmations $CONFIRMATIONS \
--max-deposit $(koinu "$MAX_DEPOSIT") -max-circulating $(koinu "$MAX_CIRCULATING") -doge-fee $(koinu 0.1)"
+-max-deposit $(koinu "$MAX_DEPOSIT") -max-circulating $(koinu "$MAX_CIRCULATING") -doge-fee $(koinu 0.1) -confirmation-tiers 1:1,10:6,50:12"
   local health="-validation-id $(jq -r .validationID "$STATE/chain.json") -pchain-uri $NODE_API/ext/bc/P"
   [[ -f "$SECRETS/alert-webhook" ]] && health="$health -webhook $(cat "$SECRETS/alert-webhook")"
   local alerts=""

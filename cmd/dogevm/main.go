@@ -419,6 +419,7 @@ func bridgeFlags(fs *flag.FlagSet) *bridge {
 		},
 	}
 	fs.Int64Var(&b.depositConfirmations, "confirmations", 6, "Dogecoin confirmations before a deposit is credited")
+	fs.StringVar(&b.tiersFlag, "confirmation-tiers", "", `fewer confirmations for smaller deposits, as DOGE:CONFIRMATIONS pairs, e.g. "1:1,10:6,50:12"; larger deposits need -confirmations`)
 	fs.Int64Var(&b.vmFee, "vm-fee", koinuPerDoge/100, "koinu deducted from each credit for the DogecoinVM fee")
 	fs.Int64Var(&b.dogeFee, "doge-fee", koinuPerDoge, "koinu deducted from each peg-out for the Dogecoin fee")
 	fs.Int64Var(&b.minDeposit, "min-deposit", koinuPerDoge, "smallest deposit credited, in koinu")
@@ -450,6 +451,11 @@ func (b *bridge) connect(s *settings, signers *signerSet) error {
 		return fmt.Errorf("the signer set is for Dogecoin %s and DogecoinVM %s, not %s and %s",
 			n.Dogecoin, n.DogecoinVM, s.dogeNet, s.vmNetwork)
 	}
+	tiers, err := parseConfirmationTiers(b.tiersFlag, b.depositConfirmations)
+	if err != nil {
+		return fmt.Errorf("-confirmation-tiers: %w", err)
+	}
+	b.confirmationTiers = tiers
 	if err := b.applyPolicy(signers.Policy); err != nil {
 		return err
 	}
@@ -501,6 +507,15 @@ func (b *bridge) applyPolicy(p *pegPolicy) error {
 	for name, v := range agreed {
 		*fields[name] = v
 	}
+	if err == nil && b.flags != nil {
+		b.flags.Visit(func(f *flag.Flag) {
+			if f.Name == "confirmation-tiers" && !sameTiers(b.confirmationTiers, p.ConfirmationTiers) {
+				err = fmt.Errorf("-confirmation-tiers=%s disagrees with the signer set's policy (%s)",
+					formatConfirmationTiers(b.confirmationTiers), formatConfirmationTiers(p.ConfirmationTiers))
+			}
+		})
+	}
+	b.confirmationTiers = p.ConfirmationTiers
 	return err
 }
 
@@ -602,7 +617,7 @@ func cmdBridge(args []string) error {
 	depositsPath := fs.String("deposits", "", "deposit address registry (default: deposits.json next to -signers)")
 	signersPath := fs.String("signers", "", "peg signer set file")
 	once := fs.Bool("once", false, "process what is pending, then exit")
-	interval := fs.Duration("interval", 10*time.Second, "time between polls")
+	interval := fs.Duration("interval", 10*time.Second, "longest wait between polls; a new block on either chain starts the next one at once")
 	rescan := fs.Bool("rescan", false, "rescan Dogecoin for past deposits when importing the peg address")
 	s.register(fs)
 	b := bridgeFlags(fs)
@@ -654,7 +669,7 @@ func cmdBridge(args []string) error {
 		if *once {
 			return nil
 		}
-		time.Sleep(*interval)
+		b.waitForBlock(*interval)
 	}
 }
 
@@ -726,8 +741,8 @@ func parseOutPoint(s string) (wire.OutPoint, error) {
 // holdReason explains why the bridge has not credited a deposit.
 func (b *bridge) holdReason(d deposit) string {
 	switch {
-	case d.valid && d.confirmations < b.depositConfirmations:
-		return fmt.Sprintf("waiting for confirmations (%d of %d)", d.confirmations, b.depositConfirmations)
+	case d.valid && d.confirmations < b.confirmationsFor(d.value):
+		return fmt.Sprintf("waiting for confirmations (%d of %d)", d.confirmations, b.confirmationsFor(d.value))
 	case d.valid:
 		return "waiting for room under -max-circulating"
 	case d.value < b.minDeposit:

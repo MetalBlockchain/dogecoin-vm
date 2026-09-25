@@ -22,7 +22,7 @@
 
     <h2 id="bridge">The bridge</h2>
     <h3>Deposits: Dogecoin to DogecoinVM</h3>
-    <p>Every wallet gets its own Dogecoin deposit address. Its script names your DogecoinVM address and is spendable only by the peg signers, so the bridge knows who to credit and nobody else can move the coins. Your wallet derives this address itself from the signers' public keys and refuses to show one that doesn't match. After <span data-info="depositConfirmations">…</span> Dogecoin confirmations, the same amount, less the bridge fee, is released to you on DogecoinVM from the peg reserve.</p>
+    <p>Every wallet gets its own Dogecoin deposit address. Its script names your DogecoinVM address and is spendable only by the peg signers, so the bridge knows who to credit and nobody else can move the coins. Your wallet derives this address itself from the signers' public keys and refuses to show one that doesn't match. Once Dogecoin has confirmed it enough for its size (<span data-info="confirmationTiers">…</span>), the same amount, less the bridge fee, is released to you on DogecoinVM from the peg reserve.</p>
     <p>The web wallet and the Mac app can make the deposit for you from your Dogecoin balance. You can also send to your deposit address from any Dogecoin wallet or exchange.</p>
     <h3>Withdrawals: DogecoinVM to Dogecoin</h3>
     <p>A withdrawal sends DOGE back to the peg reserve with a note naming a Dogecoin address. Once it's final on DogecoinVM, the signers pay that address from the DOGE locked on Dogecoin, less the Dogecoin network fee.</p>
@@ -32,7 +32,7 @@
     <h2 id="fees">Fees, limits and timings</h2>
     <p>Live from the bridge:</p>
     <dl class="facts-list" id="live-facts">
-      <dt>Confirmations before a deposit is credited</dt><dd><span data-info="depositConfirmations">…</span> (about as many minutes)</dd>
+      <dt>Confirmations before a deposit is credited</dt><dd><span data-info="confirmationTiers">…</span>. Each takes about a minute; smaller deposits carry less risk, so they wait less.</dd>
       <dt>Bridge fee on each deposit</dt><dd><span data-info="vmFee" data-doge>…</span> DOGE</dd>
       <dt>Dogecoin fee on each withdrawal</dt><dd><span data-info="dogeFee" data-doge>…</span> DOGE</dd>
       <dt>Smallest deposit</dt><dd><span data-info="minDeposit" data-doge>…</span> DOGE</dd>

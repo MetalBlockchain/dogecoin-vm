@@ -10,6 +10,10 @@ export const KOINU = 100_000_000n;
 // output below it costs that much again in fee) and hard dust limit (outputs
 // below it are not relayed).
 const FEE_PER_BYTE = 1000n;
+// DogecoinVM's relay minimum, 0.001 DOGE/kB, a tenth of that. Blocks there
+// have room to spare, so the minimum always makes the next block; on
+// Dogecoin, which can be busy, wallets pay the recommended rate.
+export const VM_FEE_PER_BYTE = 100n;
 const SOFT_DUST = KOINU / 100n;
 const HARD_DUST = SOFT_DUST / 10n;
 
@@ -262,9 +266,9 @@ async function verifiedInput(u, getRawTx, fromScript) {
 
 // planPayment chooses which of key's P2PKH outputs (from the API's utxo
 // list, each checked with getRawTx) pay amount to script, with an optional
-// OP_RETURN, and returns the unsigned transaction: its inputs, outputs, the
+// OP_RETURN, at feePerByte (koinu), and returns the unsigned transaction: its inputs, outputs, the
 // total of the inputs, the fee, and the unsigned bytes to review.
-export async function planPayment({ key, utxos, getRawTx, script, amount, data }) {
+export async function planPayment({ key, utxos, getRawTx, script, amount, data, feePerByte = FEE_PER_BYTE }) {
   if (amount < HARD_DUST) throw new Error(`the smallest payment is ${formatDoge(HARD_DUST)} DOGE`);
   const from = keyDestination(key);
   const fromScript = pkScript(from);
@@ -285,7 +289,7 @@ export async function planPayment({ key, utxos, getRawTx, script, amount, data }
     inputs.push(input);
     total += input.value;
     const size = 10 + 149 * inputs.length + 34 * (outputs.length + 1) + (data ? data.length + 3 : 0);
-    fee = BigInt(size) * FEE_PER_BYTE + dustFee;
+    fee = BigInt(size) * feePerByte + dustFee;
     if (total >= amount + fee) break;
   }
   if (total < amount + fee) {

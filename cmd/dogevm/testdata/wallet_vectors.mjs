@@ -65,6 +65,10 @@ const cases = [
   { name: 'deposit to a personal deposit address', coins: [30n * D], to: chain.pkScript(chain.decodeAddress(deposit.address, versions)), amount: 10n * D },
   { name: 'below the soft dust limit pays the surcharge', coins: [2n * D], to: chain.pkScript(keys[1].dest), amount: D / 200n },
   { name: 'change below the soft dust limit goes to the fee', coins: [D + D / 100n], to: chain.pkScript(keys[1].dest), amount: D },
+  // DogecoinVM payments pay the relay minimum rather than Dogecoin's
+  // recommended rate.
+  { name: 'DogecoinVM payment at the relay minimum', coins: [3n * D, 5n * D], to: chain.pkScript(keys[1].dest), amount: 6n * D, feePerByte: chain.VM_FEE_PER_BYTE },
+  { name: 'DogecoinVM withdrawal at the relay minimum', coins: [50n * D], to: chain.pkScript(reserve), amount: 20n * D, data: chain.pegOutData(keys[2].dest), feePerByte: chain.VM_FEE_PER_BYTE },
 ];
 
 const payments = [];
@@ -74,7 +78,7 @@ for (const [n, c] of cases.entries()) {
   const utxos = c.coins.map((value, vout) => ({ txid: prevTxid, vout, value: String(value), script: chain.hex(fromScript), confirmations: 1 }));
   const built = await chain.buildPayment({
     key: from.key, utxos, getRawTx: async () => chain.hex(raw),
-    script: c.to, amount: c.amount, data: c.data,
+    script: c.to, amount: c.amount, data: c.data, feePerByte: c.feePerByte,
   });
   payments.push({
     name: c.name,
@@ -87,6 +91,7 @@ for (const [n, c] of cases.entries()) {
     tx: built.hex,
     txid: built.txid,
     fee: String(built.fee),
+    ...(c.feePerByte ? { feePerByte: String(c.feePerByte) } : {}),
   });
 }
 

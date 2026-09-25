@@ -85,7 +85,7 @@ func (h *healthChecker) bridgeLiveness(s *pegState) check {
 			continue
 		}
 		wouldCredit := h.b.maxCirculating == 0 || s.reserveCreated-s.reserveUnspent+d.value <= h.b.maxCirculating
-		if wouldCredit && d.confirmations > h.b.depositConfirmations+h.stallBlocks {
+		if wouldCredit && d.confirmations > h.b.confirmationsFor(d.value)+h.stallBlocks {
 			return check{"bridge", false, fmt.Sprintf("deposit %v has %d confirmations and is not credited", d.outPoint, d.confirmations)}
 		}
 	}

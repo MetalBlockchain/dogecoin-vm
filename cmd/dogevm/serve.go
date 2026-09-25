@@ -174,6 +174,7 @@ func (srv *server) info(*http.Request) (any, error) {
 		"reserveAddress":       reserveAddr.EncodeAddress(),
 		"signers":              map[string]any{"required": srv.b.signers.Required, "publicKeys": srv.b.signers.PublicKeys},
 		"depositConfirmations": srv.b.depositConfirmations,
+		"confirmationTiers":    tiersForAPI(srv.b.confirmationTiers),
 		"vmFee":                formatDoge(srv.b.vmFee),
 		"dogeFee":              formatDoge(srv.b.dogeFee),
 		"minDeposit":           formatDoge(srv.b.minDeposit),
@@ -501,7 +502,7 @@ func (srv *server) deposits(r *http.Request) (any, error) {
 		entry := map[string]any{
 			"txid": d.outPoint.Hash.String(), "vout": d.outPoint.Index,
 			"amount": formatDoge(d.value), "confirmations": d.confirmations,
-			"required": srv.b.depositConfirmations, "status": status,
+			"required": srv.b.confirmationsFor(d.value), "status": status,
 		}
 		if reason != "" {
 			entry["reason"] = reason
@@ -522,7 +523,7 @@ func (srv *server) deposits(r *http.Request) (any, error) {
 			continue
 		}
 		status := "confirming"
-		if d.confirmations >= srv.b.depositConfirmations {
+		if d.confirmations >= srv.b.confirmationsFor(d.value) {
 			status = "waiting_for_capacity" // the bridge credits within a poll unless the cap blocks it
 			if srv.b.maxCirculating == 0 || s.reserveCreated-s.reserveUnspent+d.value <= srv.b.maxCirculating {
 				status = "crediting"

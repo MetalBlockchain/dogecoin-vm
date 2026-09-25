@@ -46,7 +46,7 @@
     <tbody>
       <tr><td>DogecoinVM L1</td><td>Dogecoin's transaction and script rules (legacy, pre-SegWit) and Dogecoin 1.14 fee and dust policy, with Snowman consensus: a transaction is final once it is in a block, in seconds.</td><td class="state"><span class="chip live">Live</span></td></tr>
       <tr><td>Peg reserve</td><td>DOGE is created only in the chain's reserve blocks, which consensus enforces. That supply is locked to the peg signers and released only against DOGE locked on Dogecoin.</td><td class="state"><span class="chip live">Live</span></td></tr>
-      <tr><td>Bridge</td><td>Watches both chains. It credits deposits after 20 Dogecoin confirmations and pays out withdrawals once they are final on DogecoinVM. It stops moving funds if the solvency check fails.</td><td class="state"><span class="chip live">Live</span></td></tr>
+      <tr><td>Bridge</td><td>Watches both chains. It credits deposits after 1 to 20 Dogecoin confirmations, depending on the amount, and pays out withdrawals once they are final on DogecoinVM. It stops moving funds if the solvency check fails.</td><td class="state"><span class="chip live">Live</span></td></tr>
       <tr><td>Web wallet</td><td>One key, one address on both networks: Dogecoin and DogecoinVM balances side by side, and a one-click move between them. Keys stay in the browser, optionally encrypted to a passkey, and every payment is shown for review, read from the transaction itself, before it's signed there. The page checks the deposit address and every coin it spends itself, rather than trusting the server. It installs as an app on Mac, iPhone and Android.</td><td class="state"><span class="chip live">Live</span></td></tr>
       <tr><td>Explorer</td><td>Shows bridge activity with the transaction on each chain, proof of reserves output by output, and DogecoinVM blocks, transactions and addresses.</td><td class="state"><span class="chip live">Live</span></td></tr>
       <tr><td>Monitoring</td><td>Checks the peg, overdue transfers, both nodes and the validator's fee balance every minute, and sends Telegram alerts.</td><td class="state"><span class="chip live">Live</span></td></tr>
@@ -76,7 +76,7 @@
       <h3>Deposit: <span class="doge">Dogecoin</span> to <span class="vm">DogecoinVM</span></h3>
       <ol>
         <li>The wallet gives each user a personal Dogecoin deposit address. Its script commits to the user's DogecoinVM address, followed by a 2-of-3 multisig of the peg signers. The browser derives the address itself and refuses to show one that doesn't match.</li>
-        <li>After 20 Dogecoin confirmations, the signers release the same amount from the peg reserve to the user's DogecoinVM address, less a 0.01 DOGE fee. The release is tagged with the deposit it pays for, so a deposit can't be credited twice.</li>
+        <li>After enough Dogecoin confirmations for the deposit's size (1 for 1 DOGE, up to 20 above 50 DOGE), the signers release the same amount from the peg reserve to the user's DogecoinVM address, less a 0.01 DOGE fee. The release is tagged with the deposit it pays for, so a deposit can't be credited twice.</li>
         <li>Deposits over the beta cap, or arriving while the total is at its limit, are held and can be refunded on Dogecoin.</li>
       </ol>
     </section>

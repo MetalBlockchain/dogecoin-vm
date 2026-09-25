@@ -60,6 +60,9 @@ type pegPolicy struct {
 	MinPegOut      int64 `json:"minPegOut"`
 	MaxDeposit     int64 `json:"maxDeposit"`
 	MaxCirculating int64 `json:"maxCirculating"`
+	// Fewer confirmations for smaller deposits; omitted when there are
+	// none, so sets made before tiers keep their fingerprint.
+	ConfirmationTiers []confirmationTier `json:"confirmationTiers,omitempty"`
 }
 
 // fingerprint identifies everything the signers agree to. Each signer reads

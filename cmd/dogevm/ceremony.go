@@ -421,6 +421,7 @@ func setupAssemble(args []string) error {
 			Confirmations: b.depositConfirmations, VMFee: b.vmFee, DogeFee: b.dogeFee,
 			MinDeposit: b.minDeposit, MinPegOut: b.minPegOut,
 			MaxDeposit: b.maxDeposit, MaxCirculating: b.maxCirculating,
+			ConfirmationTiers: b.confirmationTiers,
 		},
 	}
 	seen := map[string]bool{}

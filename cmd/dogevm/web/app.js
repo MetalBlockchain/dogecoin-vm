@@ -1,5 +1,6 @@
 import * as chain from './chain.js';
 import * as passkey from './passkey.js';
+import { confirmationsFor, describeTiers } from './tiers.js';
 
 const $ = (id) => document.getElementById(id);
 const KEY_STORE = 'dogevm.key';
@@ -148,8 +149,7 @@ document.addEventListener('click', async (e) => {
 
 async function loadInfo() {
   info = await api('/api/info');
-  $('confs-needed').textContent = info.depositConfirmations;
-  $('confs-needed-top').textContent = info.depositConfirmations;
+  $('confs-needed-top').textContent = describeTiers(info);
   $('vm-fee').textContent = tidy(info.vmFee);
   $('min-deposit').textContent = tidy(info.minDeposit);
   $('doge-fee').textContent = tidy(info.dogeFee);
@@ -782,7 +782,7 @@ function review(plan, network, context = {}) {
     } else if (o.address && o.address === context.deposit) {
       const gets = o.value - chain.parseDoge(info.vmFee);
       lines.push(reviewLine('To your deposit address', o.address, o.value,
-        `Credited as ${chain.formatDoge(gets > 0n ? gets : 0n)} DOGE on DogecoinVM after ${info.depositConfirmations} Dogecoin confirmations, less the ${tidy(info.vmFee)} DOGE bridge fee.`));
+        `Credited as ${chain.formatDoge(gets > 0n ? gets : 0n)} DOGE on DogecoinVM after ${confirmationsFor(info, o.value)} Dogecoin confirmation${confirmationsFor(info, o.value) === 1 ? '' : 's'}, less the ${tidy(info.vmFee)} DOGE bridge fee.`));
     } else if (o.address) {
       lines.push(reviewLine('To', o.address, o.value));
     } else {
@@ -831,7 +831,10 @@ async function pay(script, amount, data, beforeBroadcast, network = 'vm', contex
     throw new Error("Your Dogecoin balance isn't available yet; try again once it shows.");
   }
   const gen = generation;
-  const plan = await chain.planPayment({ key, utxos: net.utxos(), getRawTx: net.getRawTx, script, amount, data });
+  const plan = await chain.planPayment({
+    key, utxos: net.utxos(), getRawTx: net.getRawTx, script, amount, data,
+    feePerByte: network === 'vm' ? chain.VM_FEE_PER_BYTE : undefined,
+  });
   if (!(await review(plan, network, context))) throw cancelled();
   if (gen !== generation || !key) throw new Error('The wallet changed during review, so nothing was sent.');
   const built = await chain.signPlan(plan, key);
@@ -936,8 +939,9 @@ $('move-form').addEventListener('submit', async (e) => {
     if (unknown) {
       showResult($('move-result'), unknownOutcome, false, txid, 'doge');
     } else {
+      const n = confirmationsFor(info, amount);
       showResult($('move-result'),
-        `Sent to your deposit address. It's credited on DogecoinVM after ${info.depositConfirmations} Dogecoin confirmations, about ${info.depositConfirmations} minutes. Transaction:`, true, txid, 'doge');
+        `Sent to your deposit address. It's credited on DogecoinVM after ${n} Dogecoin confirmation${n === 1 ? '' : 's'}, about ${n === 1 ? 'a minute' : `${n} minutes`}. Transaction:`, true, txid, 'doge');
     }
     $('move-amount').value = '';
     setTimeout(refreshDeposits, 3000);

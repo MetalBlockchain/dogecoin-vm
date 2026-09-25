@@ -39,6 +39,8 @@ type bridge struct {
 	dogeParams         *chaincfg.Params
 
 	depositConfirmations int64
+	confirmationTiers    []confirmationTier // smaller deposits need fewer; see tiers.go
+	tiersFlag            string
 	vmFee                int64 // deducted from each credit to pay the VM fee
 	dogeFee              int64 // deducted from each peg-out to pay the Dogecoin fee
 	minDeposit           int64
@@ -375,7 +377,7 @@ func (b *bridge) step() (string, error) {
 	// previous one to be accepted.
 	if !s.vmPending {
 		for _, d := range s.deposits {
-			if _, done := s.released[d.outPoint]; done || d.confirmations < b.depositConfirmations {
+			if _, done := s.released[d.outPoint]; done || d.confirmations < b.confirmationsFor(d.value) {
 				continue
 			}
 			if b.maxCirculating > 0 && s.reserveCreated-s.reserveUnspent+d.value > b.maxCirculating {

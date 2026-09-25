@@ -523,8 +523,8 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		if !ok {
 			return nil, nil, 0, fmt.Errorf("no creditable deposit %v in this signer's view", op)
 		}
-		if d.confirmations < b.depositConfirmations {
-			return nil, nil, 0, fmt.Errorf("deposit %v has %d of %d confirmations", op, d.confirmations, b.depositConfirmations)
+		if need := b.confirmationsFor(d.value); d.confirmations < need {
+			return nil, nil, 0, fmt.Errorf("deposit %v has %d of %d confirmations", op, d.confirmations, need)
 		}
 		if b.maxCirculating > 0 && s.reserveCreated-s.reserveUnspent+d.value > b.maxCirculating {
 			return nil, nil, 0, fmt.Errorf("crediting deposit %v would exceed the circulating cap", op)
