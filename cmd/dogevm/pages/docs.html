@@ -43,6 +43,7 @@
       <dt>Peg address on Dogecoin</dt><dd><code data-info="pegAddress">…</code></dd>
     </dl>
     <p>Sending on DogecoinVM costs Dogecoin's usual 0.01 DOGE per kilobyte, a fraction of a DOGE, and is final in about two seconds. A Dogecoin block comes about every minute.</p>
+    <p>That speed is measured live. For every payment sent through this site, the bridge times how long it takes from receiving the payment to accepting the block that holds it. On DogecoinVM, an accepted block is final. It checks four times a second, so a figure can be up to a quarter of a second slow, never fast. The home page shows the median of the last 50 payments, and <code>/api/status</code> reports the median, the 90th percentile and the latest (<code>finality</code>).</p>
 
     <h2 id="trust">Trust and limits</h2>
     <div class="callout"><p><strong>Beta, with real DOGE.</strong> The bridge is new and hasn't had an external audit. Keep amounts small.</p></div>

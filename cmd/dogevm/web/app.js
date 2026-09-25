@@ -189,6 +189,15 @@ async function refreshStatus() {
       if (band.textContent !== text) band.textContent = text;
     }
     $('vm-height').textContent = s.dogecoinvmHeight.toLocaleString('en-US');
+    // Finality, measured live on this site's own payments.
+    const f = s.finality;
+    $('vm-finality').hidden = !f;
+    if (f) {
+      const secs = (ms) => `${(ms / 1000).toFixed(1)} s`;
+      $('vm-finality').textContent = f.payments === 1
+        ? `Last payment final in ${secs(f.medianMs)}.`
+        : `Payments final in ${secs(f.medianMs)}: the median of the last ${f.payments}.`;
+    }
     // While the bridge's Dogecoin node catches up, show how far it has got
     // rather than a block number that looks like the chain tip.
     const sync = s.dogecoinSync;

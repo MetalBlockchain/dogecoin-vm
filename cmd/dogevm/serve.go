@@ -43,6 +43,8 @@ type server struct {
 	faucet  *faucet
 	dogeIdx *dogeIndex // Dogecoin balances for the wallet; nil if disabled
 
+	finality *finalityMeter // how long payments take to be final, measured live
+
 	mu       sync.RWMutex
 	snapshot *snapshot
 
@@ -228,6 +230,9 @@ func (srv *server) status(*http.Request) (any, error) {
 	}
 	if supply := srv.supply.Load(); supply != nil {
 		out["dogecoinSupply"] = supply
+	}
+	if f := srv.finality.summary(); f != nil {
+		out["finality"] = f
 	}
 	if snap.err != "" {
 		out["error"] = snap.err
@@ -434,8 +439,11 @@ func (srv *server) broadcast(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, badRequest("invalid transaction: %v", err)
 	}
+	// The finality meter's clock starts now, before the node sees it.
+	srv.finality.received(tx.TxHash().String(), time.Now())
 	txid, err := srv.vm.send(tx)
 	if err != nil {
+		srv.finality.forget(tx.TxHash().String())
 		return nil, broadcastError(err)
 	}
 	return map[string]string{"txid": txid.String()}, nil
@@ -744,6 +752,7 @@ func cmdServe(args []string) error {
 			return fmt.Errorf("opening the Dogecoin index: %w", err)
 		}
 		srv.dogeIdx = idx
+		srv.finality = newFinalityMeter(filepath.Join(filepath.Dir(*dogeIndexPath), "finality.json"))
 		go idx.run(make(chan struct{}))
 	}
 

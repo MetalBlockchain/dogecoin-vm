@@ -85,7 +85,11 @@ func (srv *server) watchBlocks(hub *eventHub) {
 		<-tick.C
 		var h int64
 		if err := srv.vm.rpc.call(&h, "getblockcount"); err == nil && h != vmHeight {
+			at := time.Now()
 			first := vmHeight < 0
+			if !first && h > vmHeight {
+				srv.finalityFor(vmHeight+1, h, at)
+			}
 			vmHeight = h
 			if !first {
 				srv.refresh()
@@ -169,5 +173,24 @@ func (srv *server) events(hub *eventHub) http.HandlerFunc {
 				}
 			}
 		}
+	}
+}
+
+// finalityFor stops the finality meter's clock for payments in blocks from
+// through to, which were seen accepted at at.
+func (srv *server) finalityFor(from, to int64, at time.Time) {
+	if srv.finality == nil {
+		return
+	}
+	for height := from; height <= to && height > to-10; height++ {
+		var hash string
+		if err := srv.vm.rpc.call(&hash, "getblockhash", height); err != nil {
+			return
+		}
+		b, err := srv.block(hash, true)
+		if err != nil {
+			return
+		}
+		srv.finality.final(b.TxIDs, at)
 	}
 }
