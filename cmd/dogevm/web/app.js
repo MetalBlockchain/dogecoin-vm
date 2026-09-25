@@ -291,6 +291,10 @@ function setKey(newKey, mode = 'store') {
   dogeState = 'unknown';
   seenVm = null;
   seenDoge = null;
+  lastDeposits = [];
+  withdrawalStatus.clear();
+  shownConfirmations.clear();
+  $('inflight').hidden = true;
   vmBalance = null;
   dogeBalance = null;
   depositShownFor = null;
@@ -352,6 +356,9 @@ function renderKey() {
   $('my-doge-address').textContent = same ? '' : myDogeAddress();
   refreshWallet();
   refreshDogeWallet();
+  refreshDeposits();
+  refreshWithdrawalStatus();
+  renderInflight();
   if (!$('panel-deposit').hidden) showDeposit();
   if (!$('panel-withdraw').hidden) renderWithdrawals();
 }
@@ -381,6 +388,7 @@ async function refreshWallet() {
     const pending = chain.parseDoge(a.pending);
     $('balance-pending').textContent = pending > 0n ? `${tidy(a.pending)} DOGE arriving in the next block` : '';
     renderHistory($('history'), a.history, 'Nothing yet. Move DOGE over from Dogecoin on the Deposit tab.');
+    settleOutgoing('vm', a.history);
     vmBalance = a.confirmed;
     renderAvailable();
     seenVm = a.history.length > 0 || chain.parseDoge(a.confirmed) > 0n;
@@ -468,8 +476,12 @@ async function refreshDogeWallet() {
     dogeUtxos = a.utxos;
     $('doge-balance').textContent = tidy(a.confirmed);
     const pending = chain.parseDoge(a.pending.replace('-', ''));
+    settleOutgoing('doge', a.history);
+    const change = outgoing().filter((o) => o.network === 'doge').reduce((n, o) => n + BigInt(o.change), 0n);
     $('doge-pending').textContent = pending === 0n ? ''
-      : a.pending.startsWith('-') ? `${tidy(a.pending)} DOGE leaving, waiting for a block` : `${tidy(a.pending)} DOGE arriving, waiting for a block`;
+      : a.pending.startsWith('-')
+        ? `${tidy(a.pending)} DOGE leaving${change > 0n ? `; ${chain.formatDoge(change)} DOGE change comes back` : ''} when it confirms, usually within a minute.`
+        : `${tidy(a.pending)} DOGE arriving, waiting for a block.`;
     renderHistory($('doge-history'), a.history, 'Nothing yet. Send DOGE to your address from any Dogecoin wallet.');
     dogeBalance = a.confirmed;
     renderAvailable();
@@ -831,25 +843,189 @@ async function pay(script, amount, data, beforeBroadcast, network = 'vm', contex
     throw new Error("Your Dogecoin balance isn't available yet; try again once it shows.");
   }
   const gen = generation;
+  // Coins a payment still confirming already spends can't be spent again.
+  const inUse = coinsInUse(network);
   const plan = await chain.planPayment({
-    key, utxos: net.utxos(), getRawTx: net.getRawTx, script, amount, data,
-    feePerByte: network === 'vm' ? chain.VM_FEE_PER_BYTE : undefined,
+    key, utxos: net.utxos().filter((u) => !inUse.has(`${u.txid}:${u.vout}`)), getRawTx: net.getRawTx,
+    script, amount, data, feePerByte: network === 'vm' ? chain.VM_FEE_PER_BYTE : undefined,
   });
   if (!(await review(plan, network, context))) throw cancelled();
   if (gen !== generation || !key) throw new Error('The wallet changed during review, so nothing was sent.');
   const built = await chain.signPlan(plan, key);
   if (beforeBroadcast) beforeBroadcast(built.txid);
+  rememberOutgoing(plan, built.txid, network, context, amount);
   try {
     const { txid } = await api(net.broadcast, { hex: built.hex });
     if (txid !== built.txid) throw new Error(`the bridge reported txid ${txid}, expected ${built.txid}`);
   } catch (err) {
     if (err.status === 0 || err.status >= 500) return { txid: built.txid, unknown: true };
     err.rejected = true;
+    forgetOutgoing(built.txid);
     throw err;
   } finally {
+    renderInflight();
     setTimeout(net.refresh, 1500);
   }
   return { txid: built.txid, unknown: false };
+}
+
+
+// --- payments in flight ------------------------------------------------------------
+
+// Each payment this wallet sends is remembered until it confirms: the coins
+// it spends (so they aren't offered again) and its change (so a balance
+// that reads 0 while it confirms shows where the DOGE is).
+const OUTGOING_STORE = 'dogevm.outgoing';
+const outgoingStore = () => `${OUTGOING_STORE}.${myAddress()}`;
+function outgoing() {
+  try { return JSON.parse(store.get(outgoingStore()) || '[]'); } catch { return []; }
+}
+const saveOutgoing = (list) => store.set(outgoingStore(), JSON.stringify(list.slice(0, 50)));
+
+function rememberOutgoing(plan, txid, network, context, amount) {
+  const versions = network === 'doge' ? info.dogecoinVersions : info.dogecoinvmVersions;
+  const mine = network === 'doge' ? myDogeAddress() : myAddress();
+  const outs = chain.reviewOutputs(plan.unsignedHex, versions);
+  const change = outs.filter((o) => o.address === mine).reduce((n, o) => n + o.value, 0n);
+  const kind = context.deposit ? 'move' : context.reserve ? 'withdraw' : 'send';
+  const to = context.withdrawTo || context.deposit || outs.find((o) => o.address && o.address !== mine)?.address || '';
+  saveOutgoing([{
+    txid, network, kind, to, amount: String(amount), change: String(change), time: Date.now(),
+    spent: plan.tx.inputs.map((i) => `${i.txid}:${i.vout}`),
+  }, ...outgoing().filter((o) => o.txid !== txid)]);
+}
+
+function forgetOutgoing(txid) {
+  saveOutgoing(outgoing().filter((o) => o.txid !== txid));
+}
+
+function coinsInUse(network) {
+  return new Set(outgoing().filter((o) => o.network === network).flatMap((o) => o.spent));
+}
+
+// settleOutgoing drops payments a chain now shows confirmed, or that it has
+// never shown after an hour (dropped by the network).
+function settleOutgoing(network, history) {
+  const seen = new Map(history.map((h) => [h.txid, h.confirmations]));
+  const hour = 60 * 60 * 1000;
+  const keep = outgoing().filter((o) => o.network !== network
+    || (seen.has(o.txid) ? seen.get(o.txid) === 0 : Date.now() - o.time < hour));
+  if (keep.length !== outgoing().length) saveOutgoing(keep);
+}
+
+// What the panel draws from, refreshed as each list loads.
+let lastDeposits = [];
+const withdrawalStatus = new Map(); // txid -> /api/pegout answer
+const shownConfirmations = new Map(); // deposit -> confirmations drawn, to animate new ones
+
+async function refreshWithdrawalStatus() {
+  if (!key) return;
+  const gen = generation;
+  const open = savedWithdrawals().filter((w) => !(withdrawalStatus.get(w.txid)?.paymentConfirmations > 0));
+  await Promise.all(open.map(async (w) => {
+    try {
+      const p = await api(`/api/pegout/${w.txid}`);
+      if (gen === generation) withdrawalStatus.set(w.txid, p);
+    } catch { /* next block */ }
+  }));
+  if (gen === generation) renderInflight();
+}
+
+const minutes = (n) => (n <= 1 ? 'about a minute' : `about ${n} minutes`);
+
+// card builds one in-flight entry: a title, an optional progress row, and
+// a line of detail.
+function card(title, progress, detail, cls = '') {
+  const li = document.createElement('li');
+  li.className = `inflight-card ${cls}`;
+  const h = document.createElement('p');
+  h.className = 'inflight-title';
+  h.textContent = title;
+  li.append(h);
+  if (progress) li.append(progress);
+  const d = document.createElement('p');
+  d.className = 'inflight-detail';
+  d.textContent = detail;
+  li.append(d);
+  return li;
+}
+
+// blocks draws confirmations as a row of blocks, the newest popping in.
+function blocks(id, have, need) {
+  const row = document.createElement('div');
+  row.className = 'inflight-blocks';
+  row.setAttribute('role', 'img');
+  row.setAttribute('aria-label', `${Math.min(have, need)} of ${need} confirmations`);
+  const before = shownConfirmations.get(id) ?? have;
+  for (let i = 0; i < need; i++) {
+    const b = document.createElement('span');
+    b.className = i < have ? 'block filled' : 'block';
+    if (i < have && i >= before) b.classList.add('new');
+    row.append(b);
+  }
+  shownConfirmations.set(id, have);
+  return row;
+}
+
+// steps draws a withdrawal's stages.
+function steps(list) {
+  const ol = document.createElement('ol');
+  ol.className = 'inflight-steps';
+  for (const [label, done] of list) {
+    const li = document.createElement('li');
+    li.className = done ? 'done' : '';
+    li.textContent = label;
+    ol.append(li);
+  }
+  return ol;
+}
+
+function renderInflight() {
+  if (!key || !info) return;
+  const cards = [];
+  const depositTxids = new Set(lastDeposits.map((d) => d.txid));
+
+  for (const d of lastDeposits) {
+    if (['credited', 'refunded'].includes(d.status)) continue;
+    const gets = chain.formatDoge(chain.parseDoge(d.amount) - chain.parseDoge(info.vmFee));
+    const title = `Moving ${tidy(d.amount)} DOGE to DogecoinVM`;
+    if (d.status === 'held') {
+      cards.push(card(title, null, `Held for a refund: ${d.reason}`, 'held'));
+    } else if (d.status === 'crediting' || d.confirmations >= d.required) {
+      cards.push(card(title, blocks(`${d.txid}:${d.vout}`, d.required, d.required), `Confirmed. Crediting ${gets} DOGE now.`));
+    } else if (d.status === 'waiting_for_capacity') {
+      cards.push(card(title, null, 'Confirmed, and waiting for room under the beta limit.'));
+    } else {
+      const left = d.required - d.confirmations;
+      cards.push(card(title, blocks(`${d.txid}:${d.vout}`, d.confirmations, d.required),
+        `${d.confirmations} of ${d.required} confirmations. ${minutes(left)[0].toUpperCase()}${minutes(left).slice(1)} left, then ${gets} DOGE arrives.`));
+    }
+  }
+
+  for (const w of savedWithdrawals()) {
+    const p = withdrawalStatus.get(w.txid);
+    if (!p || p.paymentConfirmations > 0) continue;
+    const final = p.status === 'pending' || p.status === 'paid';
+    const paid = p.status === 'paid';
+    const detail = paid ? `${tidy(p.pays)} DOGE is on its way; it confirms in the next Dogecoin block, usually within a minute.`
+      : final ? 'The bridge pays it within seconds.' : 'Waiting for it to be final on DogecoinVM, about two seconds.';
+    cards.push(card(`Withdrawing ${w.amount} DOGE to Dogecoin`,
+      steps([['Final on DogecoinVM', final], ['Paid on Dogecoin', paid], ['In a Dogecoin block', false]]), detail));
+  }
+
+  for (const o of outgoing()) {
+    if (o.network !== 'doge' || o.kind === 'withdraw') continue;
+    if (o.kind === 'move' && depositTxids.has(o.txid)) continue; // the deposit card covers it
+    const change = BigInt(o.change);
+    const back = change > 0n ? ` ${chain.formatDoge(change)} DOGE change comes back when it confirms.` : '';
+    const title = o.kind === 'move' ? `Moving ${chain.formatDoge(BigInt(o.amount))} DOGE to DogecoinVM`
+      : `Sending ${chain.formatDoge(BigInt(o.amount))} DOGE on Dogecoin`;
+    cards.push(card(title, steps([['Sent', true], ['In a Dogecoin block', false]]),
+      `Waiting for a Dogecoin block, usually within a minute.${back}`));
+  }
+
+  $('inflight-list').replaceChildren(...cards);
+  $('inflight').hidden = cards.length === 0;
 }
 
 const unknownOutcome = 'No answer from the bridge, so this may or may not have gone through. Check the transaction before trying again:';
@@ -964,11 +1140,13 @@ function depositStatus(d) {
 }
 
 async function refreshDeposits() {
-  if (!key || depositShownFor === null) return;
+  if (!key) return;
   const gen = generation;
   try {
     const deposits = await api(`/api/deposits/${myAddress()}`);
     if (gen !== generation) return;
+    lastDeposits = deposits;
+    renderInflight();
     $('deposits').replaceChildren(...(deposits.length === 0
       ? [empty('No deposits yet. They show up here once Dogecoin sees them.')]
       : deposits.map((d) => item(`${tidy(d.amount)} DOGE`, depositStatus(d)))));
@@ -1010,6 +1188,7 @@ $('withdraw-form').addEventListener('submit', async (e) => {
   } finally {
     button.disabled = false;
     renderWithdrawals();
+    refreshWithdrawalStatus();
   }
 });
 
@@ -1100,6 +1279,7 @@ async function start() {
     refreshWallet();
     refreshDogeWallet();
     refreshDeposits();
+    refreshWithdrawalStatus();
     if (!$('panel-withdraw').hidden) renderWithdrawals();
   }, 15000);
 }
@@ -1128,6 +1308,7 @@ function listenForBlocks() {
       soon(refreshDogeWallet);
       soon(refreshDeposits); // confirmations counting up
     }
+    soon(refreshWithdrawalStatus); // final, paid, then in a Dogecoin block
     if (!$('panel-withdraw').hidden) soon(renderWithdrawals);
   });
   return stream;

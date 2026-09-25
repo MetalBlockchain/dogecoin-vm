@@ -566,6 +566,13 @@ func (srv *server) pegOut(r *http.Request) (any, error) {
 		if payment, ok := snap.state.paid[p.txid]; ok {
 			out["status"] = "paid"
 			out["paymentTxid"] = payment.String()
+			// How far the payout is on Dogecoin: 0 while it waits for a block.
+			var tx struct {
+				Confirmations int64 `json:"confirmations"`
+			}
+			if err := srv.doge.rpc.call(&tx, "getrawtransaction", payment.String(), true); err == nil {
+				out["paymentConfirmations"] = tx.Confirmations
+			}
 		}
 		return out, nil
 	}

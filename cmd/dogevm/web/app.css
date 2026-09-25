@@ -452,3 +452,26 @@ dialog.review::backdrop { background: rgba(13, 21, 36, 0.6); }
 .route-arrow { font-size: var(--step-1); color: var(--ink-soft); }
 .route-lede { color: var(--ink-soft); margin-top: 0; }
 .deposit-note { font-size: var(--step--1); color: var(--ink-soft); margin: 0.5rem 0 0; }
+
+/* Payments in flight: one card each until it's done. Confirmations are a
+   row of blocks, the newest popping in as its Dogecoin block arrives. */
+
+.inflight { margin: 1.25rem 0; }
+.inflight-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.75rem; }
+.inflight-card { padding: 0.9rem 1rem; border: 1px solid var(--rule); border-left: 4px solid var(--coin); border-radius: 4px; background: var(--surface); }
+.inflight-card.held { border-left-color: var(--error); }
+.inflight-title { margin: 0 0 0.5rem; font-weight: 600; }
+.inflight-detail { margin: 0.5rem 0 0; color: var(--ink-soft); font-size: var(--step--1); }
+.inflight-blocks { display: flex; flex-wrap: wrap; gap: 4px; }
+.inflight-blocks .block { width: 18px; height: 18px; border-radius: 3px; border: 1px solid var(--rule); background: var(--surface-sunk); }
+.inflight-blocks .block.filled { background: var(--coin); border-color: var(--coin); }
+.inflight-blocks .block.new { animation: block-in 600ms cubic-bezier(.2, .8, .3, 1.3); }
+@keyframes block-in {
+  from { transform: translateY(-10px) scale(0.4); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+.inflight-steps { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; font-size: var(--step--1); color: var(--ink-soft); }
+.inflight-steps li::before { content: "○"; margin-right: 0.35rem; color: var(--ink-soft); }
+.inflight-steps li.done { color: var(--ink); }
+.inflight-steps li.done::before { content: "✓"; color: var(--ok); }
+@media (prefers-reduced-motion: reduce) { .inflight-blocks .block.new { animation: none; } }

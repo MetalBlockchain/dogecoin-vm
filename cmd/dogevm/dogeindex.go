@@ -177,7 +177,7 @@ func (x *dogeIndex) run(stop <-chan struct{}) {
 		select {
 		case <-stop:
 			return
-		case <-time.After(10 * time.Second):
+		case <-time.After(2 * time.Second): // a new block reaches wallets within seconds
 		}
 	}
 }

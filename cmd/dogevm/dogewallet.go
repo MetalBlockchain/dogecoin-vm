@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/hex"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -168,6 +169,13 @@ func (srv *server) dogeBroadcast(r *http.Request) (any, error) {
 	txid, err := srv.doge.send(tx)
 	if err != nil {
 		return nil, broadcastError(err)
+	}
+	// Take the payment into the index's view of the mempool now, so the
+	// coins it spends stop being offered at once, not on the next pass.
+	if srv.dogeIdx != nil {
+		if err := srv.dogeIdx.refreshMempool(); err != nil {
+			log.Printf("dogecoin index mempool: %v", err)
+		}
 	}
 	return map[string]string{"txid": txid.String()}, nil
 }
