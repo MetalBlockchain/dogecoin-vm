@@ -420,11 +420,26 @@ function setDogeReady(ready, why = '') {
 // forms, for the network chosen.
 function renderAvailable() {
   const onDoge = document.querySelector('input[name=send-network]:checked').value === 'doge';
-  const vm = vmBalance === null ? 'Loading your DogecoinVM balance…' : `Available on DogecoinVM: ${tidy(vmBalance)} DOGE.`;
-  $('send-available').textContent = !onDoge ? vm
-    : dogeBalance === null ? ($('doge-pending').textContent || 'Loading your Dogecoin balance…')
-      : `Available on Dogecoin: ${tidy(dogeBalance)} DOGE.`;
-  $('withdraw-available').textContent = vm;
+  // box shows a network's spendable balance, or why it isn't shown yet.
+  const box = (el, network, balance, note) => {
+    const label = document.createElement('span');
+    label.className = 'available-label';
+    label.textContent = `Available on ${network}`;
+    const value = document.createElement('span');
+    if (balance === null) {
+      value.className = 'available-note';
+      value.textContent = note;
+    } else {
+      value.className = 'available-amount amount';
+      value.textContent = `${tidy(balance)} DOGE`;
+    }
+    el.replaceChildren(label, value);
+  };
+  const send = $('send-available');
+  send.className = `available ${onDoge ? 'available-doge' : 'available-vm'}`;
+  if (onDoge) box(send, 'Dogecoin', dogeBalance, $('doge-pending').textContent || 'Loading…');
+  else box(send, 'DogecoinVM', vmBalance, 'Loading…');
+  box($('withdraw-available'), 'DogecoinVM', vmBalance, 'Loading…');
 }
 for (const radio of document.querySelectorAll('input[name=send-network]')) radio.addEventListener('change', renderAvailable);
 

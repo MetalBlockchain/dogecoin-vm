@@ -211,7 +211,16 @@ h3 { font-size: var(--step-1); font-weight: 700; margin: 2rem 0 0.75rem; }
 }
 .tabs button:hover { color: var(--ink); background: none; }
 @media (max-width: 40rem) { .tabs button { padding: 0.9rem 0.6rem 0.7rem; } }
-.available { margin: 0; }
+/* What can be spent, on the Send and Withdraw tabs, in the chain's colour. */
+.available {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem;
+  margin: 0.25rem 0 0.5rem; padding: 0.75rem 1rem;
+  border-left: 4px solid var(--vm); border-radius: 3px; background: var(--vm-wash);
+}
+.available-doge { border-left-color: var(--coin); background: var(--coin-wash); }
+.available-label { color: var(--ink-soft); font-size: var(--step--1); }
+.available-amount { font-size: var(--step-1); font-weight: 600; color: var(--ink); }
+.available-note { color: var(--ink-soft); font-size: var(--step--1); }
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
 .panel { padding: 1.75rem; }
 

@@ -179,7 +179,7 @@
             <label><input type="radio" name="send-network" value="vm" checked> DogecoinVM <span class="muted">final in seconds</span></label>
             <label><input type="radio" name="send-network" value="doge"> Dogecoin <span class="muted">a confirmation about every minute</span></label>
           </fieldset>
-          <p class="muted available" id="send-available"></p>
+          <div class="available" id="send-available" aria-live="polite"></div>
           <label for="send-to">To address</label>
           <input id="send-to" autocomplete="off" spellcheck="false" required>
           <label for="send-amount">Amount (DOGE)</label>
@@ -228,7 +228,7 @@
         <p class="needs-key">Create or import a key on the Wallet tab first.</p>
         <form id="withdraw-form" class="stack with-key">
           <p>The bridge pays your Dogecoin address once the withdrawal is in a DogecoinVM block, less a <span id="doge-fee">…</span> DOGE Dogecoin fee. The minimum is <span id="min-pegout">…</span> DOGE.</p>
-          <p class="muted available" id="withdraw-available"></p>
+          <div class="available available-vm" id="withdraw-available" aria-live="polite"></div>
           <label for="withdraw-to">To Dogecoin address</label>
           <input id="withdraw-to" autocomplete="off" spellcheck="false" required>
           <button type="button" class="link-button" id="withdraw-to-mine">Use my Dogecoin address</button>
