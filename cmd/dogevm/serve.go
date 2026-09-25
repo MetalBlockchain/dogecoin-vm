@@ -75,6 +75,7 @@ type snapshot struct {
 	vmHeight   int64
 	dogeHeight int64
 	dogeSync   dogeSync
+	dogeTime   int64 // when the latest Dogecoin block was found, unix seconds
 	checks     []check
 	updated    time.Time
 	err        string
@@ -93,6 +94,15 @@ func (srv *server) refresh() {
 	_ = srv.vm.rpc.call(&snap.vmHeight, "getblockcount")
 	_ = srv.doge.rpc.call(&snap.dogeHeight, "getblockcount")
 	_ = srv.doge.rpc.call(&snap.dogeSync, "getblockchaininfo")
+	var best string
+	if srv.doge.rpc.call(&best, "getbestblockhash") == nil {
+		var header struct {
+			Time int64 `json:"time"`
+		}
+		if srv.doge.rpc.call(&header, "getblockheader", best) == nil {
+			snap.dogeTime = header.Time
+		}
+	}
 
 	srv.mu.Lock()
 	srv.snapshot = snap
@@ -225,6 +235,9 @@ func (srv *server) status(*http.Request) (any, error) {
 			"available": snap.dogeSync.Headers > 0,
 		},
 		"updated": snap.updated.UTC().Format(time.RFC3339),
+		// Dogecoin blocks come at random, a minute apart on average; wallets
+		// say so when one is slow.
+		"dogecoinBlockTime": snap.dogeTime,
 	}
 	if p := srv.b.paused(); p != nil {
 		out["paused"] = p

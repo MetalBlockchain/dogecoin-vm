@@ -188,6 +188,8 @@ async function refreshStatus() {
       const text = `The bridge is paused: ${s.paused.reason} Deposits and withdrawals already sent are processed when it resumes.`;
       if (band.textContent !== text) band.textContent = text;
     }
+    dogeBlockTime = s.dogecoinBlockTime || 0;
+    renderInflight(); // the quiet-Dogecoin note counts up between blocks
     $('vm-height').textContent = s.dogecoinvmHeight.toLocaleString('en-US');
     // Finality, measured live on this site's own payments.
     const f = s.finality;
@@ -915,6 +917,7 @@ function settleOutgoing(network, history) {
 
 // What the panel draws from, refreshed as each list loads.
 let lastDeposits = [];
+let dogeBlockTime = 0; // when the latest Dogecoin block was found, unix seconds
 const withdrawalStatus = new Map(); // txid -> /api/pegout answer
 const shownConfirmations = new Map(); // deposit -> confirmations drawn, to animate new ones
 
@@ -967,6 +970,12 @@ function blocks(id, have, need) {
   return row;
 }
 
+// dogeWaiting marks a card as waiting on the next Dogecoin block.
+function dogeWaiting(c) {
+  c.dataset.dogecoin = '1';
+  return c;
+}
+
 // steps draws a withdrawal's stages.
 function steps(list) {
   const ol = document.createElement('ol');
@@ -997,8 +1006,8 @@ function renderInflight() {
       cards.push(card(title, null, 'Confirmed, and waiting for room under the beta limit.'));
     } else {
       const left = d.required - d.confirmations;
-      cards.push(card(title, blocks(`${d.txid}:${d.vout}`, d.confirmations, d.required),
-        `${d.confirmations} of ${d.required} confirmations. ${minutes(left)[0].toUpperCase()}${minutes(left).slice(1)} left, then ${gets} DOGE arrives.`));
+      cards.push(dogeWaiting(card(title, blocks(`${d.txid}:${d.vout}`, d.confirmations, d.required),
+        `${d.confirmations} of ${d.required} confirmations. ${minutes(left)[0].toUpperCase()}${minutes(left).slice(1)} left, then ${gets} DOGE arrives.`)));
     }
   }
 
@@ -1009,8 +1018,9 @@ function renderInflight() {
     const paid = p.status === 'paid';
     const detail = paid ? `${tidy(p.pays)} DOGE is on its way; it confirms in the next Dogecoin block, usually within a minute.`
       : final ? 'The bridge pays it within seconds.' : 'Waiting for it to be final on DogecoinVM, about two seconds.';
-    cards.push(card(`Withdrawing ${w.amount} DOGE to Dogecoin`,
-      steps([['Final on DogecoinVM', final], ['Paid on Dogecoin', paid], ['In a Dogecoin block', false]]), detail));
+    const c = card(`Withdrawing ${w.amount} DOGE to Dogecoin`,
+      steps([['Final on DogecoinVM', final], ['Paid on Dogecoin', paid], ['In a Dogecoin block', false]]), detail);
+    cards.push(paid ? dogeWaiting(c) : c);
   }
 
   for (const o of outgoing()) {
@@ -1020,10 +1030,21 @@ function renderInflight() {
     const back = change > 0n ? ` ${chain.formatDoge(change)} DOGE change comes back when it confirms.` : '';
     const title = o.kind === 'move' ? `Moving ${chain.formatDoge(BigInt(o.amount))} DOGE to DogecoinVM`
       : `Sending ${chain.formatDoge(BigInt(o.amount))} DOGE on Dogecoin`;
-    cards.push(card(title, steps([['Sent', true], ['In a Dogecoin block', false]]),
-      `Waiting for a Dogecoin block, usually within a minute.${back}`));
+    cards.push(dogeWaiting(card(title, steps([['Sent', true], ['In a Dogecoin block', false]]),
+      `Waiting for a Dogecoin block, usually within a minute.${back}`)));
   }
 
+  // Dogecoin blocks come at random. When one is slow, say so rather than
+  // leave a countdown that looks stuck.
+  const quiet = dogeBlockTime ? Math.floor((Date.now() / 1000 - dogeBlockTime) / 60) : 0;
+  if (quiet >= 4) {
+    for (const c of cards.filter((c) => c.dataset.dogecoin)) {
+      const p = document.createElement('p');
+      p.className = 'inflight-quiet';
+      p.textContent = `Dogecoin hasn't found a block for ${quiet} minutes. Blocks average a minute but come at random; this continues when the next one arrives.`;
+      c.append(p);
+    }
+  }
   $('inflight-list').replaceChildren(...cards);
   $('inflight').hidden = cards.length === 0;
 }
