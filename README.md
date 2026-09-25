@@ -97,3 +97,7 @@ See [`docs/README.md`](docs/README.md) for the Makefile targets that build the p
 ## License
 
 See [LICENSE](LICENSE) and [NOTICE](NOTICE). The vendored btcd is under its own ISC license in [`btcd/LICENSE`](btcd/LICENSE).
+
+## Credits
+
+Developed by Paul Grey @ [metallicus.com](https://metallicus.com), built on [btcvm](https://github.com/MetalBlockchain/btcvm) by Deep V @ [metallicus.com](https://metallicus.com), which runs [btcd](https://github.com/btcsuite/btcd) as a virtual machine on [metalgo](https://github.com/MetalBlockchain/metalgo).
