@@ -284,7 +284,18 @@ async function start() {
   route();
   const refresh = () => { refreshActivity(); refreshReserves(); refreshBlocks(); };
   refresh();
-  setInterval(refresh, 15000);
+  // New blocks on either chain refresh the lists straight away; the timer
+  // is the fallback if the stream drops.
+  const stream = new EventSource('/api/events');
+  let pending = null;
+  stream.addEventListener('block', () => {
+    if (pending) return;
+    pending = setTimeout(() => {
+      pending = null;
+      refresh();
+    }, 100);
+  });
+  setInterval(() => { if (stream.readyState !== EventSource.OPEN) refresh(); }, 15000);
 }
 
 start();

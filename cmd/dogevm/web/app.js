@@ -1062,13 +1062,47 @@ async function start() {
   }
   renderKey();
   refreshStatus();
+  const stream = listenForBlocks();
+  // A fallback for when the event stream is down; while it's up, blocks
+  // drive the refreshes and this only keeps the status (a pause, sync
+  // progress) current.
   setInterval(() => {
     refreshStatus();
+    if (stream.readyState === EventSource.OPEN) return;
     refreshWallet();
     refreshDogeWallet();
     refreshDeposits();
     if (!$('panel-withdraw').hidden) renderWithdrawals();
   }, 15000);
+}
+
+// soon runs fn once for any number of calls within 100 ms, so a burst of
+// events makes one set of requests.
+const scheduled = new Map();
+function soon(fn) {
+  if (scheduled.has(fn)) return;
+  scheduled.set(fn, setTimeout(() => { scheduled.delete(fn); fn(); }, 100));
+}
+
+// listenForBlocks refreshes the wallet the moment either chain has a new
+// block. On DogecoinVM a block is final once accepted, so a payment shows
+// as soon as it is final. The browser reconnects by itself if it drops.
+function listenForBlocks() {
+  const stream = new EventSource('/api/events');
+  stream.addEventListener('block', (e) => {
+    let chain;
+    try { ({ chain } = JSON.parse(e.data)); } catch { return; }
+    soon(refreshStatus);
+    if (chain === 'dogecoinvm') {
+      soon(refreshWallet); // payments, and deposits being credited
+      soon(refreshDeposits);
+    } else if (chain === 'dogecoin') {
+      soon(refreshDogeWallet);
+      soon(refreshDeposits); // confirmations counting up
+    }
+    if (!$('panel-withdraw').hidden) soon(renderWithdrawals);
+  });
+  return stream;
 }
 
 // Transaction, block and address pages used to open on this page; they're

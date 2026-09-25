@@ -765,6 +765,11 @@ func cmdServe(args []string) error {
 	if err := handlePages(mux); err != nil {
 		return err
 	}
+	// New blocks are pushed to open wallets, so they refresh the moment a
+	// payment is final. Started after the Dogecoin index, which it reads.
+	hub := newEventHub()
+	go srv.watchBlocks(hub)
+	mux.HandleFunc("GET /api/events", srv.events(hub))
 	mux.HandleFunc("GET /api/info", handle(srv.info))
 	mux.HandleFunc("GET /api/status", handle(srv.status))
 	mux.HandleFunc("GET /api/health", srv.healthHandler)
