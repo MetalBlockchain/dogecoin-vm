@@ -76,20 +76,22 @@ type pegOut struct {
 
 // pegState is everything the bridge knows, read from both chains.
 type pegState struct {
-	redeemFor       map[string][]byte      // Dogecoin peg output script -> redeem script
-	depositDest     map[string]destination // personal deposit script -> its destination
-	reserveCreated  int64                  // reserve paid in by consensus (coinbases)
-	reserveUnspent  int64                  // reserve still held
-	reserveUTXOs    []utxo
-	vmPending       bool                             // a release is still in the VM mempool
-	released        map[wire.OutPoint]chainhash.Hash // deposit -> release txid
-	pegOuts         []pegOut
-	deposits        []deposit
-	paid            map[chainhash.Hash]chainhash.Hash // peg-out -> payment txid
-	refunded        map[wire.OutPoint]chainhash.Hash  // deposit -> refund txid
-	held            []deposit                         // deposits not credited: no destination, or outside the limits
-	settled         []deposit                         // deposits refunded instead of credited
-	locked          int64                             // DOGE held at the peg address on Dogecoin
+	redeemFor      map[string][]byte      // Dogecoin peg output script -> redeem script
+	depositDest    map[string]destination // personal deposit script -> its destination
+	reserveCreated int64                  // reserve paid in by consensus (coinbases)
+	reserveUnspent int64                  // reserve still held
+	reserveUTXOs   []utxo
+	vmPending      bool                             // a release is still in the VM mempool
+	released       map[wire.OutPoint]chainhash.Hash // deposit -> release txid
+	pegOuts        []pegOut
+	deposits       []deposit
+	paid           map[chainhash.Hash]chainhash.Hash // peg-out -> payment txid
+	refunded       map[wire.OutPoint]chainhash.Hash  // deposit -> refund txid
+	// unconfirmed are Dogecoin payments and refunds not yet in a block.
+	unconfirmed     map[chainhash.Hash]chainTx
+	held            []deposit // deposits not credited: no destination, or outside the limits
+	settled         []deposit // deposits refunded instead of credited
+	locked          int64     // DOGE held at the peg address on Dogecoin
 	lockedUTXOs     []utxo
 	unclaimedOnDoge int64 // deposits without a usable destination
 	unclaimedOnVM   int64 // untagged or too-small payments into the reserve
@@ -181,6 +183,8 @@ func (b *bridge) load() (*pegState, error) {
 		released: map[wire.OutPoint]chainhash.Hash{},
 		paid:     map[chainhash.Hash]chainhash.Hash{},
 		refunded: map[wire.OutPoint]chainhash.Hash{},
+
+		unconfirmed: map[chainhash.Hash]chainTx{},
 	}
 
 	// DogecoinVM side.
@@ -219,6 +223,9 @@ func (b *bridge) load() (*pegState, error) {
 				continue // not final yet
 			}
 			dest, ok := parseDestinationTag(t.tx, tagPegOut)
+			// A payout to the peg address itself would look like change on
+			// Dogecoin, so it is never made.
+			ok = ok && !bytes.Equal(dest.pkScript(), script)
 			p := pegOut{time: t.time, txid: t.tx.TxHash(), value: paidIn, dest: dest,
 				valid: ok && paidIn >= b.minPegOut, confirmations: t.confirmations}
 			if p.valid {
@@ -275,11 +282,32 @@ func (b *bridge) load() (*pegState, error) {
 		if spendsAny(t.tx, pegOuts) {
 			// Only the signers can spend peg outputs; outputs back to the
 			// peg are change, not deposits.
+			hash := t.tx.TxHash()
+			if t.confirmations == 0 {
+				s.unconfirmed[hash] = t
+			}
+			// If an action has two transactions listed, the one in a block
+			// is the one that counts.
+			counts := func(prev chainhash.Hash, listed bool) bool {
+				_, prevPending := s.unconfirmed[prev]
+				return !listed || (prevPending && t.confirmations > 0)
+			}
 			if request, ok := parsePayment(t.tx); ok {
-				s.paid[request] = t.tx.TxHash()
+				if prev, listed := s.paid[request]; counts(prev, listed) {
+					s.paid[request] = hash
+				}
 			}
 			if deposit, ok := parseRefund(t.tx); ok {
-				s.refunded[deposit] = t.tx.TxHash()
+				if prev, listed := s.refunded[deposit]; counts(prev, listed) {
+					s.refunded[deposit] = hash
+				}
+			}
+			// A payout to a personal deposit address is a deposit to it.
+			for i, out := range t.tx.TxOut {
+				if dest, personal := depositDest[string(out.PkScript)]; personal {
+					all = append(all, deposit{time: t.time, outPoint: wire.OutPoint{Hash: hash, Index: uint32(i)},
+						value: out.Value, dest: dest, valid: b.depositInRange(out.Value), confirmations: t.confirmations})
+				}
 			}
 			continue
 		}
@@ -314,15 +342,44 @@ func (b *bridge) load() (*pegState, error) {
 			s.deposits = append(s.deposits, d)
 		default:
 			s.held = append(s.held, d)
-			s.unclaimedOnDoge += d.value
+			if d.confirmations > 0 {
+				s.unclaimedOnDoge += d.value
+			}
 		}
 	}
 	s.lockedUTXOs, err = b.doge.unspent(dogeAddrs, 0)
 	if err != nil {
 		return nil, fmt.Errorf("reading Dogecoin peg addresses: %w", err)
 	}
+	// The audit reads only what's in blocks, so nothing in the mempool (a
+	// deposit that may be double-spent, a payout that is dropped) moves it.
+	// Locked DOGE is the peg's confirmed outputs, including those the
+	// signers' unconfirmed payments spend, which the wallet no longer lists
+	// as unspent; such a payment's peg-out stays owed until it confirms.
 	for _, u := range s.lockedUTXOs {
-		s.locked += u.value
+		if u.confirmations > 0 {
+			s.locked += u.value
+		}
+	}
+	confirmedOut := map[wire.OutPoint]int64{}
+	for _, t := range dogeTxs {
+		if t.confirmations > 0 {
+			hash := t.tx.TxHash()
+			for i, out := range t.tx.TxOut {
+				if s.redeemFor[string(out.PkScript)] != nil {
+					confirmedOut[wire.OutPoint{Hash: hash, Index: uint32(i)}] = out.Value
+				}
+			}
+		}
+	}
+	pendingSpent := map[wire.OutPoint]bool{}
+	for _, t := range s.unconfirmed {
+		for _, in := range t.tx.TxIn {
+			if v, ok := confirmedOut[in.PreviousOutPoint]; ok && !pendingSpent[in.PreviousOutPoint] {
+				pendingSpent[in.PreviousOutPoint] = true
+				s.locked += v
+			}
+		}
 	}
 
 	// Oldest first, so the bridge works through them in order.
@@ -343,12 +400,13 @@ func (b *bridge) audit(s *pegState) audit {
 		UnclaimedOnVM:   s.unclaimedOnVM,
 	}
 	for _, d := range s.deposits {
-		if _, done := s.released[d.outPoint]; !done {
+		if _, done := s.released[d.outPoint]; !done && d.confirmations > 0 {
 			a.PendingPegIns += d.value
 		}
 	}
 	for _, p := range s.pegOuts {
-		if _, done := s.paid[p.txid]; !done {
+		payment, paid := s.paid[p.txid]
+		if _, pending := s.unconfirmed[payment]; !paid || pending {
 			a.PendingPegOuts += p.value
 		}
 	}
@@ -373,6 +431,7 @@ func (b *bridge) step() (string, error) {
 		return "", fmt.Errorf("%w (%+v)", errInsolvent, a)
 	}
 
+	var failed error
 	// Releases chain off each other's reserve change, so wait for the
 	// previous one to be accepted.
 	if !s.vmPending {
@@ -387,8 +446,12 @@ func (b *bridge) step() (string, error) {
 			}
 			txid, err := b.release(s, d)
 			if err != nil {
-				return "", fmt.Errorf("releasing deposit %v: %w", d.outPoint, err)
+				// Go on to the next: one that can't be credited mustn't
+				// hold up the rest.
+				failed = errors.Join(failed, fmt.Errorf("releasing deposit %v: %w", d.outPoint, err))
+				continue
 			}
+			b.logWaiting(failed)
 			return fmt.Sprintf("credited %s DOGE for deposit %v in %v",
 				formatDoge(d.value-b.vmFee), d.outPoint, txid), nil
 		}
@@ -400,12 +463,31 @@ func (b *bridge) step() (string, error) {
 		}
 		txid, err := b.pay(s, p)
 		if err != nil {
-			return "", fmt.Errorf("paying peg-out %v: %w", p.txid, err)
+			failed = errors.Join(failed, fmt.Errorf("paying peg-out %v: %w", p.txid, err))
+			continue
 		}
+		b.logWaiting(failed)
 		return fmt.Sprintf("paid %s DOGE for peg-out %v in %v",
 			formatDoge(p.value-b.dogeFee), p.txid, txid), nil
 	}
-	return "", nil
+	return "", failed
+}
+
+// logWaiting logs what couldn't be done in a step that did something else.
+func (b *bridge) logWaiting(failed error) {
+	if failed != nil {
+		b.logf("waiting: %v", failed)
+	}
+}
+
+// refundable checks a deposit has the confirmations a credit of it would
+// need: a refund of one that is not settled in a block could be paid while
+// its sender double-spends it.
+func (b *bridge) refundable(d deposit) error {
+	if need := b.confirmationsFor(d.value); d.confirmations < need {
+		return fmt.Errorf("deposit %v has %d of %d confirmations; it can be refunded once it has them", d.outPoint, d.confirmations, need)
+	}
+	return nil
 }
 
 // selectUTXOs picks outputs, largest first, until they cover amount.
@@ -551,6 +633,9 @@ func (b *bridge) refund(op wire.OutPoint, dest destination, force bool) (chainha
 	}
 	for _, d := range s.held {
 		if d.outPoint == op {
+			if err := b.refundable(d); err != nil {
+				return chainhash.Hash{}, err
+			}
 			return b.payFromPeg(s, d.value, dest, encodeRefund(op), refundAction(op, dest))
 		}
 	}

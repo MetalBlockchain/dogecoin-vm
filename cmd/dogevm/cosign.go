@@ -519,6 +519,9 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		if txid, done := s.released[op]; done {
 			return nil, nil, 0, fmt.Errorf("deposit %v was already credited in %v", op, txid)
 		}
+		if txid, done := s.refunded[op]; done {
+			return nil, nil, 0, fmt.Errorf("deposit %v was refunded in %v", op, txid)
+		}
 		d, ok := findDeposit(s.deposits, op)
 		if !ok {
 			return nil, nil, 0, fmt.Errorf("no creditable deposit %v in this signer's view", op)
@@ -580,10 +583,17 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 			if txid, done := s.refunded[op]; done {
 				return nil, nil, 0, fmt.Errorf("deposit %v was already refunded in %v", op, txid)
 			}
-			// Signers only refund deposits the bridge will never credit.
+			// Signers only refund deposits the bridge will never credit,
+			// never one it has, and only once confirmed.
+			if txid, done := s.released[op]; done {
+				return nil, nil, 0, fmt.Errorf("deposit %v was credited in %v", op, txid)
+			}
 			d, ok := findDeposit(s.held, op)
 			if !ok {
 				return nil, nil, 0, fmt.Errorf("deposit %v is not held for a refund in this signer's view", op)
+			}
+			if err := b.refundable(d); err != nil {
+				return nil, nil, 0, err
 			}
 			if dest, err = parseDest(req.Action.To); err != nil {
 				return nil, nil, 0, err

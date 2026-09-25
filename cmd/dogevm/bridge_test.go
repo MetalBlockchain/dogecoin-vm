@@ -318,6 +318,12 @@ func TestBridgeHaltsWhenInsolvent(t *testing.T) {
 
 	_, err = h.b.step()
 	require.ErrorIs(t, err, errInsolvent)
+
+	// An unconfirmed payment into the peg, which its sender could still
+	// double-spend, does not make the bridge solvent again.
+	h.deposit(60*doge, nil, 0)
+	_, err = h.b.step()
+	require.ErrorIs(t, err, errInsolvent)
 }
 
 func mustAddr(a btcutil.Address, err error) btcutil.Address {

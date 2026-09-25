@@ -219,11 +219,18 @@ func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
 		if err := c.rpc.call(&t, "gettransaction", e.TxID, true); err != nil {
 			return nil, err
 		}
+		if t.Confirmations < 0 {
+			continue // conflicts with a transaction in a block: it won't confirm
+		}
 		tx, err := decodeTx(t.Hex)
 		if err != nil {
 			return nil, err
 		}
-		if touches(tx, scripts, c) {
+		ok, err := touches(tx, scripts, c)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			txs = append(txs, chainTx{tx: tx, confirmations: t.Confirmations, time: t.Time})
 		}
 	}
@@ -231,27 +238,35 @@ func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
 }
 
 // touches reports whether tx pays to one of scripts or spends an output
-// paying to one.
-func touches(tx *wire.MsgTx, scripts map[string]bool, c *dogeChain) bool {
+// paying to one. The wallet lists only transactions that do one or the
+// other, so a transaction whose inputs can't be read fails rather than
+// being dropped: dropping a peg payout would hide that it was paid.
+func touches(tx *wire.MsgTx, scripts map[string]bool, c *dogeChain) (bool, error) {
 	for _, out := range tx.TxOut {
 		if scripts[string(out.PkScript)] {
-			return true
+			return true, nil
 		}
 	}
 	for _, in := range tx.TxIn {
+		if in.PreviousOutPoint.Hash == (chainhash.Hash{}) {
+			continue // a coinbase
+		}
 		// Needs Dogecoin Core's -txindex for outputs the wallet did not
 		// create.
 		var prevHex string
 		if err := c.rpc.call(&prevHex, "getrawtransaction", in.PreviousOutPoint.Hash.String(), 0); err != nil {
-			continue
+			return false, fmt.Errorf("reading %v, which wallet transaction %v spends (is -txindex on?): %w", in.PreviousOutPoint.Hash, tx.TxHash(), err)
 		}
 		prevTx, err := decodeTx(prevHex)
-		if err == nil && int(in.PreviousOutPoint.Index) < len(prevTx.TxOut) &&
+		if err != nil {
+			return false, err
+		}
+		if int(in.PreviousOutPoint.Index) < len(prevTx.TxOut) &&
 			scripts[string(prevTx.TxOut[in.PreviousOutPoint.Index].PkScript)] {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (c *dogeChain) unspent(addresses []btcutil.Address, minConf int64) ([]utxo, error) {
