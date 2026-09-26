@@ -12,6 +12,11 @@ replace (
 )
 
 require (
+	filippo.io/age v1.2.1
+	github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2 v2.3.5
+	github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil v0.0.0-00010101000000-000000000000
+	github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash v1.1.0
+	github.com/MetalBlockchain/dogecoin-vm/btcd/v2transport v0.0.0-00010101000000-000000000000
 	github.com/MetalBlockchain/metalgo v1.13.5
 	github.com/btcsuite/btcd v0.25.0
 	github.com/btcsuite/btcd/btcec/v2 v2.3.6
@@ -28,10 +33,6 @@ require (
 	github.com/inconshreveable/log15 v2.16.0+incompatible
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/jrick/logrotate v1.1.2
-	github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2 v2.3.5
-	github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil v0.0.0-00010101000000-000000000000
-	github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash v1.1.0
-	github.com/MetalBlockchain/dogecoin-vm/btcd/v2transport v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.22.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1

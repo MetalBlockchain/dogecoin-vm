@@ -98,7 +98,17 @@ other signers read out. An agent can't confirm a fingerprint for itself.
 
 ### What each operator runs
 
-- **The key**, which never leaves the machine. Back it up offline.
+- **The key**, which never leaves the machine. Back it up offline. `init`
+  encrypts it with a passphrase (age, scrypt), so a copy of the file alone,
+  in a backup or a disk image, is useless; `age -d` decrypts it with the
+  passphrase, without this tool. The service gets the passphrase as a
+  systemd credential, `join` says how: `systemd-creds encrypt
+  --with-key=auto` seals it to the machine's TPM where it has one, and to
+  its host key otherwise (which protects a copied file, not a machine whose
+  root is compromised). A key written before encryption still loads, with a
+  warning; `dogevm signer-key encrypt -key-file FILE` encrypts it in place
+  (then delete unencrypted copies, including in backups). The coordinator
+  key only signs requests, so it stays unencrypted.
 - **A Dogecoin Core node** (`-txindex`, with a wallet for watch-only
   addresses) and **a DogecoinVM node**. These are what make the signer
   independent: it checks everything against its own nodes. A signer that
