@@ -85,6 +85,13 @@ cmd_launch() {
   chown -R dogevm:dogevm "$STATE" && chmod 700 "$SECRETS"
 
   # Track the L1's subnet.
+  # SIGTERM to metalgo only: it shuts each chain down in order, and the
+  # plugin closes its database. Sent to the whole unit, the signal could kill
+  # the plugin first and lose accepted blocks.
+  if ! grep -q '^KillMode=mixed' /etc/systemd/system/metal-mainnet.service; then
+    sed -i 's/^\[Service\]$/[Service]\nKillMode=mixed/' /etc/systemd/system/metal-mainnet.service
+    systemctl daemon-reload
+  fi
   if ! grep -q -- "--track-subnets=$subnet" /etc/systemd/system/metal-mainnet.service; then
     sed -i "s|--public-ip=|--track-subnets=$subnet --public-ip=|" /etc/systemd/system/metal-mainnet.service
   fi

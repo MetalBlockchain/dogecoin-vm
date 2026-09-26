@@ -128,6 +128,7 @@ Environment=HOME=$HOME_DIR METALGO=$METALGO DEVNET_DIR=$STATE
 WorkingDirectory=$HOME_DIR
 ExecStart=$HOME_DIR/src/scripts/devnet.sh run
 Restart=on-failure
+KillMode=mixed
 TimeoutStopSec=120
 
 [Install]
