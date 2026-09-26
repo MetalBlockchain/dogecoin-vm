@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -351,4 +352,36 @@ func TestCoordinatorNamesEachSigner(t *testing.T) {
 	stranger := []*remoteSigner{{URL: "https://x.example", PublicKey: coord.PublicKeys[0]}}
 	require.ErrorContains(set.identifyCosigners(stranger), "not in the signer set")
 	require.ErrorContains(set.identifyCosigners([]*remoteSigner{{URL: "https://x.example"}}), "no public key")
+}
+
+// TestSignerLimitsNewRegistrations: a coordinator-key holder can't make a
+// signer's node watch addresses without end, by registering them or by
+// naming them in proposals.
+func TestSignerLimitsNewRegistrations(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	c, r := h.signers[0], h.b.cosigners[0]
+	c.maxRegistrations = 3
+	for i := byte(1); i <= 3; i++ {
+		require.NoError(r.register(h.user(i)))
+	}
+	require.ErrorContains(r.register(h.user(4)), "limit")
+	require.NoError(r.register(h.user(2)), "one already watched is free")
+
+	// Naming a new one in a proposal counts too.
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: 1}, nil, nil))
+	req := signRequest{Chain: chainDogecoinVM, Tx: encodeTx(tx), Register: []string{encodeDest(h.user(5))},
+		Action: action{Kind: actionRelease, Deposit: (wire.OutPoint{}).String()}}
+	_, _, _, err := c.check(req)
+	require.ErrorContains(err, "limit")
+	registered, err := c.b.registry.has(h.user(5))
+	require.NoError(err)
+	require.False(registered)
+
+	// An hour later, there is room again.
+	for i := range c.registered {
+		c.registered[i] = c.registered[i].Add(-time.Hour)
+	}
+	require.NoError(r.register(h.user(4)))
 }

@@ -56,6 +56,20 @@ func (r *depositRegistry) read() ([]destination, error) {
 }
 
 // add records d, reporting whether it was new.
+// has reports whether d is registered.
+func (r *depositRegistry) has(d destination) (bool, error) {
+	dests, err := r.list()
+	if err != nil {
+		return false, err
+	}
+	for _, existing := range dests {
+		if existing == d {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (r *depositRegistry) add(d destination) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

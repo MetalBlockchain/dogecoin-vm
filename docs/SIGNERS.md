@@ -147,6 +147,11 @@ that short form.
   chains show the key has signed). `dogevm signer-log check` lists what a
   log lacks without changing anything; run it before upgrading a signer.
 
+Each new deposit address a signer is told about, by `register` or in a
+proposal, is one more address its node watches for good, so a signer
+starts watching at most `-max-registrations` new ones an hour (600 by
+default); the coordinator retries the rest later.
+
 The policy is part of the signer set, so the coordinator and every signer
 use the same one. A policy flag that disagrees with it is an error.
 Changing the policy, such as raising a cap, means a new set that every

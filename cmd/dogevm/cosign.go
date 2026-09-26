@@ -403,6 +403,11 @@ type cosigner struct {
 	open bool
 	// nonces are the requests accepted recently, so none is accepted twice.
 	nonces nonceCache
+	// maxRegistrations is how many new deposit addresses this signer starts
+	// watching in any hour (0: defaultMaxRegistrations); registered holds
+	// when it did, for the last hour.
+	maxRegistrations int
+	registered       []time.Time
 
 	mu sync.Mutex // one proposal at a time
 	// mine records which chain transactions carry this signer's signature
@@ -496,7 +501,7 @@ func (c *cosigner) handleRegister(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	addr, err := registerDeposit(c.b, d)
+	addr, err := c.register(d)
 	if err != nil {
 		return nil, err
 	}
@@ -577,7 +582,7 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		if err != nil {
 			return nil, nil, 0, err
 		}
-		if _, err := registerDeposit(b, d); err != nil {
+		if _, err := c.register(d); err != nil {
 			return nil, nil, 0, err
 		}
 	}
@@ -761,6 +766,42 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		return nil, nil, 0, fmt.Errorf("signing would exceed this signer's %s DOGE daily limit", formatDoge(c.maxDaily))
 	}
 	return tx, redeems, value, nil
+}
+
+// defaultMaxRegistrations bounds the new deposit addresses a signer starts
+// watching in an hour: far more than people make, far fewer than would
+// bog its node down.
+const defaultMaxRegistrations = 600
+
+// register starts watching d's deposit address. A new one counts against
+// the hourly limit, whether the coordinator registers it or names it in a
+// proposal: each costs this signer's node an address to watch for good, so
+// the coordinator key alone mustn't be able to add them without end. One
+// already registered is free.
+func (c *cosigner) register(d destination) (btcutil.Address, error) {
+	known, err := c.b.registry.has(d)
+	if err != nil {
+		return nil, err
+	}
+	if !known {
+		limit := c.maxRegistrations
+		if limit <= 0 {
+			limit = defaultMaxRegistrations
+		}
+		now := time.Now()
+		recent := c.registered[:0]
+		for _, t := range c.registered {
+			if now.Sub(t) < time.Hour {
+				recent = append(recent, t)
+			}
+		}
+		c.registered = recent
+		if len(recent) >= limit {
+			return nil, fmt.Errorf("this signer has started watching %d new deposit addresses in the last hour, its limit; try later", limit)
+		}
+		c.registered = append(c.registered, now)
+	}
+	return registerDeposit(c.b, d)
 }
 
 // catchUp handles a signer that started watching a deposit address after a
@@ -1101,6 +1142,7 @@ func cmdSigner(args []string) error {
 	tlsCert := fs.String("tls-cert", "", "this signer's transport certificate (default: tls.crt next to -key-file, if there)")
 	tlsKey := fs.String("tls-key", "", "this signer's transport key (default: tls.key next to -key-file, if there)")
 	approvals := fs.String("refund-approvals", "", `file of approved refunds, "TXID:VOUT DOGECOIN-ADDRESS" per line`)
+	maxRegistrations := fs.Int("max-registrations", defaultMaxRegistrations, "most new deposit addresses this signer starts watching in an hour")
 	maxDaily := fs.Int64("max-daily", 0, "most DOGE, in koinu, this signer approves moving in 24 hours (0: no limit)")
 	rescan := fs.Bool("rescan", false, "rescan Dogecoin for past payments to the peg and registered deposit addresses")
 	s.register(fs)
@@ -1145,7 +1187,7 @@ func cmdSigner(args []string) error {
 	if err != nil {
 		return err
 	}
-	c := &cosigner{b: b, key: key, log: log, refundApprovals: *approvals, maxDaily: *maxDaily}
+	c := &cosigner{b: b, key: key, log: log, refundApprovals: *approvals, maxDaily: *maxDaily, maxRegistrations: *maxRegistrations}
 	// Before serving anything, the log must hold everything the chains show
 	// this key signed. A node still syncing can't say yet; the same check
 	// runs before every signature.
