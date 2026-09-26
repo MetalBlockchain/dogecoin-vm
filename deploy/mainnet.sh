@@ -124,7 +124,9 @@ ENV
     jq 'del(.privateKeys)' "$keyed" >"$public"
     chown dogevm:dogevm "$public"
   fi
-  local policy="-confirmations $CONFIRMATIONS \
+  # The registry is pinned, so it doesn't move when the signer set does
+  # (it defaults to the folder of -signers, which would be empty).
+  local policy="-deposits $SECRETS/deposits.json -confirmations $CONFIRMATIONS \
 -max-deposit $(koinu "$MAX_DEPOSIT") -max-circulating $(koinu "$MAX_CIRCULATING") -doge-fee $(koinu 0.1) -confirmation-tiers 1:1,10:6,50:12"
   local health="-validation-id $(jq -r .validationID "$STATE/chain.json") -pchain-uri $NODE_API/ext/bc/P"
   [[ -f "$SECRETS/alert-webhook" ]] && health="$health -webhook $(cat "$SECRETS/alert-webhook")"
