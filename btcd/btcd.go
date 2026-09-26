@@ -218,6 +218,25 @@ func (s *Server) ProcessBlockNoPoW(block *btcutil.Block) (bool, bool, error) {
 // flushes from the sync manager's shutdown path, which never runs here
 // because the peer handler is not started.
 func (s *Server) Close() error {
+	return s.close()
+}
+
+// Persist writes everything the chain holds in memory to disk: the UTXO
+// cache and the best chain state into the database, then the database's own
+// write cache into leveldb. The VM calls it after accepting each block, so an
+// accepted block survives the process dying at any moment.
+func (s *Server) Persist() error {
+	if err := s.chain.FlushUtxoCache(blockchain.FlushRequired); err != nil {
+		return err
+	}
+	flusher, ok := s.db.(interface{ Flush() error })
+	if !ok {
+		return fmt.Errorf("the %s database can't be flushed", s.db.Type())
+	}
+	return flusher.Flush()
+}
+
+func (s *Server) close() error {
 	s.WaitForShutdown()
 	if err := s.chain.FlushUtxoCache(blockchain.FlushRequired); err != nil {
 		return fmt.Errorf("failed to flush utxo cache: %w", err)
