@@ -78,6 +78,7 @@ cmd_run() {
     "$STATE/node/staking"
     "$DOGE_DIR/dogecoin.conf"
     /etc/caddy/Caddyfile
+    /var/lib/dogevm-signer-*
   )
   for unit in /etc/systemd/system/{metal-mainnet,dogecoind-main,dogevm-bridge-main,dogevm-web-main,dogevm-monitor-main,dogevm-signer-1,dogevm-signer-2,dogevm-signer-3}.service; do
     [[ -f $unit ]] && files+=("$unit")
