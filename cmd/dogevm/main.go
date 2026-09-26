@@ -432,6 +432,8 @@ func bridgeFlags(fs *flag.FlagSet) *bridge {
 	fs.Int64Var(&b.maxCirculating, "max-circulating", 0, "most DOGE, in koinu, the bridge lets circulate on DogecoinVM (0: no cap)")
 	fs.StringVar(&b.cosignersPath, "cosigners", "", "JSON list of remote signers, [{\"url\": ...}] (from dogevm signer-setup assemble)")
 	fs.StringVar(&b.coordinatorKeyPath, "coordinator-key-file", "", "the coordinator key, to sign requests to the signers (from dogevm signer-setup coordinator)")
+	fs.StringVar(&b.coordinatorTLSCert, "coordinator-tls-cert", "", "the coordinator's transport certificate, for signers over TLS (default: tls.crt next to -coordinator-key-file)")
+	fs.StringVar(&b.coordinatorTLSKey, "coordinator-tls-key", "", "the coordinator's transport key (default: tls.key next to -coordinator-key-file)")
 	b.flags = fs
 	return b
 }
@@ -483,8 +485,13 @@ func (b *bridge) connect(s *settings, signers *signerSet) error {
 		for _, r := range b.cosigners {
 			r.auth = key
 		}
+		if b.coordinatorTLSCert == "" && b.coordinatorTLSKey == "" {
+			if cert, key, ok := transportFiles(b.coordinatorKeyPath); ok {
+				b.coordinatorTLSCert, b.coordinatorTLSKey = cert, key
+			}
+		}
 	}
-	return nil
+	return b.secureCosigners(b.coordinatorTLSCert, b.coordinatorTLSKey)
 }
 
 // applyPolicy adopts the policy the signers agreed to. A policy flag given

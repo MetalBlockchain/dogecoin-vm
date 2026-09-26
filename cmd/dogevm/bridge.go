@@ -32,11 +32,14 @@ type bridge struct {
 	cosigners          []*remoteSigner
 	cosignersPath      string
 	coordinatorKeyPath string
-	flags              *flag.FlagSet    // the policy flags, if from bridgeFlags
-	registry           *depositRegistry // personal deposit addresses; may be nil
-	vm, doge           chain
-	vmParams           *chaincfg.Params
-	dogeParams         *chaincfg.Params
+	// coordinatorTLSCert and coordinatorTLSKey are the coordinator's
+	// transport key pair, for signers over TLS (transport.go).
+	coordinatorTLSCert, coordinatorTLSKey string
+	flags                                 *flag.FlagSet    // the policy flags, if from bridgeFlags
+	registry                              *depositRegistry // personal deposit addresses; may be nil
+	vm, doge                              chain
+	vmParams                              *chaincfg.Params
+	dogeParams                            *chaincfg.Params
 
 	depositConfirmations int64
 	confirmationTiers    []confirmationTier // smaller deposits need fewer; see tiers.go

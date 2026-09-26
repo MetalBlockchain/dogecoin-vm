@@ -82,6 +82,10 @@ func ceremony(t *testing.T, h *harness) (coordKey string, set *signerSet, dirs [
 		"-confirmations", "6", "-confirmation-tiers", "1:1",
 		"-coordinator-key", hex.EncodeToString(coord.PubKey().SerializeCompressed()),
 		"-out", setPath, "-cosigners-out", filepath.Join(root, "cosigners.json")}
+	// The signers are reached over https, so the set needs the coordinator's
+	// transport key.
+	require.ErrorContains(setupAssemble(append(append([]string{}, assembleArgs...), cards...)), "-coordinator-tls")
+	assembleArgs = append(assembleArgs, "-coordinator-tls", coordinatorPin(t, coordKey))
 	require.NoError(setupAssemble(append(assembleArgs, cards...)))
 	set, err = readSignerSet(setPath)
 	require.NoError(err)
@@ -243,4 +247,14 @@ func TestCeremonyRefusesMistakes(t *testing.T) {
 	require.NoError(setupInit([]string{"-dir", dir}))
 	_, err = readKeyFile(filepath.Join(dir, keyFileName))
 	require.NoError(err)
+}
+
+// coordinatorPin is the pin of the transport key signer-setup coordinator
+// made next to the coordinator key.
+func coordinatorPin(t *testing.T, coordKeyPath string) string {
+	cert, key, ok := transportFiles(coordKeyPath)
+	require.True(t, ok, "signer-setup coordinator makes a transport key")
+	_, pin, err := loadTransportKey(cert, key)
+	require.NoError(t, err)
+	return pin
 }

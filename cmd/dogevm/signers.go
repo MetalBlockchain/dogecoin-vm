@@ -36,7 +36,10 @@ type signerSet struct {
 	Networks       *setNetworks   `json:"networks,omitempty"`
 	Operators      []operatorCard `json:"operators,omitempty"`
 	CoordinatorKey string         `json:"coordinatorKey,omitempty"` // hex; signs every request to the signers
-	Policy         *pegPolicy     `json:"policy,omitempty"`
+	// CoordinatorTLS is the pin of the coordinator's transport key, the
+	// only client a signer reached over TLS accepts (transport.go).
+	CoordinatorTLS string     `json:"coordinatorTLS,omitempty"`
+	Policy         *pegPolicy `json:"policy,omitempty"`
 
 	path         string // the file it was read from, if any
 	redeemScript []byte
@@ -75,7 +78,10 @@ func (s *signerSet) fingerprint() string {
 		Operators      []operatorCard `json:"operators"`
 		CoordinatorKey string         `json:"coordinatorKey"`
 		Policy         *pegPolicy     `json:"policy"`
-	}{s.Required, s.PublicKeys, s.Networks, s.Operators, s.CoordinatorKey, s.Policy})
+		// Omitted when empty, so sets made before transport keys keep
+		// their fingerprint.
+		CoordinatorTLS string `json:"coordinatorTLS,omitempty"`
+	}{s.Required, s.PublicKeys, s.Networks, s.Operators, s.CoordinatorKey, s.Policy, s.CoordinatorTLS})
 	sum := sha256.Sum256(agreed)
 	h := hex.EncodeToString(sum[:10])
 	return strings.Join([]string{h[0:4], h[4:8], h[8:12], h[12:16], h[16:20]}, "-")
