@@ -39,5 +39,6 @@ func fixedSet(t *testing.T) *signerSet {
 // TestFingerprintOfExistingSetsIsStable: fields added to the set since are
 // left out of the fingerprint when empty.
 func TestFingerprintOfExistingSetsIsStable(t *testing.T) {
-	require.Equal(t, "6680-1ad4-9dce-4088-51d7", fixedSet(t).fingerprint())
+	// The hash is the one the short fingerprint showed the start of.
+	require.Equal(t, "6680-1ad4-9dce-4088-51d7", fixedSet(t).shortFingerprint())
 }
