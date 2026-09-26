@@ -9,7 +9,9 @@
 #   - the Metal mainnet node (metal-mainnet.service) has synced the P-Chain;
 #   - the P-Chain key in $SECRETS/p-chain-key.json holds enough METAL: about
 #     5 METAL prepays the validator's continuous fee for several months;
-#   - the peg signer set is in $SECRETS/signers.json.
+#   - the peg signer set is in $SECRETS/signers.json, or, once the keys are
+#     split out (deploy/stage-signers.sh, deploy/install-signers.sh), the
+#     public set, cosigners and coordinator key in $SECRETS/separate-signers.
 # Dogecoin Core (dogecoind-main.service) may still be syncing: deposits are
 # credited once it has caught up. Its data directory needs room for the whole
 # chain with -txindex: about 260 GB in late 2026, and growing. On a small
@@ -110,7 +112,19 @@ DOGECOIN_NETWORK=mainnet
 ENV
   chown dogevm:dogevm "$SECRETS/bridge.env" && chmod 600 "$SECRETS/bridge.env"
 
-  local policy="-signers $SECRETS/signers.json -confirmations $CONFIRMATIONS \
+  # The web server and monitor never sign, so they get the signer set
+  # without its private keys. With separate signers nothing here holds a
+  # key: the bridge only coordinates, and each signer runs as its own user.
+  local split=$SECRETS/separate-signers public keyed coordinate=""
+  if [[ -f $split/signers.json ]]; then
+    public=$split/signers.json keyed=$public
+    coordinate="-cosigners $split/cosigners.json -coordinator-key-file $split/coordinator/coordinator.key"
+  else
+    public=$SECRETS/signers.public.json keyed=$SECRETS/signers.json
+    jq 'del(.privateKeys)' "$keyed" >"$public"
+    chown dogevm:dogevm "$public"
+  fi
+  local policy="-confirmations $CONFIRMATIONS \
 -max-deposit $(koinu "$MAX_DEPOSIT") -max-circulating $(koinu "$MAX_CIRCULATING") -doge-fee $(koinu 0.1) -confirmation-tiers 1:1,10:6,50:12"
   local health="-validation-id $(jq -r .validationID "$STATE/chain.json") -pchain-uri $NODE_API/ext/bc/P"
   [[ -f "$SECRETS/alert-webhook" ]] && health="$health -webhook $(cat "$SECRETS/alert-webhook")"
@@ -118,9 +132,9 @@ ENV
   [[ -f "$SECRETS/telegram-token" && -f "$SECRETS/telegram-chat" ]] &&
     alerts="-telegram-token-file $SECRETS/telegram-token -telegram-chat $(cat "$SECRETS/telegram-chat")"
   for unit in bridge web monitor; do
-    local exec="$BIN/dogevm bridge $policy -interval 30s"
-    [[ $unit == web ]] && exec="$BIN/dogevm serve $policy ${health% -webhook*} -doge-index $STATE/dogeindex -listen 127.0.0.1:8081"
-    [[ $unit == monitor ]] && exec="$BIN/dogevm monitor $policy $health $alerts"
+    local exec="$BIN/dogevm bridge -signers $keyed $coordinate $policy -interval 30s"
+    [[ $unit == web ]] && exec="$BIN/dogevm serve -signers $public $policy ${health% -webhook*} -doge-index $STATE/dogeindex -listen 127.0.0.1:8081"
+    [[ $unit == monitor ]] && exec="$BIN/dogevm monitor -signers $public $policy $health $alerts"
     cat >"/etc/systemd/system/dogevm-$unit-main.service" <<UNIT
 [Unit]
 Description=DogecoinVM $unit (Metal mainnet, Dogecoin mainnet)

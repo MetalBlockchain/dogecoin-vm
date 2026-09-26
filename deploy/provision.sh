@@ -64,6 +64,12 @@ else
 fi
 (cd "$HOME_DIR/src" && as_dogevm go build -o "$HOME_DIR/bin/dogevm" ./cmd/dogevm)
 ln -sf "$HOME_DIR/bin/dogevm" /usr/local/bin/dogevm
+# Separate signers (deploy/install-signers.sh) run a root-owned copy, which
+# the dogevm user can't replace. Update it too, and restart them.
+if [[ -d /usr/local/lib/dogevm ]]; then
+  install -o root -g root -m 755 "$HOME_DIR/bin/dogevm" /usr/local/lib/dogevm/dogevm
+  systemctl try-restart 'dogevm-signer-*.service'
+fi
 
 log "Dogecoin Core $DOGECOIN_VERSION (testnet)"
 if [[ ! -x /opt/dogecoin/bin/dogecoind ]]; then
