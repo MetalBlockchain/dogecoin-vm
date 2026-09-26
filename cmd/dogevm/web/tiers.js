@@ -19,10 +19,11 @@ export function confirmationsFor(info, value) {
 
 // describeTiers says how long deposits wait, for example "1 confirmation
 // for up to 1 DOGE, 6 for up to 10 DOGE, 12 for up to 50 DOGE, and 20 for
-// anything larger".
-export function describeTiers(info) {
+// anything larger". show formats a tier's DOGE amount, for the wallet's
+// chosen unit.
+export function describeTiers(info, show = (doge) => `${plain(doge)} DOGE`) {
   const tiers = info.confirmationTiers || [];
   if (tiers.length === 0) return plural(info.depositConfirmations);
-  const parts = tiers.map((t, i) => `${i === 0 ? plural(t.confirmations) : t.confirmations} for up to ${plain(t.upTo)} DOGE`);
+  const parts = tiers.map((t, i) => `${i === 0 ? plural(t.confirmations) : t.confirmations} for up to ${show(t.upTo)}`);
   return `${parts.join(', ')}, and ${info.depositConfirmations} for anything larger`;
 }

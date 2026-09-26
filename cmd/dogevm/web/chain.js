@@ -9,12 +9,12 @@ export const KOINU = 100_000_000n;
 // Dogecoin's recommended 0.01 DOGE/kB wallet fee, its soft dust limit (each
 // output below it costs that much again in fee) and hard dust limit (outputs
 // below it are not relayed).
-const FEE_PER_BYTE = 1000n;
+export const FEE_PER_BYTE = 1000n;
 // DogecoinVM's relay minimum, 0.001 DOGE/kB, a tenth of that. Blocks there
 // have room to spare, so the minimum always makes the next block; on
 // Dogecoin, which can be busy, wallets pay the recommended rate.
 export const VM_FEE_PER_BYTE = 100n;
-const SOFT_DUST = KOINU / 100n;
+export const SOFT_DUST = KOINU / 100n;
 const HARD_DUST = SOFT_DUST / 10n;
 
 // No payment this page builds should cost more than this in fees; a larger
@@ -264,6 +264,19 @@ async function verifiedInput(u, getRawTx, fromScript) {
   return { txid: u.txid, vout: u.vout, value: out.value };
 }
 
+// paymentSize is the size in bytes a payment's fee is reckoned on: its
+// signed P2PKH inputs, its outputs and change, and an OP_RETURN's data.
+const paymentSize = (inputs, outputs, dataLength) =>
+  BigInt(10 + 149 * inputs + 34 * (outputs + 1) + (dataLength ? dataLength + 3 : 0));
+
+// estimateFee is the fee planPayment sets for a payment of amount spending
+// one coin, with an OP_RETURN of dataLength bytes if any: the figure a
+// wallet shows before sending. More coins cost more, and change too small
+// to keep is added to the fee.
+export function estimateFee({ amount = SOFT_DUST, dataLength = 0, feePerByte = FEE_PER_BYTE } = {}) {
+  return paymentSize(1, dataLength ? 2 : 1, dataLength) * feePerByte + (amount < SOFT_DUST ? SOFT_DUST : 0n);
+}
+
 // planPayment chooses which of key's P2PKH outputs (from the API's utxo
 // list, each checked with getRawTx) pay amount to script, with an optional
 // OP_RETURN, at feePerByte (koinu), and returns the unsigned transaction: its inputs, outputs, the
@@ -288,8 +301,7 @@ export async function planPayment({ key, utxos, getRawTx, script, amount, data, 
     const input = await verifiedInput(u, getRawTx, fromScript);
     inputs.push(input);
     total += input.value;
-    const size = 10 + 149 * inputs.length + 34 * (outputs.length + 1) + (data ? data.length + 3 : 0);
-    fee = BigInt(size) * feePerByte + dustFee;
+    fee = paymentSize(inputs.length, outputs.length, data ? data.length : 0) * feePerByte + dustFee;
     if (total >= amount + fee) break;
   }
   if (total < amount + fee) {

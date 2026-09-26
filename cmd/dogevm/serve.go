@@ -426,10 +426,11 @@ func formatSigned(koinu int64) string {
 	return formatDoge(koinu)
 }
 
-// securityHeaders sets the headers a wallet page should have: scripts and
-// connections only from this origin, no framing, no content sniffing.
+// securityHeaders sets the headers a wallet page should have: scripts only
+// from this origin, no framing, no content sniffing. connect-src also allows
+// CoinGecko, for the DOGE price the wallet shows amounts in dollars at.
 func securityHeaders(next http.Handler) http.Handler {
-	const csp = "default-src 'self'; script-src 'self'; connect-src 'self'; " +
+	const csp = "default-src 'self'; script-src 'self'; connect-src 'self' https://api.coingecko.com; " +
 		"style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; " +
 		"img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

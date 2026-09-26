@@ -66,6 +66,10 @@ h3 { font-size: var(--step-1); font-weight: 700; margin: 2rem 0 0.75rem; }
 .heights { margin: 0; padding: 0.25rem 1.25rem; background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; }
 .height { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 0 1rem; padding: 0.85rem 0; }
 .height + .height { border-top: 1px solid var(--rule); }
+.conn { display: flex; align-items: center; gap: 0.5rem; margin: 0.6rem 0 0.2rem; font-size: var(--step--1); color: var(--ink-soft); }
+.conn-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--wait); flex: none; }
+.conn.live .conn-dot { background: var(--live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent); }
+.conn.down .conn-dot { background: var(--error); }
 .height dt { display: flex; align-items: center; gap: 0.5rem; font-size: var(--step--1); color: var(--ink-soft); }
 .height dt::before { content: ""; flex: none; width: 0.6rem; height: 0.6rem; border-radius: 50%; }
 .height-doge dt::before { background: var(--coin); }
@@ -291,6 +295,24 @@ button.copy { font-size: var(--step--1); padding: 0.2rem 0.6rem; vertical-align:
 .tile-doge .tile-label { color: var(--coin-ink); }
 .tile-vm .tile-label { color: var(--vm-ink); }
 @media (max-width: 30rem) { .balances { grid-template-columns: 1fr; } }
+/* DOGE | USD: the unit every amount shows and is typed in. Clicking a
+   balance switches it too. */
+.unit-toggle { display: inline-flex; margin-top: 1rem; border: 1px solid var(--control-border); border-radius: 4px; overflow: hidden; }
+.unit-toggle button { border: 0; border-radius: 0; padding: 0.3rem 0.8rem; font-size: var(--step--1); min-height: 0; }
+.unit-toggle button + button { border-left: 1px solid var(--control-border); }
+.unit-toggle button[aria-pressed="true"], .unit-toggle button[aria-pressed="true"]:hover { background: var(--btn); color: var(--btn-ink); }
+.unit-toggle button[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+.unit-toggle button[aria-disabled="true"]:hover { background: none; }
+.amount-label { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+.unit-toggle.compact { margin-top: 0; }
+.unit-toggle.compact button { padding: 0.15rem 0.6rem; }
+.balance[role="button"] { cursor: pointer; }
+.balance[role="button"]:hover .unit { text-decoration: underline; text-underline-offset: 0.15em; }
+.amount-hint { margin: 0; color: var(--ink-soft); font-size: var(--step--1); }
+.amount-hint:empty { display: none; }
+.amount-hint.error { color: var(--error); }
+.fee-line { margin: 0; color: var(--ink-soft); font-size: var(--step--1); }
+.fee-line:empty { display: none; }
 .network-choice { border: 0; padding: 0; margin: 0.25rem 0 0; display: grid; gap: 0.35rem; }
 .network-choice legend { font-weight: 500; margin-bottom: 0.35rem; padding: 0; }
 .network-choice label { font-weight: 400; margin: 0; display: flex; gap: 0.5rem; align-items: baseline; }
@@ -476,3 +498,55 @@ dialog.review::backdrop { background: rgba(13, 21, 36, 0.6); }
 .inflight-steps li.done { color: var(--ink); }
 .inflight-steps li.done::before { content: "✓"; color: var(--ok); }
 @media (prefers-reduced-motion: reduce) { .inflight-blocks .block.new { animation: none; } }
+
+/* Address book: a picker on the address fields, and the book on its own
+   tab. Names are labels; the full address is always shown where it counts. */
+
+.ab-combo { position: relative; display: grid; }
+.ab-options {
+  position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 5;
+  list-style: none; margin: 0; padding: 0.25rem 0; max-height: 18rem; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--control-border); border-radius: 3px;
+  box-shadow: 0 6px 18px rgba(13, 21, 36, 0.18);
+}
+.ab-options li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.6rem; padding: 0.5rem 0.8rem; cursor: pointer; }
+.ab-options li:hover, .ab-options li[aria-selected="true"] { background: var(--surface-sunk); }
+.ab-options li[aria-selected="true"] { outline: 2px solid var(--focus); outline-offset: -2px; }
+.ab-name { font-weight: 600; overflow-wrap: anywhere; }
+.ab-short { color: var(--ink-soft); margin-left: auto; }
+.ab-network { font-size: 0.8rem; padding: 0.05rem 0.4rem; border-radius: 2px; }
+.ab-doge { background: var(--coin-wash); color: var(--coin-ink); }
+.ab-vm { background: var(--vm-wash); color: var(--vm-ink); }
+.ab-note { margin: 0; font-size: var(--step--1); color: var(--ink-soft); overflow-wrap: anywhere; }
+.ab-note.warn { color: var(--coin-ink); font-weight: 500; }
+.ab-save { display: grid; gap: 0.5rem; }
+.ab-save-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.stack .ab-save-form label { margin-top: 0; }
+.ab-save-form .ab-name-input { flex: 1 1 12rem; }
+.ab-save-result { margin: 0; font-size: var(--step--1); }
+.ab-save-result:empty { display: none; }
+.ab-save-result.ok { color: var(--ok); }
+.ab-save-result.error { color: var(--error); }
+.ab-name-input { font-family: var(--sans); }
+select {
+  font: 400 var(--step-0) var(--sans);
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--control-border);
+  border-radius: 3px;
+  background: var(--surface-sunk);
+  color: var(--ink);
+}
+button.small { font-size: var(--step--1); padding: 0.2rem 0.6rem; }
+.ab-list { list-style: none; padding: 0; margin: 0.75rem 0 0; }
+.ab-list li { display: grid; gap: 0.4rem; padding: 0.7rem 0; border-bottom: 1px solid var(--rule); }
+.ab-list li:last-child { border-bottom: 0; }
+.ab-entry { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.15rem 0.5rem; min-width: 0; }
+.ab-address { flex-basis: 100%; color: var(--ink-soft); overflow-wrap: anywhere; }
+.ab-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.ab-actions .ab-name-input { flex: 1 1 12rem; }
+.ab-confirm { margin: 0; flex-basis: 100%; font-weight: 500; overflow-wrap: anywhere; }
+.ab-error { flex-basis: 100%; color: var(--error); font-size: var(--step--1); }
+.ab-error:empty { display: none; }
+.ab-add h3 { margin: 1.5rem 0 0; font-size: var(--step-0); }
+.review-saved { grid-column: 1 / -1; font-weight: 600; overflow-wrap: anywhere; }
+.review-saved.warn { color: var(--coin-ink); }

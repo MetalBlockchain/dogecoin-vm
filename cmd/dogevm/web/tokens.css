@@ -24,6 +24,8 @@
   --band-ink: #16233a;
   --error: #b3261e;
   --ok: #1d6f6a;
+  --live: #1e7b34;          /* the connection light: connected */
+  --wait: #c46a0a;          /* and connecting */
 
   /* The peg panel stays dark in both themes. */
   --panel: #16233a;
@@ -73,6 +75,8 @@
     --plan-wash: rgba(150, 155, 210, 0.14);
     --error: #ff9b92;
     --ok: #7fd0c7;
+    --live: #6fd08c;
+    --wait: #f0a04b;
     --panel: #1c2c4b;
     --btn: #e7ecf2;
     --btn-ink: #0d1524;
@@ -98,6 +102,8 @@
   --plan-wash: rgba(150, 155, 210, 0.14);
   --error: #ff9b92;
   --ok: #7fd0c7;
+  --live: #6fd08c;
+  --wait: #f0a04b;
   --panel: #1c2c4b;
   --btn: #e7ecf2;
   --btn-ink: #0d1524;

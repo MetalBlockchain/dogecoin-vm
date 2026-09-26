@@ -25,6 +25,7 @@
     <div class="intro-text">
       <h1 class="hero-title" id="hero-title">Use DOGE on DogecoinVM <span class="beta-pill" id="network-name">beta</span></h1>
       <p class="pitch">DogecoinVM is a Dogecoin-compatible chain running on Metal Blockchain. Move DOGE over one for one, pay in seconds, and move it back to Dogecoin.</p>
+      <p class="conn" id="conn" role="status"><span class="conn-dot" aria-hidden="true"></span><span id="conn-text">Connecting…</span></p>
     </div>
     <dl class="heights" aria-label="Latest blocks">
       <div class="height height-doge"><dt>Dogecoin</dt><dd id="doge-height">…</dd><span class="sync-meter" id="sync-meter" hidden><span id="sync-fill"></span></span><span class="sync-of" id="sync-of" hidden></span></div>
@@ -73,6 +74,7 @@
         <button role="tab" id="tab-send" aria-controls="panel-send" aria-selected="false">Send</button>
         <button role="tab" id="tab-deposit" aria-controls="panel-deposit" aria-selected="false">Deposit</button>
         <button role="tab" id="tab-withdraw" aria-controls="panel-withdraw" aria-selected="false">Withdraw</button>
+        <button role="tab" id="tab-addresses" aria-controls="panel-addresses" aria-selected="false">Addresses</button>
         <button role="tab" id="tab-faucet" aria-controls="panel-faucet" aria-selected="false" hidden>Faucet</button>
       </nav>
 
@@ -109,15 +111,19 @@
             <p class="address"><span id="my-address"></span> <button class="copy" data-copy="my-address" aria-label="Copy your address">Copy</button></p>
             <p class="address-note" id="address-note"></p>
             <p class="address address-doge" id="doge-address-line" hidden>On Dogecoin: <span id="my-doge-address"></span> <button class="copy" data-copy="my-doge-address" aria-label="Copy your Dogecoin address">Copy</button></p>
+            <div class="unit-toggle" role="group" aria-label="Show amounts in">
+              <button type="button" data-unit="doge" aria-pressed="true">DOGE</button>
+              <button type="button" data-unit="usd" aria-pressed="false" aria-disabled="true" title="The DOGE price isn't available right now.">USD</button>
+            </div>
             <div class="balances">
               <div class="balance-tile tile-doge">
                 <p class="tile-label">On Dogecoin</p>
-                <p class="balance"><span class="amount" id="doge-balance">…</span> <span class="unit">DOGE</span></p>
+                <p class="balance" role="button" tabindex="0" title="Show in DOGE or USD"><span class="amount" id="doge-balance">…</span> <span class="unit" id="doge-balance-unit">DOGE</span></p>
                 <p class="balance-pending" id="doge-pending"></p>
               </div>
               <div class="balance-tile tile-vm">
                 <p class="tile-label">On DogecoinVM</p>
-                <p class="balance"><span class="amount" id="balance">…</span> <span class="unit">DOGE</span></p>
+                <p class="balance" role="button" tabindex="0" title="Show in DOGE or USD"><span class="amount" id="balance">…</span> <span class="unit" id="balance-unit">DOGE</span></p>
                 <p class="balance-pending" id="balance-pending"></p>
               </div>
             </div>
@@ -185,9 +191,36 @@
           </fieldset>
           <div class="available" id="send-available" aria-live="polite"></div>
           <label for="send-to">To address</label>
-          <input id="send-to" autocomplete="off" spellcheck="false" required>
-          <label for="send-amount">Amount (DOGE)</label>
-          <input id="send-amount" inputmode="decimal" autocomplete="off" required>
+          <div class="ab-combo">
+            <input id="send-to" autocomplete="off" spellcheck="false" required aria-describedby="send-to-saved">
+            <ul class="ab-options" id="send-to-book" role="listbox" aria-label="Saved addresses" hidden></ul>
+          </div>
+          <p class="ab-note" id="send-to-saved" aria-live="polite" hidden></p>
+          <div class="ab-save" id="send-to-save" hidden>
+            <button type="button" class="link-button" id="send-to-save-open">Save this address</button>
+            <div class="ab-save-form" id="send-to-save-form" hidden>
+              <label for="send-to-save-name">Name</label>
+              <input class="ab-name-input" id="send-to-save-name" maxlength="60" autocomplete="off" placeholder="e.g. Exchange deposit">
+                <label for="send-to-save-network">For</label>
+                <select id="send-to-save-network">
+                  <option value="vm">DogecoinVM</option>
+                  <option value="doge">Dogecoin</option>
+                </select>
+              <button type="button" id="send-to-save-confirm">Save</button>
+              <button type="button" id="send-to-save-cancel">Cancel</button>
+            </div>
+          </div>
+          <p class="ab-save-result" id="send-to-save-result" aria-live="polite"></p>
+          <button type="button" class="link-button" data-goto-tab="addresses">Manage saved addresses</button>
+          <div class="amount-label"><label for="send-amount">Amount (<span id="send-amount-unit">DOGE</span>)</label>
+            <div class="unit-toggle compact" role="group" aria-label="Enter the amount in">
+              <button type="button" data-unit="doge" aria-pressed="true">DOGE</button>
+              <button type="button" data-unit="usd" aria-pressed="false" aria-disabled="true" title="The DOGE price isn't available right now.">USD</button>
+            </div>
+          </div>
+          <input id="send-amount" inputmode="decimal" autocomplete="off" aria-describedby="send-amount-hint" required>
+          <p class="amount-hint" id="send-amount-hint" aria-live="polite"></p>
+          <p class="fee-line" id="send-fee"></p>
           <button class="primary" type="submit">Send</button>
           <p class="result" id="send-result" aria-live="polite"></p>
         </form>
@@ -204,13 +237,19 @@
           <form id="move-form" class="stack move-form">
             <h3>From your Dogecoin balance</h3>
             <p class="muted" id="move-available">Your Dogecoin balance appears on the Wallet tab.</p>
-            <label for="move-amount">Amount (DOGE)</label>
-            <input id="move-amount" inputmode="decimal" autocomplete="off" required>
+            <div class="amount-label"><label for="move-amount">Amount (<span id="move-amount-unit">DOGE</span>)</label>
+              <div class="unit-toggle compact" role="group" aria-label="Enter the amount in">
+                <button type="button" data-unit="doge" aria-pressed="true">DOGE</button>
+                <button type="button" data-unit="usd" aria-pressed="false" aria-disabled="true" title="The DOGE price isn't available right now.">USD</button>
+              </div>
+            </div>
+            <input id="move-amount" inputmode="decimal" autocomplete="off" aria-describedby="move-amount-hint" required>
+            <p class="amount-hint" id="move-amount-hint" aria-live="polite"></p>
             <button class="primary" type="submit">Move to DogecoinVM</button>
             <p class="result" id="move-result" aria-live="polite"></p>
           </form>
           <h3>Or from any Dogecoin wallet or exchange</h3>
-          <p>Send DOGE on Dogecoin to your deposit address below. Once it has enough confirmations (above), it arrives in your DogecoinVM balance, less a <span id="vm-fee">…</span> DOGE fee. The minimum is <span id="min-deposit">…</span> DOGE.<span id="deposit-limits"></span></p>
+          <p>Send DOGE on Dogecoin to your deposit address below. Once it has enough confirmations (above), it arrives in your DogecoinVM balance, less a <span id="vm-fee">…</span> fee. The minimum is <span id="min-deposit">…</span>.<span id="deposit-limits"></span></p>
           <div class="deposit-address">
             <div id="deposit-qr" class="qr" aria-hidden="true"></div>
             <div>
@@ -231,17 +270,61 @@
         <p class="route"><span class="route-chain route-vm">DogecoinVM</span><span class="route-arrow" aria-hidden="true">→</span><span class="route-chain route-doge">Dogecoin</span><span class="visually-hidden">: DOGE moves from DogecoinVM to Dogecoin</span></p>
         <p class="needs-key">Create or import a key on the Wallet tab first.</p>
         <form id="withdraw-form" class="stack with-key">
-          <p>The bridge pays your Dogecoin address once the withdrawal is in a DogecoinVM block, less a <span id="doge-fee">…</span> DOGE Dogecoin fee. The minimum is <span id="min-pegout">…</span> DOGE.</p>
+          <p>The bridge pays your Dogecoin address once the withdrawal is in a DogecoinVM block, less a <span id="doge-fee">…</span> Dogecoin fee. The minimum is <span id="min-pegout">…</span>.</p>
           <div class="available available-vm" id="withdraw-available" aria-live="polite"></div>
           <label for="withdraw-to">To Dogecoin address</label>
-          <input id="withdraw-to" autocomplete="off" spellcheck="false" required>
+          <div class="ab-combo">
+            <input id="withdraw-to" autocomplete="off" spellcheck="false" required aria-describedby="withdraw-to-saved">
+            <ul class="ab-options" id="withdraw-to-book" role="listbox" aria-label="Saved addresses" hidden></ul>
+          </div>
+          <p class="ab-note" id="withdraw-to-saved" aria-live="polite" hidden></p>
+          <div class="ab-save" id="withdraw-to-save" hidden>
+            <button type="button" class="link-button" id="withdraw-to-save-open">Save this address</button>
+            <div class="ab-save-form" id="withdraw-to-save-form" hidden>
+              <label for="withdraw-to-save-name">Name</label>
+              <input class="ab-name-input" id="withdraw-to-save-name" maxlength="60" autocomplete="off" placeholder="e.g. Exchange deposit">
+              <button type="button" id="withdraw-to-save-confirm">Save</button>
+              <button type="button" id="withdraw-to-save-cancel">Cancel</button>
+            </div>
+          </div>
+          <p class="ab-save-result" id="withdraw-to-save-result" aria-live="polite"></p>
           <button type="button" class="link-button" id="withdraw-to-mine">Use my Dogecoin address</button>
-          <label for="withdraw-amount">Amount (DOGE)</label>
-          <input id="withdraw-amount" inputmode="decimal" autocomplete="off" required>
+          <button type="button" class="link-button" data-goto-tab="addresses">Manage saved addresses</button>
+          <div class="amount-label"><label for="withdraw-amount">Amount (<span id="withdraw-amount-unit">DOGE</span>)</label>
+            <div class="unit-toggle compact" role="group" aria-label="Enter the amount in">
+              <button type="button" data-unit="doge" aria-pressed="true">DOGE</button>
+              <button type="button" data-unit="usd" aria-pressed="false" aria-disabled="true" title="The DOGE price isn't available right now.">USD</button>
+            </div>
+          </div>
+          <input id="withdraw-amount" inputmode="decimal" autocomplete="off" aria-describedby="withdraw-amount-hint" required>
+          <p class="amount-hint" id="withdraw-amount-hint" aria-live="polite"></p>
+          <p class="fee-line" id="withdraw-fee"></p>
           <button class="primary" type="submit">Withdraw</button>
           <p class="result" id="withdraw-result" aria-live="polite"></p>
         </form>
         <ol id="withdrawals" class="transfers with-key"></ol>
+      </div>
+
+      <!-- Addresses -->
+      <div class="panel address-book" role="tabpanel" id="panel-addresses" aria-labelledby="tab-addresses" hidden>
+        <h2>Address book <span id="ab-count"></span></h2>
+        <p class="muted">Names for addresses you pay, kept in this browser only. A name is only a label: always check the full address before you confirm a payment.</p>
+        <p class="notice" id="ab-warning" role="alert" hidden></p>
+        <ul class="ab-list" id="ab-list"></ul>
+        <form id="ab-add" class="stack ab-add">
+          <h3>Add an address</h3>
+          <label for="ab-add-name">Name</label>
+          <input class="ab-name-input" id="ab-add-name" maxlength="60" autocomplete="off" placeholder="e.g. Mum" required>
+          <label for="ab-add-address">Address</label>
+          <input id="ab-add-address" autocomplete="off" spellcheck="false" required>
+          <fieldset class="network-choice">
+            <legend>For</legend>
+            <label><input type="radio" name="ab-add-network" value="doge" checked> Dogecoin</label>
+            <label><input type="radio" name="ab-add-network" value="vm"> DogecoinVM</label>
+          </fieldset>
+          <button type="submit">Save address</button>
+          <p class="result" id="ab-add-result" aria-live="polite"></p>
+        </form>
       </div>
 
       <!-- Faucet -->
