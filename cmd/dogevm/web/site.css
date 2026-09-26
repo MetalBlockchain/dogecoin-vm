@@ -147,4 +147,5 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .fees-table { width: 100%; border-collapse: collapse; font-size: 0.95rem; margin: 0.5rem 0 1rem; }
 .fees-table th, .fees-table td { text-align: left; vertical-align: top; padding: 0.6rem 0.75rem 0.6rem 0; border-bottom: 1px solid var(--rule); }
 .fees-table th { font-weight: 500; color: var(--ink-soft); font-size: 0.85rem; }
+.table-note { margin-top: -0.25rem; color: var(--ink-soft); font-size: 0.9rem; }
 .page .table-wrap { overflow-x: auto; }
