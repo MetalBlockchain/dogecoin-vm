@@ -330,3 +330,25 @@ func TestSignerAuthAndDailyLimit(t *testing.T) {
 	require.Equal(hex.EncodeToString(h.signers[0].key.PubKey().SerializeCompressed()), status["publicKey"])
 	require.Equal("100.00000000", status["signedToday"])
 }
+
+func TestCoordinatorNamesEachSigner(t *testing.T) {
+	require := require.New(t)
+	full, err := newSignerSet(2, 3)
+	require.NoError(err)
+	coord, err := newSignerSet(1, 1)
+	require.NoError(err)
+	set := &signerSet{Required: 2, PublicKeys: full.PublicKeys, CoordinatorKey: coord.PublicKeys[0]}
+	for i, k := range full.PublicKeys {
+		set.Operators = append(set.Operators, operatorCard{URL: "https://signer" + string(rune('1'+i)) + ".example/", PublicKey: k})
+	}
+	require.NoError(set.load())
+
+	// From the card with its URL.
+	list := []*remoteSigner{{URL: "https://signer2.example"}}
+	require.NoError(set.identifyCosigners(list))
+	require.Equal(full.PublicKeys[1], list[0].PublicKey)
+	// A key the set doesn't hold, or none at all, is refused.
+	stranger := []*remoteSigner{{URL: "https://x.example", PublicKey: coord.PublicKeys[0]}}
+	require.ErrorContains(set.identifyCosigners(stranger), "not in the signer set")
+	require.ErrorContains(set.identifyCosigners([]*remoteSigner{{URL: "https://x.example"}}), "no public key")
+}

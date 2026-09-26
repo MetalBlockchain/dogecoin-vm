@@ -450,7 +450,7 @@ func setupAssemble(args []string) error {
 		seen[card.PublicKey] = true
 		set.Operators = append(set.Operators, card)
 		set.PublicKeys = append(set.PublicKeys, card.PublicKey)
-		cosigners = append(cosigners, &remoteSigner{URL: card.URL})
+		cosigners = append(cosigners, &remoteSigner{URL: card.URL, PublicKey: card.PublicKey})
 	}
 	if *req == 0 && p.interactive {
 		def := fmt.Sprint(len(set.PublicKeys)/2 + 1)
