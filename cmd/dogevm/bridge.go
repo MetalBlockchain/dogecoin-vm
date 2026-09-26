@@ -95,6 +95,9 @@ type pegState struct {
 	lockedUTXOs     []utxo
 	unclaimedOnDoge int64 // deposits without a usable destination
 	unclaimedOnVM   int64 // untagged or too-small payments into the reserve
+	// vmTxs and dogeTxs are the transactions read from each chain, for a
+	// signer's check of its log against them (fence.go).
+	vmTxs, dogeTxs []chainTx
 }
 
 // audit is the peg's solvency check.
@@ -196,6 +199,7 @@ func (b *bridge) load() (*pegState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading DogecoinVM reserve: %w", err)
 	}
+	s.vmTxs = vmTxs
 	reserveOuts := map[wire.OutPoint]bool{}
 	for _, t := range vmTxs {
 		outs, _ := outputsTo(t.tx, script)
@@ -268,6 +272,7 @@ func (b *bridge) load() (*pegState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading Dogecoin peg addresses: %w", err)
 	}
+	s.dogeTxs = dogeTxs
 	pegOuts := map[wire.OutPoint]bool{}
 	for _, t := range dogeTxs {
 		hash := t.tx.TxHash()
