@@ -9,7 +9,7 @@
 //	    node at -node-uri, printing the IDs as JSON
 //	dogevm-l1 node-id -cert staker.crt
 //	    the NodeID a node's staking certificate gives it (to check a backup)
-//	dogevm-l1 request | approve | register | remove | top-up | validators
+//	dogevm-l1 request | approve | submit | register | remove | top-up | validators
 //	    add and remove the L1's validators (validators.go)
 //
 // -uri is the P-Chain API to use (default: -node-uri).
@@ -51,7 +51,7 @@ type keyFile struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dogevm-l1 key|balance|create [flags]")
+		fmt.Fprintln(os.Stderr, "usage: dogevm-l1 key|balance|addresses|import|create|node-id|request|approve|submit|register|remove|top-up|disable|validators [flags]")
 		os.Exit(2)
 	}
 	var err error
@@ -72,6 +72,8 @@ func main() {
 		err = cmdRequest(os.Args[2:])
 	case "approve":
 		err = cmdApprove(os.Args[2:])
+	case "submit":
+		err = cmdSubmit(os.Args[2:])
 	case "register":
 		err = cmdRegister(os.Args[2:])
 	case "remove":
