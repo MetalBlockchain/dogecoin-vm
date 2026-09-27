@@ -11,7 +11,7 @@ import (
 	log "github.com/inconshreveable/log15"
 )
 
-// config defines the configuration options for btcvm
+// config defines the configuration options for dogevm
 type config struct {
 	// Logging
 	LogLevel string
@@ -64,7 +64,7 @@ func loadConfig() (*config, error) {
 
 	// Show version and exit if requested
 	if cfg.ShowVersion {
-		fmt.Printf("btcvm version %s\n", version())
+		fmt.Printf("dogevm version %s\n", version())
 		os.Exit(0)
 	}
 

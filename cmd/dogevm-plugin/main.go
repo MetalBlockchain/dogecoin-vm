@@ -21,9 +21,9 @@ var (
 	cfg *config
 )
 
-// btcvmMain is the real main function for btcvm. It is necessary to work around
+// dogevmMain is the real main function for dogevm. It is necessary to work around
 // the fact that deferred functions do not run when os.Exit() is called.
-func btcvmMain() error {
+func dogevmMain() error {
 	// Load configuration and parse command line
 	tcfg, err := loadConfig()
 	if err != nil {
@@ -38,7 +38,7 @@ func btcvmMain() error {
 	defer log.Info("Shutdown complete")
 
 	// Show version at startup
-	log.Info("Starting Bitcoin VM", "version", version())
+	log.Info("Starting DogecoinVM", "version", version())
 
 	// Show configuration
 	cfg.show()
@@ -71,7 +71,7 @@ func btcvmMain() error {
 	// Setup VM serving in a goroutine
 	errChan := make(chan error, 1)
 	go func() {
-		log.Info("Starting btcvm RPC chain VM server")
+		log.Info("Starting dogevm RPC chain VM server")
 		errChan <- rpcchainvm.Serve(ctx, &vm.VM{})
 	}()
 
@@ -107,9 +107,9 @@ func main() {
 
 	// Use cobra for CLI but with enhanced initialization
 	rootCmd := &cobra.Command{
-		Use:   "btcvm",
-		Short: "Bitcoin VM for Metal",
-		Long:  "A Bitcoin Virtual Machine implementation running on Metal consensus",
+		Use:   "dogevm",
+		Short: "DogecoinVM for Metal",
+		Long:  "A Dogecoin virtual machine running on Metal consensus",
 		RunE:  runFunc,
 	}
 
@@ -121,7 +121,7 @@ func main() {
 
 func runFunc(*cobra.Command, []string) error {
 	// Work around defer not working after os.Exit()
-	if err := btcvmMain(); err != nil {
+	if err := dogevmMain(); err != nil {
 		return err
 	}
 	return nil

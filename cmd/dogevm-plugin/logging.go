@@ -31,7 +31,7 @@ func initLogging(logLevel string, logDir string) error {
 		}
 
 		// Create log file path
-		logFile := filepath.Join(logDir, "btcvm.log")
+		logFile := filepath.Join(logDir, "dogevm.log")
 
 		// Try to open log file
 		fileHandler, err := log.FileHandler(logFile, log.LogfmtFormat())

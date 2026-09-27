@@ -14,6 +14,7 @@ import (
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/mempool"
 	"github.com/MetalBlockchain/metalgo/database"
+	"github.com/MetalBlockchain/metalgo/database/prefixdb"
 	"github.com/MetalBlockchain/metalgo/ids"
 	"github.com/MetalBlockchain/metalgo/network/p2p"
 	"github.com/MetalBlockchain/metalgo/network/p2p/gossip"
@@ -245,7 +246,7 @@ func (vm *VM) Initialize(
 	if err != nil {
 		return fmt.Errorf("failed to parse chain config: %w", err)
 	}
-	vm.validatorManager, err = newValidatorManager(vm, p2pNet, policy)
+	vm.validatorManager, err = newValidatorManager(vm, p2pNet, policy, prefixdb.New([]byte("validator-manager"), vm.db))
 	if err != nil {
 		return err
 	}
