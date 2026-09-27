@@ -51,7 +51,7 @@ type keyFile struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dogevm-l1 key|balance|addresses|import|create|node-id|request|approve|submit|register|remove|set-weight|top-up|disable|validators [flags]")
+		fmt.Fprintln(os.Stderr, "usage: dogevm-l1 key|balance|addresses|import|create|node-id|request|approve|submit|held|register|remove|set-weight|top-up|disable|validators [flags]")
 		os.Exit(2)
 	}
 	var err error
@@ -76,6 +76,8 @@ func main() {
 		err = cmdSubmit(os.Args[2:])
 	case "register":
 		err = cmdRegister(os.Args[2:])
+	case "held":
+		err = cmdHeld(os.Args[2:])
 	case "set-weight":
 		err = cmdSetWeight(os.Args[2:])
 	case "remove":
