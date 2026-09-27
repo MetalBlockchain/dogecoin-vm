@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -230,5 +231,13 @@ func TestApplyChainConfig(t *testing.T) {
 	for _, key := range consensusConfigKeys {
 		err := applyChainConfig(&cfg, []byte(`{"`+key+`":true}`))
 		require.ErrorContains(err, "consensus setting", key)
+		// JSON matches field names case-insensitively, so must the check.
+		err = applyChainConfig(&cfg, []byte(`{"`+strings.ToUpper(key)+`":true}`))
+		require.ErrorContains(err, "consensus setting", strings.ToUpper(key))
 	}
+	for _, key := range refusedConfigKeys {
+		err := applyChainConfig(&cfg, []byte(`{"`+key+`":true}`))
+		require.ErrorContains(err, "doesn't belong in a chain config", key)
+	}
+	require.ErrorContains(applyChainConfig(&cfg, []byte(`{"addCheckpoints":["1:00"]}`)), "consensus setting")
 }

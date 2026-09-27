@@ -9,10 +9,14 @@
 //	    node at -node-uri, printing the IDs as JSON
 //	dogevm-l1 node-id -cert staker.crt
 //	    the NodeID a node's staking certificate gives it (to check a backup)
-//	dogevm-l1 request | approve | submit | register | remove | top-up | validators
-//	    add and remove the L1's validators (validators.go)
+//	dogevm-l1 addresses | import
+//	    a key's addresses; move METAL to the P-Chain
+//	dogevm-l1 request | approve | submit | held | register | remove | set-weight | top-up | disable | validators
+//	    add, change and remove the L1's validators (validators.go;
+//	    docs/VALIDATORS.md)
 //
-// -uri is the P-Chain API to use (default: -node-uri).
+// For create, -uri is the P-Chain API to use (default: -node-uri); register,
+// top-up and disable take -uri for theirs (default: this machine's node).
 package main
 
 import (
@@ -34,6 +38,7 @@ import (
 	"github.com/MetalBlockchain/metalgo/utils/crypto/secp256k1"
 	"github.com/MetalBlockchain/metalgo/utils/formatting/address"
 	"github.com/MetalBlockchain/metalgo/utils/units"
+	"github.com/MetalBlockchain/metalgo/vms/components/avax"
 	"github.com/MetalBlockchain/metalgo/vms/platformvm"
 	"github.com/MetalBlockchain/metalgo/vms/platformvm/txs"
 	"github.com/MetalBlockchain/metalgo/vms/platformvm/warp/message"
@@ -101,6 +106,9 @@ func pAddress(key *secp256k1.PrivateKey, networkID uint32) (string, error) {
 }
 
 func readKey(path string) (*secp256k1.PrivateKey, error) {
+	if st, err := os.Stat(path); err == nil && st.Mode().Perm()&0o077 != 0 {
+		fmt.Fprintf(os.Stderr, "WARNING: %s can be read by others (mode %o); chmod 600 it\n", path, st.Mode().Perm())
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -124,7 +132,9 @@ func cmdKey(args []string) error {
 	fs := flag.NewFlagSet("key", flag.ExitOnError)
 	out := fs.String("out", "", "file to write the key to")
 	networkID := networkIDFlag(fs)
-	_ = fs.Parse(args)
+	if err := parseArgs(fs, args); err != nil {
+		return err
+	}
 	if *out == "" {
 		return errors.New("-out is required")
 	}
@@ -140,7 +150,16 @@ func cmdKey(args []string) error {
 		return err
 	}
 	raw, _ := json.MarshalIndent(keyFile{PrivateKey: key.String(), PAddress: addr}, "", "  ")
-	if err := os.WriteFile(*out, append(raw, '\n'), 0o600); err != nil {
+	// O_EXCL: never over a key file that appeared since the check above.
+	f, err := os.OpenFile(*out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(append(raw, '\n')); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	fmt.Println(addr)
@@ -151,7 +170,9 @@ func cmdKey(args []string) error {
 func cmdNodeID(args []string) error {
 	fs := flag.NewFlagSet("node-id", flag.ExitOnError)
 	certPath := fs.String("cert", "", "the node's staking certificate (staker.crt)")
-	_ = fs.Parse(args)
+	if err := parseArgs(fs, args); err != nil {
+		return err
+	}
 	raw, err := os.ReadFile(*certPath)
 	if err != nil {
 		return err
@@ -174,7 +195,9 @@ func cmdAddresses(args []string) error {
 	fs := flag.NewFlagSet("addresses", flag.ExitOnError)
 	keyPath := fs.String("key", "", "P-Chain key file")
 	networkID := networkIDFlag(fs)
-	_ = fs.Parse(args)
+	if err := parseArgs(fs, args); err != nil {
+		return err
+	}
 	key, err := readKey(*keyPath)
 	if err != nil {
 		return err
@@ -186,15 +209,22 @@ func cmdAddresses(args []string) error {
 	return nil
 }
 
-// cmdImport moves the key's METAL from the C-Chain to the P-Chain: an export
-// on the C-Chain, then an import on the P-Chain. The C-Chain keeps -keep METAL
-// to pay the export fee.
+// cmdImport moves the key's METAL from the C-Chain (or, with -from x, the
+// X-Chain) to the P-Chain: an export there, then an import on the P-Chain.
+// The C-Chain keeps -keep METAL to pay the export fee; the X-Chain export
+// pays its fixed fee out of the amount.
 func cmdImport(args []string) error {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
 	keyPath := fs.String("key", "", "P-Chain key file")
 	uri := fs.String("uri", "https://api.metalblockchain.org", "API with the C- and P-Chains")
 	keep := fs.Float64("keep", 0.05, "METAL to leave on the C-Chain for the export fee")
-	_ = fs.Parse(args)
+	from := fs.String("from", "c", "chain to move METAL from: c or x")
+	if err := parseArgs(fs, args); err != nil {
+		return err
+	}
+	if *from != "c" && *from != "x" {
+		return errors.New("-from must be c or x")
+	}
 	key, err := readKey(*keyPath)
 	if err != nil {
 		return err
@@ -208,6 +238,35 @@ func cmdImport(args []string) error {
 	cWallet, pWallet := wallet.C(), wallet.P()
 	cChainID := cWallet.Builder().Context().BlockchainID
 	owner := secp256k1fx.OutputOwners{Threshold: 1, Addrs: []ids.ShortID{key.Address()}}
+
+	if *from == "x" {
+		xWallet := wallet.X()
+		xCtx := xWallet.Builder().Context()
+		balances, err := xWallet.Builder().GetFTBalance()
+		if err != nil {
+			return err
+		}
+		have := balances[xCtx.AVAXAssetID]
+		if have > xCtx.BaseTxFee {
+			amount := have - xCtx.BaseTxFee
+			tx, err := xWallet.IssueExportTx(constants.PlatformChainID, []*avax.TransferableOutput{{
+				Asset: avax.Asset{ID: xCtx.AVAXAssetID},
+				Out:   &secp256k1fx.TransferOutput{Amt: amount, OutputOwners: owner},
+			}})
+			if err != nil {
+				return fmt.Errorf("exporting from the X-Chain: %w", err)
+			}
+			log.Printf("exported %.4f METAL from the X-Chain in %s", float64(amount)/float64(units.Avax), tx.ID())
+		} else {
+			log.Printf("nothing to export from the X-Chain (%d nMETAL)", have)
+		}
+		tx, err := pWallet.IssueImportTx(xCtx.BlockchainID, &owner)
+		if err != nil {
+			return fmt.Errorf("importing to the P-Chain: %w", err)
+		}
+		log.Printf("imported to the P-Chain in %s", tx.ID())
+		return nil
+	}
 
 	// The C-Chain balance is in wei (18 decimals); atomic amounts are in
 	// nMETAL (9 decimals).
@@ -242,7 +301,9 @@ func cmdBalance(args []string) error {
 	fs := flag.NewFlagSet("balance", flag.ExitOnError)
 	keyPath := fs.String("key", "", "P-Chain key file")
 	uri := fs.String("uri", "http://127.0.0.1:9660", "P-Chain API")
-	_ = fs.Parse(args)
+	if err := parseArgs(fs, args); err != nil {
+		return err
+	}
 	key, err := readKey(*keyPath)
 	if err != nil {
 		return err
@@ -266,7 +327,9 @@ func cmdCreate(args []string) error {
 	subnetFlag := fs.String("subnet", "", "existing subnet to use instead of creating one")
 	chainFlag := fs.String("chain", "", "existing chain to use instead of creating one (needs -subnet)")
 	networkID := networkIDFlag(fs)
-	_ = fs.Parse(args)
+	if err := parseArgs(fs, args); err != nil {
+		return err
+	}
 	if *keyPath == "" || (*genesisPath == "" && *chainFlag == "") {
 		return errors.New("-key and -genesis are required")
 	}
