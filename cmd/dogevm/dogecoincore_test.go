@@ -12,6 +12,7 @@ import (
 
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,7 +38,7 @@ func startDogecoin(t *testing.T) *dogeNode {
 	n := &dogeNode{t: t, user: "test", pass: hex.EncodeToString(secret[:])}
 	port := freeDogePort(t)
 	n.url = fmt.Sprintf("http://127.0.0.1:%d", port)
-	args := []string{"-regtest", "-server", "-listen=0", "-printtoconsole=0", "-persistmempool=0",
+	args := []string{"-regtest", "-server", "-listen=0", "-printtoconsole=0", "-persistmempool=0", "-txindex",
 		fmt.Sprintf("-rpcport=%d", port), "-rpcuser=" + n.user, "-rpcpassword=" + n.pass}
 
 	if ctx := os.Getenv("DOGECOIND_DOCKER"); ctx != "" {
@@ -281,4 +282,122 @@ func TestWalletHistoryAcrossAReorg(t *testing.T) {
 	s, err = h.b.load()
 	require.NoError(err)
 	require.Equal(int64(3), confs(s))
+}
+
+// TestLineAndSignedIDsOnDogecoinCore: on a real node, the peg's line moves
+// to a payout's change once it is in a block, a signer follows it from its
+// anchor, and the signer finds the payout by the ID Dogecoin Core lists it
+// under (P2SH signatures change it), and still finds it by that ID with
+// its wallet's listing gone (round 3, S1 and S5).
+func TestLineAndSignedIDsOnDogecoinCore(t *testing.T) {
+	require := require.New(t)
+	n := startDogecoin(t)
+	h := n.bridgeHarness()
+	full := h.b.signers
+	own := *h.b
+	own.signers = publicOnly(t, full)
+	log, err := createSigningLog(t.TempDir() + "/signing-log.json")
+	require.NoError(err)
+	c := &cosigner{b: &own, key: full.privKeys[0], log: log}
+	setAnchors(t, c)
+
+	alice := h.user(1)
+	depositAddr, err := registerDeposit(h.b, alice)
+	require.NoError(err)
+	n.pay(depositAddr.EncodeAddress(), 50, "")
+	n.mine(6)
+	require.NotEmpty(h.step())
+	h.vm.mine()
+	var bobAddr string
+	require.NoError(n.rpc.call(&bobAddr, "getnewaddress"))
+	decoded, err := btcutil.DecodeAddress(bobAddr, h.b.dogeParams)
+	require.NoError(err)
+	bob, err := destinationOf(decoded)
+	require.NoError(err)
+	req := h.pegOut(20*doge, bob)
+	require.Contains(h.step(), "paid")
+	s, err := h.b.load()
+	require.NoError(err)
+	var payout *wire.MsgTx
+	for _, u := range s.unconfirmed {
+		payout = u.tx
+	}
+	require.NotNil(payout)
+	// As if c had signed it: its log holds it without signatures.
+	key, err := (action{Kind: actionPayout, PegOut: req.TxHash().String()}).key()
+	require.NoError(err)
+	require.NoError(c.log.record(key, chainDogecoin, unsignedCopy(payout), 20*doge, 0))
+	n.mine(1)
+
+	s, err = c.b.load()
+	require.NoError(err)
+	nodes := func(string) chain { return c.b.doge }
+	require.NoError(c.learnSigned(newChainEvidence(s, nodes)))
+	entry := c.log.Actions[key].Txs[0]
+	require.Equal([]string{payout.TxHash().String()}, entry.Signed)
+	require.NotEqual(entry.Txid, payout.TxHash().String())
+	blind := &chainEvidence{listed: map[string]map[string]chainTx{}, nodes: nodes}
+	require.True(blind.confirmed(chainDogecoin, entry), "the node finds it by the ID it lists")
+	require.False(blind.confirmed(chainDogecoin, loggedTx{Txid: entry.Txid}), "but not by the unsigned one")
+
+	change := wire.OutPoint{Hash: payout.TxHash(), Index: 1}
+	got, err := tips(s)
+	require.NoError(err)
+	require.Equal(change.String(), got[chainDogecoin], "the line moved to the payout's change")
+	probe := wire.NewMsgTx(1)
+	probe.AddTxIn(wire.NewTxIn(&change, nil, nil))
+	require.NoError(c.log.anchorMoved(chainDogecoin, probe, unspentOn(c.b.doge), s.pegLine), "the signer follows it")
+}
+
+// unsignedCopy is tx without its signatures, as a signer signed it.
+func unsignedCopy(tx *wire.MsgTx) *wire.MsgTx {
+	c := tx.Copy()
+	for _, in := range c.TxIn {
+		in.SignatureScript = nil
+	}
+	return c
+}
+
+// TestRefundAfterCancelOnDogecoinCore: a deposit over the maximum that
+// names a destination is cancelled on DogecoinVM first, then refunded by a
+// transaction Dogecoin Core relays and mines (round 3, S2).
+func TestRefundAfterCancelOnDogecoinCore(t *testing.T) {
+	require := require.New(t)
+	n := startDogecoin(t)
+	h := n.bridgeHarness()
+	h.b.maxDeposit = 40 * doge
+	alice := h.user(1)
+	depositAddr, err := registerDeposit(h.b, alice)
+	require.NoError(err)
+	txid := n.pay(depositAddr.EncodeAddress(), 50, "")
+	n.mine(6)
+	require.Empty(h.step(), "over the maximum: held")
+	hash, err := chainhash.NewHashFromStr(txid)
+	require.NoError(err)
+	s, err := h.b.load()
+	require.NoError(err)
+	var op wire.OutPoint
+	for _, d := range s.held {
+		if d.outPoint.Hash == *hash {
+			op = d.outPoint
+		}
+	}
+	require.Equal(*hash, op.Hash)
+	var backAddr string
+	require.NoError(n.rpc.call(&backAddr, "getnewaddress"))
+	decoded, err := btcutil.DecodeAddress(backAddr, h.b.dogeParams)
+	require.NoError(err)
+	back, err := destinationOf(decoded)
+	require.NoError(err)
+
+	_, err = h.b.refund(op, back, false)
+	require.ErrorIs(err, errCancelSent)
+	h.vm.mine()
+	refund, err := h.b.refund(op, back, false)
+	require.NoError(err)
+	require.True(n.inMempool(refund), "Dogecoin Core relayed the refund")
+	n.mine(1)
+	a := h.audit()
+	require.True(a.solvent(), "%+v", a)
+	require.Zero(a.UnclaimedOnDoge)
 }
