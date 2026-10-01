@@ -185,7 +185,7 @@ func newHarness(t *testing.T) *harness {
 }
 
 // seedValue is the contribution every harness makes to its peg address
-// first: the anchor of the first payout (pegAnchorOf), owed to no one.
+// first: the anchor of the first payout (anchorOf), owed to no one.
 const seedValue = doge
 
 // seed contributes seedValue to the peg address (DVMC), confirmed before

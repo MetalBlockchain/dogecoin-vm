@@ -830,7 +830,11 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 	if err := c.log.permit(key, tx, unspent, confirmedOn(chainOf), inChain); err != nil {
 		return nil, nil, 0, err
 	}
-	if err := c.log.anchorMoved(req.Chain, tx, inChain); err != nil {
+	txs := s.dogeTxs
+	if req.Chain == chainDogecoinVM {
+		txs = s.vmTxs
+	}
+	if err := c.log.anchorMoved(req.Chain, tx, inChain, confirmedSpends(txs), b.signers.pkScript()); err != nil {
 		return nil, nil, 0, err
 	}
 	if c.maxDaily > 0 && !c.log.has(key) &&
@@ -1088,25 +1092,77 @@ func (l *signingLog) normalizeKeys() error {
 
 func (l *signingLog) has(key string) bool { return l.Actions[key] != nil }
 
-// anchorMoved checks tx may move this signer's anchor on chain away from the
-// one it last signed with: only if that one is no longer in its node's
-// UTXO set (spent in a block, or gone in a reorg). While it is still
-// there, a transaction already signed with it could confirm, and one with a
-// different anchor could confirm beside it.
-func (l *signingLog) anchorMoved(chain string, tx *wire.MsgTx, inChain func(wire.OutPoint) bool) error {
+// anchorMoved checks tx may use its anchor (first input) on chain, given
+// the anchor this signer last signed with there. It may if they are the
+// same, or if following confirmed spends forward from the last one, each
+// to its change at script (the peg's address, or the reserve), reaches tx's
+// anchor: the anchor moves only along the chain of transactions the
+// signers themselves made, each spending the one before.
+//
+// The last anchor merely being gone from the node's UTXO set is not
+// enough. A reorganisation can remove the transaction that funded it, and
+// mine it again later together with a transaction signed with it and kept
+// back; meanwhile a second payout with another anchor could have been
+// signed and confirmed. So when the trail breaks (the anchor is gone and
+// no confirmed transaction this signer knows spends it), the signer
+// refuses, and an operator recovers (docs/RUNBOOK.md, "Anchor lineage").
+//
+// spentBy maps an output to the confirmed transaction that spends it, from
+// this signer's own view of chain. inChain says whether an output is still
+// in its node's UTXO set; nil means it can't tell, and then only the
+// confirmed spends are followed.
+func (l *signingLog) anchorMoved(chain string, tx *wire.MsgTx, inChain func(wire.OutPoint) bool, spentBy map[wire.OutPoint]*wire.MsgTx, script []byte) error {
 	last := l.Anchors[chain]
-	if last == "" || len(tx.TxIn) == 0 || last == tx.TxIn[0].PreviousOutPoint.String() || inChain == nil {
+	if last == "" || len(tx.TxIn) == 0 {
 		return nil
 	}
-	op, err := parseOutPoint(last)
+	want := tx.TxIn[0].PreviousOutPoint
+	cur, err := parseOutPoint(last)
 	if err != nil {
 		return fmt.Errorf("the signing log's %s anchor %q: %w", chain, last, err)
 	}
-	if inChain(op) {
-		return fmt.Errorf("this signer last signed on %s with anchor %v, which is still unspent there; "+
-			"it signs nothing with another anchor until that one is spent in a block", chain, op)
+	for step := 0; step < 10_000; step++ {
+		if cur == want {
+			return nil
+		}
+		next, spent := spentBy[cur]
+		if !spent {
+			if inChain != nil && inChain(cur) {
+				return fmt.Errorf("this signer last signed on %s with anchor %v, which is still unspent there; "+
+					"it signs nothing with another anchor until that one is spent in a block", chain, cur)
+			}
+			return fmt.Errorf("this signer's %s anchor %v is gone, but no confirmed transaction it knows spends it "+
+				"(a reorganisation, or a wallet missing history): it signs nothing on %s until an operator recovers (RUNBOOK.md, \"Anchor lineage\")",
+				chain, cur, chain)
+		}
+		found := false
+		for i, out := range next.TxOut {
+			if bytes.Equal(out.PkScript, script) {
+				cur, found = wire.OutPoint{Hash: next.TxHash(), Index: uint32(i)}, true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("this signer's %s anchor was spent by %v, which pays nothing back to the peg: it signs nothing on %s until an operator recovers",
+				chain, next.TxHash(), chain)
+		}
 	}
-	return nil
+	return fmt.Errorf("this signer's %s anchor trail is too long to follow", chain)
+}
+
+// confirmedSpends maps each output spent by a confirmed transaction in txs
+// to that transaction.
+func confirmedSpends(txs []chainTx) map[wire.OutPoint]*wire.MsgTx {
+	m := map[wire.OutPoint]*wire.MsgTx{}
+	for _, t := range txs {
+		if t.confirmations <= 0 {
+			continue
+		}
+		for _, in := range t.tx.TxIn {
+			m[in.PreviousOutPoint] = t.tx
+		}
+	}
+	return m
 }
 
 // permit checks tx may be signed for the action key. unspent holds the peg

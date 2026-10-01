@@ -194,3 +194,29 @@ separate signers.
 Before the first upgrade to the anchor rule, check the current set's peg
 address holds a confirmed coin (`dv audit`, or the peg address on an
 explorer); if not, contribute first, or payouts wait.
+
+## Anchor lineage
+
+Every payout, refund and release spends an **anchor** first: the latest
+coin the signers themselves paid change to, at the peg address (Dogecoin)
+or the reserve (DogecoinVM). So any two transactions the signers sign on one
+chain conflict, and at most one can confirm. Before the signers have made
+anything there, the anchor is the oldest coin with at least the full
+confirmations (a contribution, see "Operating capital").
+
+Each signer remembers the anchor it last signed with, and moves on only by
+following confirmed spends forward from it: that anchor's confirmed spender,
+then that spender's change at the same address, and so on. If the trail
+breaks, the signer refuses with "anchor ... is gone, but no confirmed
+transaction it knows spends it". That happens when:
+
+- **A reorganisation removed the transaction that created or spent the
+  anchor.** Wait: when the chain settles, the transactions are usually mined
+  again and the trail is whole.
+- **The signer's wallet is missing history** (restored, or a new node).
+  Rescan the signer's Dogecoin Core wallet (`rescan`), then retry.
+
+Never hand-edit a signer's `anchors` entry, unless you've confirmed on a
+public explorer that the old anchor was spent by a signers' transaction in
+a block deeper than any plausible reorganisation, and every transaction any
+signer signed with it is that one or conflicts with it.

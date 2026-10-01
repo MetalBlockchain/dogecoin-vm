@@ -114,24 +114,75 @@ func TestLateRegisteredDepositCantMoveTheAnchor(t *testing.T) {
 	require.ErrorContains(sign(2, h.payoutRequest(req, []utxo{oldCoin})), "the oldest confirmed coin")
 }
 
-// TestSignerKeepsItsAnchorUntilItIsSpent: a signer's wallet dropping its
-// anchor doesn't let it sign with another while its node's UTXO set still
-// holds the one it last signed with.
-func TestSignerKeepsItsAnchorUntilItIsSpent(t *testing.T) {
+// TestAnchorMovesOnlyAlongItsLineage: a signer moves off the anchor it
+// last signed with only by following confirmed spends forward from it, to
+// their change at the peg. An anchor merely gone (a reorganisation removed
+// its funding, a wallet lost history) is not enough: that is how a kept-back
+// payout and a second one with another anchor could both confirm.
+func TestAnchorMovesOnlyAlongItsLineage(t *testing.T) {
 	require := require.New(t)
+	peg := []byte{0xa9, 0x14, 0xaa}
 	l := &signingLog{path: t.TempDir() + "/log.json", Actions: map[string]*loggedAction{}}
-	a := wire.OutPoint{Hash: chainhash.Hash{1}}
-	b := wire.OutPoint{Hash: chainhash.Hash{2}}
-	first := wire.NewMsgTx(1)
-	first.AddTxIn(wire.NewTxIn(&a, nil, nil))
-	require.NoError(l.record("payout:x", chainDogecoin, first, 100))
-	next := wire.NewMsgTx(1)
-	next.AddTxIn(wire.NewTxIn(&b, nil, nil))
-	stillThere := func(op wire.OutPoint) bool { return op == a }
-	require.ErrorContains(l.anchorMoved(chainDogecoin, next, stillThere), "still unspent")
-	require.NoError(l.anchorMoved(chainDogecoin, first, stillThere))
-	require.NoError(l.anchorMoved(chainDogecoin, next, func(wire.OutPoint) bool { return false }))
-	require.NoError(l.anchorMoved(chainDogecoinVM, next, stillThere), "each chain has its own")
+	x := wire.OutPoint{Hash: chainhash.Hash{1}}
+	y := wire.OutPoint{Hash: chainhash.Hash{2}} // an unrelated peg coin
+	spending := func(op wire.OutPoint) *wire.MsgTx {
+		tx := wire.NewMsgTx(1)
+		tx.AddTxIn(wire.NewTxIn(&op, nil, nil))
+		return tx
+	}
+	first := spending(x)
+	require.NoError(l.record("payout:w", chainDogecoin, first, 100))
+	require.Equal(x.String(), l.Anchors[chainDogecoin])
+
+	stillThere := func(op wire.OutPoint) bool { return op == x }
+	none := map[wire.OutPoint]*wire.MsgTx{}
+	require.ErrorContains(l.anchorMoved(chainDogecoin, spending(y), stillThere, none, peg), "still unspent")
+	require.NoError(l.anchorMoved(chainDogecoin, first, stillThere, none, peg), "the same anchor again")
+	require.NoError(l.anchorMoved(chainDogecoinVM, spending(y), stillThere, none, peg), "each chain has its own")
+
+	// A reorganisation removes X's funding: X is gone, but nothing spent
+	// it. Moving to Y is refused.
+	gone := func(wire.OutPoint) bool { return false }
+	require.ErrorContains(l.anchorMoved(chainDogecoin, spending(y), gone, none, peg), "no confirmed transaction it knows spends it")
+
+	// A confirmed payout spent X and paid change C to the peg; C was then
+	// spent by another, whose change is D. Moving to D is fine; to Y isn't.
+	pay1 := spending(x)
+	pay1.AddTxOut(wire.NewTxOut(5, []byte{0x51}))
+	pay1.AddTxOut(wire.NewTxOut(330, peg))
+	c := wire.OutPoint{Hash: pay1.TxHash(), Index: 1}
+	pay2 := spending(c)
+	pay2.AddTxOut(wire.NewTxOut(330, peg))
+	d := wire.OutPoint{Hash: pay2.TxHash(), Index: 0}
+	spent := map[wire.OutPoint]*wire.MsgTx{x: pay1, c: pay2}
+	require.NoError(l.anchorMoved(chainDogecoin, spending(d), gone, spent, peg))
+	require.ErrorContains(l.anchorMoved(chainDogecoin, spending(y), gone, spent, peg), "no confirmed transaction it knows spends it")
+}
+
+// TestAnchorFollowsTheSignersOwnChange: once the signers have paid change
+// to the peg address, only coins they made there can anchor. A coin someone
+// else pays to the peg address never does, however old.
+func TestAnchorFollowsTheSignersOwnChange(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	alice, bob := h.user(1), h.user(2)
+	h.deposit(10*doge, &alice, 9)
+	for h.step() != "" {
+		h.vm.mine()
+	}
+	h.pegOut(5*doge, bob)
+	require.Contains(h.step(), "paid")
+	payout := h.doge.txs[len(h.doge.txs)-1].tx
+	h.doge.mine()
+	s, err := h.b.load()
+	require.NoError(err)
+	require.Equal(payout.TxHash(), s.pegAnchor.outPoint.Hash, "the payout's change is the anchor")
+
+	old := h.contribute(1*doge, 1000)
+	s, err = h.b.load()
+	require.NoError(err)
+	require.Equal(payout.TxHash(), s.pegAnchor.outPoint.Hash)
+	require.NotEqual(old.TxHash(), s.pegAnchor.outPoint.Hash)
 }
 
 // TestSignedTransactionIsDeadOnlyOnChainEvidence: an earlier signed

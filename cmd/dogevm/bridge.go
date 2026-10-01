@@ -295,7 +295,7 @@ func (b *bridge) load() (*pegState, error) {
 			reserveCoins = append(reserveCoins, u)
 		}
 	}
-	s.reserveAnchor = oldestCoin(reserveCoins)
+	s.reserveAnchor = anchorOf(reserveCoins, script, signerSpends, 1)
 	for _, u := range held {
 		if spentByKnown[u.outPoint] {
 			continue
@@ -327,6 +327,13 @@ func (b *bridge) load() (*pegState, error) {
 			if s.redeemFor[string(out.PkScript)] != nil {
 				pegOuts[wire.OutPoint{Hash: hash, Index: uint32(i)}] = true
 			}
+		}
+	}
+	// Transactions the signers made: only they can spend the peg's coins.
+	made := map[chainhash.Hash]bool{}
+	for _, t := range dogeTxs {
+		if spendsAny(t.tx, pegOuts) {
+			made[t.tx.TxHash()] = true
 		}
 	}
 	var all []deposit
@@ -458,7 +465,7 @@ func (b *bridge) load() (*pegState, error) {
 	for op := range pendingSpent {
 		pegCoins = append(pegCoins, confirmedCoin[op])
 	}
-	s.pegAnchor = pegAnchorOf(pegCoins, script)
+	s.pegAnchor = anchorOf(pegCoins, script, made, max(b.depositConfirmations, b.confFloor))
 
 	// Oldest first, so the bridge works through them in order.
 	sort.Slice(s.deposits, func(i, j int) bool {
@@ -780,8 +787,8 @@ const dogecoinHardDust = koinuPerDoge / 1000
 // neither honest signer signs twice, and both payouts confirm. If every
 // transaction must spend the oldest coin, any two of them conflict. The
 // anchor can't change until a transaction spending it is in a block: on
-// Dogecoin it is chosen only from coins at the peg address (pegAnchorOf),
-// which only ever appear in block order.
+// Dogecoin it is chosen only from coins the signers made at the peg address
+// (anchorOf), which only ever appear in block order.
 func oldestCoin(coins []utxo) *utxo {
 	var best *utxo
 	for i := range coins {
@@ -798,23 +805,42 @@ func oldestCoin(coins []utxo) *utxo {
 	return &c
 }
 
-// pegAnchorOf is the anchor among the peg's confirmed coins on Dogecoin:
-// the oldest at the set's own peg address. Every signer watches that
-// address from the moment the set exists and every payout pays change to
-// it, so its coins only ever appear in block order. A personal deposit
-// address is different: the coordinator chooses when to register one, and
-// a payment made to it before it was registered (or imported from an old
-// block) would be discovered as an "older" coin and move the anchor while
-// a withheld transaction still spends the old one. Deposit coins are
-// therefore never the anchor.
-func pegAnchorOf(coins []utxo, peg []byte) *utxo {
-	var atPeg []utxo
+// anchorOf is the anchor among the peg's confirmed coins on one chain: the
+// coin every transaction the signers sign there spends first, so any two
+// of them conflict and at most one confirms.
+//
+// The anchor follows the signers' own transactions. Once they have made
+// one at script (the peg address on Dogecoin, the reserve on DogecoinVM),
+// only coins they made there (outputs of transactions in made, which spend
+// the peg's coins and so could only be theirs) can anchor; each spends the
+// anchor before it and pays change back to script, so the anchor moves one
+// step at a time along that chain (signingLog.anchorMoved follows the same
+// steps). Coins others pay to script (deposits tagged to the peg address,
+// contributions, peg-outs into the reserve) never anchor, however old:
+// otherwise the anchor could jump from the chain's tip to one of them while
+// a transaction spending the tip was signed and kept back. Personal deposit
+// addresses aren't script at all: one can be registered, and an old payment
+// to it imported, at any time.
+//
+// Before the signers have made anything at script, the anchor is its
+// oldest coin with at least rootDepth confirmations, deep enough that no
+// reorganisation takes it away.
+func anchorOf(coins []utxo, script []byte, made map[chainhash.Hash]bool, rootDepth int64) *utxo {
+	var theirs, root []utxo
 	for _, u := range coins {
-		if bytes.Equal(u.pkScript, peg) {
-			atPeg = append(atPeg, u)
+		if !bytes.Equal(u.pkScript, script) {
+			continue
+		}
+		if made[u.outPoint.Hash] {
+			theirs = append(theirs, u)
+		} else if u.confirmations >= rootDepth {
+			root = append(root, u)
 		}
 	}
-	return oldestCoin(atPeg)
+	if len(theirs) > 0 {
+		return oldestCoin(theirs)
+	}
+	return oldestCoin(root)
 }
 
 func outPointLess(a, b wire.OutPoint) bool {
