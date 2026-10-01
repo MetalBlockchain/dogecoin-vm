@@ -416,3 +416,35 @@ func TestLineage(t *testing.T) {
 	require.NoError(err)
 	require.False(ok)
 }
+
+// TestRegistryWritersDontLoseRegistrations: the bridge and the web server
+// add to one registry file from separate processes (two registries here,
+// each with its own mutex); with the file lock, every addition survives.
+func TestRegistryWritersDontLoseRegistrations(t *testing.T) {
+	require := require.New(t)
+	path := filepath.Join(t.TempDir(), "deposits.json")
+	writers := []*depositRegistry{{path: path}, {path: path}}
+	const each = 60
+	errs := make(chan error, 2*each)
+	done := make(chan struct{})
+	for w, r := range writers {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for i := range each {
+				var d destination
+				d.hash[0], d.hash[1] = byte(w+1), byte(i)
+				_, err := r.add(d)
+				errs <- err
+			}
+		}()
+	}
+	<-done
+	<-done
+	close(errs)
+	for err := range errs {
+		require.NoError(err)
+	}
+	got, err := (&depositRegistry{path: path}).list()
+	require.NoError(err)
+	require.Len(got, 2*each, "no registration lost")
+}
