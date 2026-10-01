@@ -63,6 +63,7 @@ func (h *healthChecker) run(state *pegState, loadErr error) []check {
 	}
 
 	checks = append(checks, h.dogecoinNode())
+	checks = append(checks, h.walletSize())
 	checks = append(checks, h.dogecoinVM())
 	if h.validationID != "" {
 		checks = append(checks, h.validatorBalance())
@@ -94,7 +95,64 @@ func (h *healthChecker) bridgeLiveness(s *pegState) check {
 			return check{"bridge", false, fmt.Sprintf("peg-out %v is %d blocks old and not paid", p.txid, p.confirmations)}
 		}
 	}
+	// Paid isn't done until it is in a block. A payment or refund still
+	// unconfirmed long after it was sent needs a look: it holds the anchor,
+	// so every later payout waits behind it, and Dogecoin has no fee
+	// replacement to speed it up.
+	stuckAfter := time.Duration(h.stallBlocks) * dogecoinBlockTime
+	for txid, t := range s.unconfirmed {
+		if t.time == 0 {
+			continue
+		}
+		if age := time.Since(time.Unix(t.time, 0)); age > stuckAfter {
+			return check{"bridge", false, fmt.Sprintf("Dogecoin transaction %v has waited %s unconfirmed, holding up later payouts; see RUNBOOK.md, \"A stuck payout\"",
+				txid, age.Round(time.Minute))}
+		}
+	}
+	// A deposit held for a refund, or waiting for room under the cap, waits
+	// on an operator.
+	for _, d := range s.held {
+		// Below the minimum isn't worth a refund's fee, and anyone can send
+		// dust: only alert on what is worth returning.
+		if d.confirmations > h.stallBlocks && d.value >= h.b.minDeposit {
+			return check{"bridge", false, fmt.Sprintf("deposit %v (%s DOGE) is held and owed back: refund it (RUNBOOK.md)", d.outPoint, formatDoge(d.value))}
+		}
+	}
+	for _, d := range s.deposits {
+		if _, done := s.released[d.outPoint]; done {
+			continue
+		}
+		over := h.b.maxCirculating > 0 && s.reserveCreated-s.reserveUnspent+d.value > h.b.maxCirculating
+		if over && d.confirmations > h.b.confirmationsFor(d.value)+h.stallBlocks {
+			return check{"bridge", false, fmt.Sprintf("deposit %v (%s DOGE) waits for room under the circulating cap: raise it or refund it", d.outPoint, formatDoge(d.value))}
+		}
+	}
 	return check{"bridge", true, "nothing overdue"}
+}
+
+// dogecoinBlockTime is Dogecoin's target time between blocks.
+const dogecoinBlockTime = time.Minute
+
+// walletAlertTxs is when the wallet's history is large enough to warrant a
+// look: the bridge stops at maxWalletEntries (see txsFor), and outsiders
+// can add entries by paying the peg's public addresses.
+const walletAlertTxs = 100_000
+
+func (h *healthChecker) walletSize() check {
+	dc, ok := h.b.doge.(*dogeChain)
+	if !ok {
+		return check{"wallet", true, "not a Dogecoin Core wallet"}
+	}
+	var info struct {
+		TxCount int64 `json:"txcount"`
+	}
+	if err := dc.rpc.call(&info, "getwalletinfo"); err != nil {
+		return check{"wallet", false, "can't read the Dogecoin wallet: " + err.Error()}
+	}
+	if info.TxCount >= walletAlertTxs {
+		return check{"wallet", false, fmt.Sprintf("%d transactions: find what is filling it (dust sent to deposit addresses?); the bridge stops at %d", info.TxCount, maxWalletEntries)}
+	}
+	return check{"wallet", true, fmt.Sprintf("%d transactions", info.TxCount)}
 }
 
 func (h *healthChecker) dogecoinNode() check {

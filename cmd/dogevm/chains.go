@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
@@ -37,6 +38,97 @@ type chain interface {
 	unspent(addresses []btcutil.Address, minConf int64) ([]utxo, error)
 	// send broadcasts tx.
 	send(tx *wire.MsgTx) (chainhash.Hash, error)
+}
+
+// confirmer is a chain that can say whether a transaction is in a block.
+type confirmer interface {
+	confirmed(txid chainhash.Hash) (bool, error)
+}
+
+// confirmedOn returns a check of whether a transaction is in a block on c,
+// or nil if c can't tell. An error counts as not known to be confirmed.
+func confirmedOn(c chain) func(string) bool {
+	cc, ok := c.(confirmer)
+	if !ok {
+		return nil
+	}
+	return func(txid string) bool {
+		h, err := chainhash.NewHashFromStr(txid)
+		if err != nil {
+			return false
+		}
+		yes, err := cc.confirmed(*h)
+		return err == nil && yes
+	}
+}
+
+// utxoSetter is a chain whose node can say whether an output is still in
+// its UTXO set: in a block and not spent by one.
+type utxoSetter interface {
+	inUTXOSet(op wire.OutPoint) (bool, error)
+}
+
+// unspentOn returns a check of whether an output is still in c's UTXO set,
+// or nil if c can't tell. An error counts as still unspent: the checks that
+// use it then refuse, which is the safe side.
+func unspentOn(c chain) func(wire.OutPoint) bool {
+	uc, ok := c.(utxoSetter)
+	if !ok {
+		return nil
+	}
+	return func(op wire.OutPoint) bool {
+		yes, err := uc.inUTXOSet(op)
+		return err != nil || yes
+	}
+}
+
+// gettxoutInBlock asks a node's UTXO set (not a wallet) whether op is in a
+// block and unspent by any block; a spend still in the mempool doesn't
+// count.
+func gettxoutInBlock(rpc *rpcClient, op wire.OutPoint) (bool, error) {
+	var result *struct {
+		Confirmations int64 `json:"confirmations"`
+	}
+	if err := rpc.call(&result, "gettxout", op.Hash.String(), op.Index, false); err != nil {
+		return false, err
+	}
+	return result != nil && result.Confirmations > 0, nil
+}
+
+func (c *vmChain) inUTXOSet(op wire.OutPoint) (bool, error)   { return gettxoutInBlock(c.rpc, op) }
+func (c *dogeChain) inUTXOSet(op wire.OutPoint) (bool, error) { return gettxoutInBlock(c.rpc, op) }
+
+// confirmed reports whether DogecoinVM has txid in a block (its node keeps
+// a transaction index).
+func (c *vmChain) confirmed(txid chainhash.Hash) (bool, error) {
+	var t struct {
+		Confirmations int64 `json:"confirmations"`
+	}
+	if err := c.rpc.call(&t, "getrawtransaction", txid.String(), 1); err != nil {
+		return false, err
+	}
+	return t.Confirmations > 0, nil
+}
+
+// confirmed reports whether Dogecoin has txid in a block (the node keeps a
+// transaction index).
+func (c *dogeChain) confirmed(txid chainhash.Hash) (bool, error) {
+	var t struct {
+		Confirmations int64 `json:"confirmations"`
+	}
+	if err := c.rpc.call(&t, "getrawtransaction", txid.String(), 1); err != nil {
+		return false, err
+	}
+	return t.Confirmations > 0, nil
+}
+
+// resend hands tx back to the Dogecoin node; one it already has is fine.
+func (c *dogeChain) resend(tx *wire.MsgTx) error {
+	_, err := sendRaw(c.rpc, tx)
+	if err != nil && (strings.Contains(err.Error(), "already") || strings.Contains(err.Error(), "txn-mempool-conflict")) {
+		return nil
+	}
+	return err
 }
 
 func decodeTx(hexTx string) (*wire.MsgTx, error) {
@@ -199,7 +291,10 @@ func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
 		Address string `json:"address"`
 	}
 	// listtransactions account count skip include_watchonly
-	if err := c.rpc.call(&entries, "listtransactions", "*", 1_000_000, 0, true); err != nil {
+	if err := c.rpc.call(&entries, "listtransactions", "*", maxWalletEntries, 0, true); err != nil {
+		return nil, err
+	}
+	if err := historyComplete(len(entries)); err != nil {
 		return nil, err
 	}
 
@@ -235,6 +330,20 @@ func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
 		}
 	}
 	return txs, nil
+}
+
+// maxWalletEntries is the most wallet entries the bridge reads in one pass.
+const maxWalletEntries = 1_000_000
+
+// historyComplete checks a read of n wallet entries (asking for at most
+// maxWalletEntries) got them all. Never read a truncated history: past the
+// cap, older payouts would drop out and look unpaid, and be paid again.
+// Stop instead (the monitor alerts well before this, at walletAlertTxs).
+func historyComplete(n int) error {
+	if n >= maxWalletEntries {
+		return fmt.Errorf("the Dogecoin wallet lists %d or more entries, more than the bridge reads at once; it stops rather than miss old payouts (RUNBOOK.md)", maxWalletEntries)
+	}
+	return nil
 }
 
 // touches reports whether tx pays to one of scripts or spends an output

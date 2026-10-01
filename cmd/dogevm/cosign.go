@@ -561,7 +561,7 @@ func (c *cosigner) handleSign(r *http.Request) (any, error) {
 		return nil, err
 	}
 	// Record before answering: if the log cannot be written, sign nothing.
-	if err := c.log.record(key, tx, value); err != nil {
+	if err := c.log.record(key, req.Chain, tx, value); err != nil {
 		return nil, fmt.Errorf("writing the signing log: %w", err)
 	}
 	c.b.logf("signed %s in %v", key, tx.TxHash())
@@ -657,6 +657,11 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		if txid, done := s.refunded[op]; done {
 			return nil, nil, 0, fmt.Errorf("deposit %v was refunded in %v", op, txid)
 		}
+		if c.log.has(actionRefund + ":" + op.String()) {
+			// A forced refund this signer signed may still confirm, on
+			// another chain from the release: never both.
+			return nil, nil, 0, fmt.Errorf("this signer signed a refund of deposit %v, so it never credits it", op)
+		}
 		d, ok := findDeposit(s.deposits, op)
 		if !ok {
 			return nil, nil, 0, fmt.Errorf("no creditable deposit %v in this signer's view", op)
@@ -666,6 +671,31 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		}
 		if b.maxCirculating > 0 && s.reserveCreated-s.reserveUnspent+d.value > b.maxCirculating {
 			return nil, nil, 0, fmt.Errorf("crediting deposit %v would exceed the circulating cap", op)
+		}
+		// Releases this signer signed for other shallow deposits that
+		// aren't credited yet still count: they could be sent later.
+		var promised int64
+		for key, a := range c.log.Actions {
+			other, isRelease := strings.CutPrefix(key, actionRelease+":")
+			if !isRelease || other == op.String() {
+				continue
+			}
+			oop, err := parseOutPoint(other)
+			if err != nil {
+				continue
+			}
+			if _, done := s.released[oop]; done {
+				continue
+			}
+			if od, ok := findDeposit(s.deposits, oop); ok && od.confirmations < b.depositConfirmations {
+				promised += a.Value
+			}
+		}
+		if err := b.shallowRoom(s, d, promised); err != nil {
+			return nil, nil, 0, err
+		}
+		if err := spendsAnchor(tx, s.reserveAnchor); err != nil {
+			return nil, nil, 0, err
 		}
 		inputs, total, err := pick(s.reserveUTXOs)
 		if err != nil {
@@ -723,17 +753,29 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 			if txid, done := s.released[op]; done {
 				return nil, nil, 0, fmt.Errorf("deposit %v was credited in %v", op, txid)
 			}
+			if dest, err = parseDest(req.Action.To); err != nil {
+				return nil, nil, 0, err
+			}
+			force, err := c.refundApproved(op, dest)
+			if err != nil {
+				return nil, nil, 0, err
+			}
 			d, ok := findDeposit(s.held, op)
+			if !ok && force {
+				// A creditable deposit waiting (for capacity, say) is refunded
+				// only on its operator's explicit "force", and never by a
+				// signer that signed a release of it: that release and this
+				// refund are on different chains and could both confirm.
+				// Every operator checks their own log before approving
+				// (docs/RUNBOOK.md): two signers can't enforce it alone.
+				if d, ok = findDeposit(s.deposits, op); ok && c.log.has(actionRelease+":"+op.String()) {
+					return nil, nil, 0, fmt.Errorf("this signer signed a release of deposit %v, so it never refunds it", op)
+				}
+			}
 			if !ok {
 				return nil, nil, 0, fmt.Errorf("deposit %v is not held for a refund in this signer's view", op)
 			}
 			if err := b.refundable(d); err != nil {
-				return nil, nil, 0, err
-			}
-			if dest, err = parseDest(req.Action.To); err != nil {
-				return nil, nil, 0, err
-			}
-			if err := c.refundApproved(op, dest); err != nil {
 				return nil, nil, 0, err
 			}
 			value, data = d.value, encodeRefund(op)
@@ -748,6 +790,9 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 				confirmed = append(confirmed, u)
 			}
 		}
+		if err := spendsAnchor(tx, s.pegAnchor); err != nil {
+			return nil, nil, 0, err
+		}
 		inputs, total, err := pick(confirmed)
 		if err != nil {
 			return nil, nil, 0, err
@@ -755,7 +800,9 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		if total < value {
 			return nil, nil, 0, errors.New("inputs do not cover the payment")
 		}
-		want = b.buildPayout(inputs, total, value, dest, data)
+		if want, err = b.buildPayout(inputs, value, dest, data); err != nil {
+			return nil, nil, 0, err
+		}
 		for _, u := range inputs {
 			redeem := s.redeemFor[string(u.pkScript)]
 			if redeem == nil {
@@ -775,7 +822,15 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	if err := c.log.permit(key, tx, unspent); err != nil {
+	chainOf := b.vm
+	if req.Chain == chainDogecoin {
+		chainOf = b.doge
+	}
+	inChain := unspentOn(chainOf)
+	if err := c.log.permit(key, tx, unspent, confirmedOn(chainOf), inChain); err != nil {
+		return nil, nil, 0, err
+	}
+	if err := c.log.anchorMoved(req.Chain, tx, inChain); err != nil {
 		return nil, nil, 0, err
 	}
 	if c.maxDaily > 0 && !c.log.has(key) &&
@@ -868,34 +923,51 @@ func (c *cosigner) catchUp(s *pegState, req signRequest, tx *wire.MsgTx) (*pegSt
 }
 
 // refundApproved checks the operator listed this refund in the approvals
-// file.
-func (c *cosigner) refundApproved(op wire.OutPoint, dest destination) error {
+// file. Each line is "TXID:VOUT ADDRESS", and "force" after it to refund a
+// deposit that is still creditable.
+func (c *cosigner) refundApproved(op wire.OutPoint, dest destination) (force bool, err error) {
 	if c.refundApprovals == "" {
-		return errors.New("this signer approves no refunds (no -refund-approvals file)")
+		return false, errors.New("this signer approves no refunds (no -refund-approvals file)")
 	}
 	raw, err := os.ReadFile(c.refundApprovals)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, line := range strings.Split(string(raw), "\n") {
 		f := strings.Fields(line)
-		if len(f) != 2 || strings.HasPrefix(f[0], "#") || f[0] != op.String() {
+		if len(f) < 2 || len(f) > 3 || strings.HasPrefix(f[0], "#") || f[0] != op.String() {
 			continue
+		}
+		if len(f) == 3 && f[2] != "force" {
+			return false, fmt.Errorf("approval for %v: unknown word %q (only \"force\")", op, f[2])
 		}
 		addr, err := btcutil.DecodeAddress(f[1], c.b.dogeParams)
 		if err != nil {
-			return fmt.Errorf("approval for %v: %w", op, err)
+			return false, fmt.Errorf("approval for %v: %w", op, err)
 		}
 		approved, err := destinationOf(addr)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if approved == dest {
-			return nil
+			return len(f) == 3, nil
 		}
-		return fmt.Errorf("the refund of %v is approved to a different address", op)
+		return false, fmt.Errorf("the refund of %v is approved to a different address", op)
 	}
-	return fmt.Errorf("the refund of %v is not in this signer's approvals", op)
+	return false, fmt.Errorf("the refund of %v is not in this signer's approvals", op)
+}
+
+// spendsAnchor checks that tx spends the chain's anchor, as this signer
+// sees it, as its first input (see oldestCoin), so it conflicts with any
+// other transaction the signers have signed on that chain.
+func spendsAnchor(tx *wire.MsgTx, anchor *utxo) error {
+	if anchor == nil {
+		return errors.New("this signer sees no confirmed coin to anchor the transaction")
+	}
+	if len(tx.TxIn) == 0 || tx.TxIn[0].PreviousOutPoint != anchor.outPoint {
+		return fmt.Errorf("the transaction must spend %v, the oldest confirmed coin, first", anchor.outPoint)
+	}
+	return nil
 }
 
 func findDeposit(list []deposit, op wire.OutPoint) (deposit, bool) {
@@ -928,6 +1000,11 @@ func findPegOut(list []pegOut, txid chainhash.Hash) (pegOut, bool) {
 type signingLog struct {
 	path    string
 	Actions map[string]*loggedAction `json:"actions"`
+	// Anchors is, per chain, the anchor (first input) of the last
+	// transaction this signer signed there. The signer moves to a new
+	// anchor only once its own node shows the old one spent in a block
+	// (anchorMoved), never because its wallet stopped listing it.
+	Anchors map[string]string `json:"anchors,omitempty"`
 }
 
 type loggedAction struct {
@@ -1011,13 +1088,43 @@ func (l *signingLog) normalizeKeys() error {
 
 func (l *signingLog) has(key string) bool { return l.Actions[key] != nil }
 
+// anchorMoved checks tx may move this signer's anchor on chain away from the
+// one it last signed with: only if that one is no longer in its node's
+// UTXO set (spent in a block, or gone in a reorg). While it is still
+// there, a transaction already signed with it could confirm, and one with a
+// different anchor could confirm beside it.
+func (l *signingLog) anchorMoved(chain string, tx *wire.MsgTx, inChain func(wire.OutPoint) bool) error {
+	last := l.Anchors[chain]
+	if last == "" || len(tx.TxIn) == 0 || last == tx.TxIn[0].PreviousOutPoint.String() || inChain == nil {
+		return nil
+	}
+	op, err := parseOutPoint(last)
+	if err != nil {
+		return fmt.Errorf("the signing log's %s anchor %q: %w", chain, last, err)
+	}
+	if inChain(op) {
+		return fmt.Errorf("this signer last signed on %s with anchor %v, which is still unspent there; "+
+			"it signs nothing with another anchor until that one is spent in a block", chain, op)
+	}
+	return nil
+}
+
 // permit checks tx may be signed for the action key. unspent holds the peg
-// outputs still unspent, confirmed or not: an earlier transaction spending
-// one that is gone can no longer confirm.
-func (l *signingLog) permit(key string, tx *wire.MsgTx, unspent map[wire.OutPoint]bool) error {
+// outputs still unspent, confirmed or not, in this signer's view; inChain
+// reports whether its node's UTXO set still holds an output. A transaction
+// this signer signed for the action that is in a block means the action is
+// done. An earlier transaction counts as dead only when one of its inputs
+// is gone from both its view and its node's UTXO set: a wallet that stopped
+// listing a coin is not evidence the coin is spent.
+func (l *signingLog) permit(key string, tx *wire.MsgTx, unspent map[wire.OutPoint]bool, confirmed func(txid string) bool, inChain func(wire.OutPoint) bool) error {
 	a := l.Actions[key]
 	if a == nil {
 		return nil
+	}
+	for _, prev := range a.Txs {
+		if confirmed != nil && confirmed(prev.Txid) {
+			return fmt.Errorf("already signed %s for %s, and it is in a block", prev.Txid, key)
+		}
 	}
 	spends := map[string]bool{}
 	for _, in := range tx.TxIn {
@@ -1027,7 +1134,7 @@ func (l *signingLog) permit(key string, tx *wire.MsgTx, unspent map[wire.OutPoin
 		live, conflicts := true, false
 		for _, in := range prev.Inputs {
 			op, err := parseOutPoint(in)
-			if err != nil || !unspent[op] {
+			if err != nil || !unspent[op] && (inChain == nil || !inChain(op)) {
 				live = false
 			}
 			conflicts = conflicts || spends[in]
@@ -1039,8 +1146,15 @@ func (l *signingLog) permit(key string, tx *wire.MsgTx, unspent map[wire.OutPoin
 	return nil
 }
 
-// record adds tx to the log and writes it out before returning.
-func (l *signingLog) record(key string, tx *wire.MsgTx, value int64) error {
+// record adds tx to the log, and its first input as the chain's anchor, and
+// writes it out before returning.
+func (l *signingLog) record(key, chain string, tx *wire.MsgTx, value int64) error {
+	if chain != "" && len(tx.TxIn) > 0 {
+		if l.Anchors == nil {
+			l.Anchors = map[string]string{}
+		}
+		l.Anchors[chain] = tx.TxIn[0].PreviousOutPoint.String()
+	}
 	a := l.Actions[key]
 	if a == nil {
 		a = &loggedAction{Value: value, First: time.Now().Unix()}

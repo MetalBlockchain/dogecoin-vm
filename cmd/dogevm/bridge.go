@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg"
@@ -55,6 +56,16 @@ type bridge struct {
 	// manual refund. Zero means no cap.
 	maxDeposit     int64
 	maxCirculating int64
+	// confFloor is the fewest Dogecoin confirmations any deposit is
+	// credited at (minMainnetConfirmations on mainnet), whatever the tiers
+	// say.
+	confFloor int64
+	// maxShallow caps credit from deposits short of full confirmations
+	// (shallowCap); 0: the largest tier's amount.
+	maxShallow int64
+	// resent is when the bridge last handed each unconfirmed Dogecoin
+	// transaction back to its node (rebroadcast).
+	resent map[chainhash.Hash]time.Time
 
 	logf func(format string, args ...any)
 }
@@ -85,6 +96,13 @@ type pegState struct {
 	reserveUnspent int64                  // reserve still held
 	reserveUTXOs   []utxo
 	vmPending      bool                             // a release is still in the VM mempool
+	// reserveAnchor and pegAnchor are the oldest confirmed coins of the
+	// reserve and of the peg address. Every release spends reserveAnchor,
+	// and every payout and refund spends pegAnchor, so any two transactions
+	// the signers sign on one chain conflict and at most one confirms (see
+	// oldestCoin).
+	reserveAnchor *utxo
+	pegAnchor     *utxo
 	released       map[wire.OutPoint]chainhash.Hash // deposit -> release txid
 	pegOuts        []pegOut
 	deposits       []deposit
@@ -96,8 +114,9 @@ type pegState struct {
 	settled         []deposit // deposits refunded instead of credited
 	locked          int64     // DOGE held at the peg address on Dogecoin
 	lockedUTXOs     []utxo
-	unclaimedOnDoge int64 // deposits without a usable destination
-	unclaimedOnVM   int64 // untagged or too-small payments into the reserve
+	unclaimedOnDoge int64 // deposits not credited: owed back as refunds
+	unclaimedOnVM   int64 // untagged or too-small payments into the reserve: owed back
+	contributed     int64 // DVMC payments to the peg address: operating capital
 	// vmTxs and dogeTxs are the transactions read from each chain, for a
 	// signer's check of its log against them (fence.go).
 	vmTxs, dogeTxs []chainTx
@@ -110,12 +129,15 @@ type audit struct {
 	PendingPegOuts  int64 `json:"pendingPegOuts"`  // peg-outs not yet paid
 	Locked          int64 `json:"locked"`          // DOGE held on Dogecoin
 	Required        int64 `json:"required"`        // circulating + pending
-	Surplus         int64 `json:"surplus"`         // locked - required
-	UnclaimedOnDoge int64 `json:"unclaimedOnDoge"` // part of surplus
-	UnclaimedOnVM   int64 `json:"unclaimedOnVM"`
+	Surplus         int64 `json:"surplus"`         // locked - required: contributions (operating capital)
+	UnclaimedOnDoge int64 `json:"unclaimedOnDoge"` // part of required: deposits owed back as refunds
+	UnclaimedOnVM   int64 `json:"unclaimedOnVM"`   // part of required: reserve payments owed back
+	Contributed     int64 `json:"contributed"`     // DVMC operating capital paid in
 }
 
-func (a audit) solvent() bool { return a.Surplus >= 0 }
+// solvent: what is locked covers what is owed. Negative circulation can't
+// happen unless the reserve is miscounted, so it fails too.
+func (a audit) solvent() bool { return a.Surplus >= 0 && a.Circulating >= 0 }
 
 func (b *bridge) vmReserveAddress() (btcutil.Address, error) {
 	return b.signers.address(b.vmParams)
@@ -255,7 +277,29 @@ func (b *bridge) load() (*pegState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading DogecoinVM reserve: %w", err)
 	}
+	// DogecoinVM's node still lists a confirmed output that a transaction
+	// in its mempool spends, so the outputs known transactions spend are
+	// left out here: otherwise a release in flight counts both its input
+	// and its change, and the reserve looks larger than it is.
+	spentByKnown := map[wire.OutPoint]bool{}
+	for _, t := range vmTxs {
+		for _, in := range t.tx.TxIn {
+			spentByKnown[in.PreviousOutPoint] = true
+		}
+	}
+	// The anchor comes from what is in blocks alone, so a release still in
+	// the mempool doesn't move it.
+	var reserveCoins []utxo
 	for _, u := range held {
+		if u.confirmations > 0 {
+			reserveCoins = append(reserveCoins, u)
+		}
+	}
+	s.reserveAnchor = oldestCoin(reserveCoins)
+	for _, u := range held {
+		if spentByKnown[u.outPoint] {
+			continue
+		}
 		if u.confirmations == 0 && !signerSpends[u.outPoint.Hash] {
 			continue
 		}
@@ -320,6 +364,7 @@ func (b *bridge) load() (*pegState, error) {
 			continue
 		}
 		tagDest, hasTag := parseDestinationTag(t.tx, tagDeposit)
+		contribution := isContribution(t.tx)
 		hash := t.tx.TxHash()
 		for i, out := range t.tx.TxOut {
 			d := deposit{
@@ -332,6 +377,12 @@ func (b *bridge) load() (*pegState, error) {
 			case personal:
 				// A personal deposit address names its destination.
 				d.dest, d.valid = dest, b.depositInRange(out.Value)
+			case bytes.Equal(out.PkScript, script) && contribution:
+				// Operating capital: part of what is locked, owed to no one.
+				if t.confirmations > 0 {
+					s.contributed += out.Value
+				}
+				continue
 			case bytes.Equal(out.PkScript, script):
 				// The shared peg address needs a DVMD tag.
 				d.dest, d.valid = tagDest, hasTag && b.depositInRange(out.Value)
@@ -348,6 +399,10 @@ func (b *bridge) load() (*pegState, error) {
 			s.settled = append(s.settled, d)
 		case d.valid:
 			s.deposits = append(s.deposits, d)
+		case s.released[d.outPoint] != (chainhash.Hash{}):
+			// Credited while it was in range (a cap changed since): it
+			// backs what circulates, and is owed back to no one.
+			continue
 		default:
 			s.held = append(s.held, d)
 			if d.confirmations > 0 {
@@ -369,13 +424,14 @@ func (b *bridge) load() (*pegState, error) {
 			s.locked += u.value
 		}
 	}
-	confirmedOut := map[wire.OutPoint]int64{}
+	confirmedCoin := map[wire.OutPoint]utxo{}
 	for _, t := range dogeTxs {
 		if t.confirmations > 0 {
 			hash := t.tx.TxHash()
 			for i, out := range t.tx.TxOut {
 				if s.redeemFor[string(out.PkScript)] != nil {
-					confirmedOut[wire.OutPoint{Hash: hash, Index: uint32(i)}] = out.Value
+					op := wire.OutPoint{Hash: hash, Index: uint32(i)}
+					confirmedCoin[op] = utxo{outPoint: op, value: out.Value, pkScript: out.PkScript, confirmations: t.confirmations}
 				}
 			}
 		}
@@ -383,12 +439,26 @@ func (b *bridge) load() (*pegState, error) {
 	pendingSpent := map[wire.OutPoint]bool{}
 	for _, t := range s.unconfirmed {
 		for _, in := range t.tx.TxIn {
-			if v, ok := confirmedOut[in.PreviousOutPoint]; ok && !pendingSpent[in.PreviousOutPoint] {
+			if c, ok := confirmedCoin[in.PreviousOutPoint]; ok && !pendingSpent[in.PreviousOutPoint] {
 				pendingSpent[in.PreviousOutPoint] = true
-				s.locked += v
+				s.locked += c.value
 			}
 		}
 	}
+	// The anchor is chosen from what is in blocks alone: the wallet stops
+	// listing an output a mempool transaction spends, so those are added
+	// back, and a transaction someone shows this node without mining it
+	// can't move the anchor.
+	var pegCoins []utxo
+	for _, u := range s.lockedUTXOs {
+		if u.confirmations > 0 {
+			pegCoins = append(pegCoins, u)
+		}
+	}
+	for op := range pendingSpent {
+		pegCoins = append(pegCoins, confirmedCoin[op])
+	}
+	s.pegAnchor = pegAnchorOf(pegCoins, script)
 
 	// Oldest first, so the bridge works through them in order.
 	sort.Slice(s.deposits, func(i, j int) bool {
@@ -406,6 +476,7 @@ func (b *bridge) audit(s *pegState) audit {
 		Locked:          s.locked,
 		UnclaimedOnDoge: s.unclaimedOnDoge,
 		UnclaimedOnVM:   s.unclaimedOnVM,
+		Contributed:     s.contributed,
 	}
 	for _, d := range s.deposits {
 		if _, done := s.released[d.outPoint]; !done && d.confirmations > 0 {
@@ -418,7 +489,10 @@ func (b *bridge) audit(s *pegState) audit {
 			a.PendingPegOuts += p.value
 		}
 	}
-	a.Required = a.Circulating + a.PendingPegIns + a.PendingPegOuts
+	// Deposits not credited and payments into the reserve that weren't
+	// valid peg-outs are owed back to whoever paid them, so they are never
+	// surplus.
+	a.Required = a.Circulating + a.PendingPegIns + a.PendingPegOuts + a.UnclaimedOnDoge + a.UnclaimedOnVM
 	a.Surplus = a.Locked - a.Required
 	return a
 }
@@ -438,6 +512,7 @@ func (b *bridge) step() (string, error) {
 	if a := b.audit(s); !a.solvent() {
 		return "", fmt.Errorf("%w (%+v)", errInsolvent, a)
 	}
+	b.rebroadcast(s)
 
 	var failed error
 	// Releases chain off each other's reserve change, so wait for the
@@ -451,6 +526,9 @@ func (b *bridge) step() (string, error) {
 				b.logf("holding deposit %v: crediting %s DOGE would exceed the %s DOGE cap",
 					d.outPoint, formatDoge(d.value), formatDoge(b.maxCirculating))
 				continue
+			}
+			if err := b.shallowRoom(s, d, 0); err != nil {
+				continue // credited once deeper
 			}
 			txid, err := b.release(s, d)
 			if err != nil {
@@ -520,7 +598,7 @@ func selectUTXOs(utxos []utxo, amount int64) ([]utxo, int64, error) {
 // release credits d on DogecoinVM from the reserve. The reserve gives up the
 // full deposit; the VM fee comes out of the credit.
 func (b *bridge) release(s *pegState, d deposit) (chainhash.Hash, error) {
-	inputs, total, err := selectUTXOs(s.reserveUTXOs, d.value)
+	inputs, total, err := s.releaseInputs(d.value)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
@@ -575,11 +653,14 @@ func (b *bridge) payFromPeg(s *pegState, value int64, dest destination, data []b
 	if value <= b.dogeFee {
 		return chainhash.Hash{}, fmt.Errorf("%s DOGE does not cover the %s DOGE fee", formatDoge(value), formatDoge(b.dogeFee))
 	}
-	inputs, total, err := selectUTXOs(confirmed, value)
+	inputs, err := s.payoutInputs(confirmed, value)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
-	tx := b.buildPayout(inputs, total, value, dest, data)
+	tx, err := b.buildPayout(inputs, value, dest, data)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
 	redeems := make([][]byte, len(inputs))
 	var register []destination
 	for i, u := range inputs {
@@ -598,22 +679,49 @@ func (b *bridge) payFromPeg(s *pegState, value int64, dest destination, data []b
 }
 
 // buildPayout is the unsigned Dogecoin transaction paying value, less the
-// Dogecoin fee, to dest from inputs, which hold total. Like buildRelease,
-// signers rebuild it, so it depends only on its arguments.
-func (b *bridge) buildPayout(inputs []utxo, total, value int64, dest destination, data []byte) *wire.MsgTx {
+// Dogecoin fee, to dest from inputs, the first of them the peg's anchor.
+// Like buildRelease, signers rebuild it, so it depends only on its
+// arguments.
+//
+// Every payout pays something back to the shared peg address, which every
+// signer watches from the start: that output is the next anchor. Change
+// below pegDust is topped up from the payout.
+func (b *bridge) buildPayout(inputs []utxo, value int64, dest destination, data []byte) (*wire.MsgTx, error) {
+	var total int64
 	tx := wire.NewMsgTx(1) // Dogecoin Core 1.14 relays version 1 and 2
 	for _, u := range inputs {
 		tx.AddTxIn(wire.NewTxIn(&u.outPoint, nil, nil))
+		total += u.value
 	}
-	tx.AddTxOut(wire.NewTxOut(value-b.dogeFee, dest.pkScript()))
-	// Change below Dogecoin's hard dust limit cannot be relayed, so it
-	// goes to the fee.
-	if change := total - value; change >= dogecoinHardDust {
-		tx.AddTxOut(wire.NewTxOut(change, b.signers.pkScript()))
+	if total < value {
+		return nil, fmt.Errorf("inputs hold %s DOGE, need %s", formatDoge(total), formatDoge(value))
 	}
+	// Every input but the anchor must be needed: an extra one would only
+	// move peg coins around.
+	for i := 1; i < len(inputs); i++ {
+		if total-inputs[i].value >= value {
+			return nil, fmt.Errorf("spends %v, which the payout does not need", inputs[i].outPoint)
+		}
+	}
+	tx.AddTxOut(wire.NewTxOut(0, dest.pkScript())) // value set below
+	change, topUp := total-value, int64(0)
+	if change < pegDust {
+		change, topUp = pegDust, pegDust-change
+	}
+	tx.AddTxOut(wire.NewTxOut(change, b.signers.pkScript()))
 	tx.AddTxOut(nullData(data))
-	return tx
+	pays := value - b.dogeFee - topUp
+	if pays < pegDust {
+		return nil, fmt.Errorf("%s DOGE doesn't cover the %s DOGE fee and the peg's change", formatDoge(value), formatDoge(b.dogeFee))
+	}
+	tx.TxOut[0].Value = pays
+	return tx, nil
 }
+
+// pegDust is the least the peg's change output holds: Dogecoin Core's
+// dust limit (DEFAULT_DUST_LIMIT, 0.01 DOGE since 1.14.5), so the output
+// relays without an extra fee.
+const pegDust = koinuPerDoge / 100
 
 var (
 	errNotRefundable = errors.New("not a deposit the bridge holds")
@@ -660,6 +768,153 @@ func (b *bridge) refund(op wire.OutPoint, dest destination, force bool) (chainha
 
 // dogecoinHardDust is Dogecoin Core's DEFAULT_HARD_DUST_LIMIT.
 const dogecoinHardDust = koinuPerDoge / 1000
+
+// oldestCoin returns the coin in the oldest block, ties broken by outpoint,
+// or nil. It is the anchor every signed transaction on a chain must spend
+// first.
+//
+// Why: each signer's log stops it signing two transactions for one action
+// that could both confirm, but that is per signer. With 2 of 3, a dishonest
+// coordinator and one dishonest signer B could have A and B sign a payout
+// from some coins and B and C sign the same payout again from other coins;
+// neither honest signer signs twice, and both payouts confirm. If every
+// transaction must spend the oldest coin, any two of them conflict. The
+// anchor can't change until a transaction spending it is in a block: on
+// Dogecoin it is chosen only from coins at the peg address (pegAnchorOf),
+// which only ever appear in block order.
+func oldestCoin(coins []utxo) *utxo {
+	var best *utxo
+	for i := range coins {
+		u := &coins[i]
+		if best == nil || u.confirmations > best.confirmations ||
+			u.confirmations == best.confirmations && outPointLess(u.outPoint, best.outPoint) {
+			best = u
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	c := *best
+	return &c
+}
+
+// pegAnchorOf is the anchor among the peg's confirmed coins on Dogecoin:
+// the oldest at the set's own peg address. Every signer watches that
+// address from the moment the set exists and every payout pays change to
+// it, so its coins only ever appear in block order. A personal deposit
+// address is different: the coordinator chooses when to register one, and
+// a payment made to it before it was registered (or imported from an old
+// block) would be discovered as an "older" coin and move the anchor while
+// a withheld transaction still spends the old one. Deposit coins are
+// therefore never the anchor.
+func pegAnchorOf(coins []utxo, peg []byte) *utxo {
+	var atPeg []utxo
+	for _, u := range coins {
+		if bytes.Equal(u.pkScript, peg) {
+			atPeg = append(atPeg, u)
+		}
+	}
+	return oldestCoin(atPeg)
+}
+
+func outPointLess(a, b wire.OutPoint) bool {
+	if c := bytes.Compare(a.Hash[:], b.Hash[:]); c != 0 {
+		return c < 0
+	}
+	return a.Index < b.Index
+}
+
+// anchoredSelection is the inputs a signed transaction spends: the anchor
+// first, then, if it doesn't cover need, what pick chooses from the rest.
+func anchoredSelection(anchor utxo, available []utxo, need int64) ([]utxo, int64, error) {
+	if anchor.value >= need {
+		return []utxo{anchor}, anchor.value, nil
+	}
+	var rest []utxo
+	for _, u := range available {
+		if u.outPoint != anchor.outPoint {
+			rest = append(rest, u)
+		}
+	}
+	more, total, err := selectUTXOs(rest, need-anchor.value)
+	if err != nil {
+		return nil, 0, err
+	}
+	return append([]utxo{anchor}, more...), anchor.value + total, nil
+}
+
+func containsOutPoint(coins []utxo, op wire.OutPoint) bool {
+	for _, u := range coins {
+		if u.outPoint == op {
+			return true
+		}
+	}
+	return false
+}
+
+// payoutInputs is what a payout or refund of value spends: the peg's
+// anchor, and if it doesn't cover the payout, more confirmed coins. While a
+// transaction in the mempool spends the anchor, nothing else can be paid: it
+// would conflict.
+func (s *pegState) payoutInputs(confirmed []utxo, value int64) ([]utxo, error) {
+	if s.pegAnchor == nil {
+		return nil, errors.New("the peg address holds no confirmed DOGE to anchor a payout (contribute to it once, docs/RUNBOOK.md, or wait for a payout's change to confirm)")
+	}
+	if !containsOutPoint(confirmed, s.pegAnchor.outPoint) {
+		return nil, fmt.Errorf("waiting for the payment spending %v to confirm", s.pegAnchor.outPoint)
+	}
+	inputs, _, err := anchoredSelection(*s.pegAnchor, confirmed, value)
+	return inputs, err
+}
+
+// releaseInputs is what a release of value spends: the reserve's anchor,
+// and more of the reserve if it doesn't cover the release.
+func (s *pegState) releaseInputs(value int64) ([]utxo, int64, error) {
+	if s.reserveAnchor == nil || !containsOutPoint(s.reserveUTXOs, s.reserveAnchor.outPoint) {
+		return nil, 0, errors.New("waiting for the reserve's oldest coin to be free")
+	}
+	return anchoredSelection(*s.reserveAnchor, s.reserveUTXOs, value)
+}
+
+// resendEvery is how often an unconfirmed payment or refund is handed back
+// to the Dogecoin node.
+const resendEvery = 10 * time.Minute
+
+// resender is a chain that can hand a transaction back to its node,
+// accepting that it may already be there.
+type resender interface {
+	resend(tx *wire.MsgTx) error
+}
+
+// rebroadcast hands every unconfirmed Dogecoin transaction of the peg back
+// to the node every resendEvery. A node can drop one (a restart, a full
+// mempool), and Dogecoin has no fee replacement to send it again; without
+// this, such a payment would sit listed as paid and never confirm, holding
+// up every later payout behind the anchor it spends.
+func (b *bridge) rebroadcast(s *pegState) {
+	r, ok := b.doge.(resender)
+	if !ok {
+		return
+	}
+	if b.resent == nil {
+		b.resent = map[chainhash.Hash]time.Time{}
+	}
+	now := time.Now()
+	for txid, t := range s.unconfirmed {
+		if now.Sub(b.resent[txid]) < resendEvery {
+			continue
+		}
+		b.resent[txid] = now
+		if err := r.resend(t.tx); err != nil {
+			b.logf("rebroadcasting %v: %v", txid, err)
+		}
+	}
+	for txid := range b.resent {
+		if _, still := s.unconfirmed[txid]; !still {
+			delete(b.resent, txid)
+		}
+	}
+}
 
 func isCoinbase(tx *wire.MsgTx) bool {
 	return len(tx.TxIn) == 1 && tx.TxIn[0].PreviousOutPoint.Index == wire.MaxPrevOutIndex &&

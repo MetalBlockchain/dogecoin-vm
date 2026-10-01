@@ -52,21 +52,21 @@ func TestSignerNeverRefundsACreditedDeposit(t *testing.T) {
 	s, err := c.b.load()
 	require.NoError(err)
 	_, held := findDeposit(s.held, op)
-	require.True(held, "the credited deposit now looks held")
+	require.False(held, "a credited deposit is never held, nor owed back, even outside the limits")
 
 	back := h.user(9)
-	var from []utxo
-	for _, u := range s.lockedUTXOs {
-		if u.confirmations > 0 && u.value >= 3*doge {
-			from = append(from, u)
-			break
+	from, err := s.payoutInputs(func() []utxo {
+		var confirmed []utxo
+		for _, u := range s.lockedUTXOs {
+			if u.confirmations > 0 {
+				confirmed = append(confirmed, u)
+			}
 		}
-	}
-	var total int64
-	for _, u := range from {
-		total += u.value
-	}
-	tx := h.b.buildPayout(from, total, 3*doge, back, encodeRefund(op))
+		return confirmed
+	}(), 3*doge)
+	require.NoError(err)
+	tx, err := h.b.buildPayout(from, 3*doge, back, encodeRefund(op))
+	require.NoError(err)
 	_, _, _, err = c.check(signRequest{Chain: chainDogecoin, Tx: encodeTx(tx), Action: refundAction(op, back)})
 	require.ErrorContains(err, "was credited")
 }
@@ -113,8 +113,10 @@ func TestPegOutToThePegAddressIsRefused(t *testing.T) {
 	require.Equal(t, int64(40*doge), h.audit().UnclaimedOnVM)
 }
 
-// A peg-out that can't be paid now doesn't hold up the next one.
-func TestOneStuckPayoutDoesNotBlockTheRest(t *testing.T) {
+// A payout waits while the one before it, which spends the peg's anchor,
+// is unconfirmed: they would conflict. Once it confirms, the rest are paid
+// in turn, each from the next anchor.
+func TestPayoutsWaitForTheAnchor(t *testing.T) {
 	require := require.New(t)
 	h := newHarness(t)
 	alice := h.user(1)
@@ -125,15 +127,20 @@ func TestOneStuckPayoutDoesNotBlockTheRest(t *testing.T) {
 	require.NotEmpty(h.step())
 	h.vm.mine()
 
-	// Paid from the 100 DOGE output; its change is unconfirmed.
-	h.pegOut(90*doge, h.user(2))
+	h.pegOut(60*doge, h.user(2))
 	require.Contains(h.step(), "paid")
-	// Only the 20 DOGE output is confirmed now: 50 must wait, 5 can go.
-	h.pegOut(50*doge, h.user(3))
+	h.pegOut(25*doge, h.user(3))
 	h.pegOut(5*doge, h.user(4))
 	did, err := h.b.step()
-	require.NoError(err)
-	require.Contains(did, "paid")
-	require.Equal(5*doge-h.b.dogeFee, paidTo(h.doge, h.user(4)))
-	require.Zero(paidTo(h.doge, h.user(3)))
+	require.Empty(did)
+	require.ErrorContains(err, "waiting for the payment spending", "the anchor is spent by a payout still in the mempool")
+	h.doge.mine()
+
+	require.Contains(h.step(), "paid")
+	h.doge.mine()
+	require.Contains(h.step(), "paid")
+	h.doge.mine()
+	a := h.audit()
+	require.True(a.solvent(), "%+v", a)
+	require.Zero(a.PendingPegOuts)
 }

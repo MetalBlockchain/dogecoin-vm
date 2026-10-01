@@ -20,6 +20,8 @@ import (
 //	DVMO type hash160      VM peg-out to the reserve; pay this Dogecoin address
 //	DVMR txid              Dogecoin payment for that VM peg-out
 //	DVMF txid vout         Dogecoin refund of a deposit that was not credited
+//	DVMC                   Dogecoin contribution to the peg: operating
+//	                       capital, never credited, never owed, never refunded
 //
 // type is 0 for P2PKH and 1 for P2SH. txids are in internal byte order and
 // vout is little endian.
@@ -29,6 +31,7 @@ var (
 	tagPegOut  = []byte("DVMO")
 	tagPayment = []byte("DVMR")
 	tagRefund  = []byte("DVMF")
+	tagContrib = []byte("DVMC")
 )
 
 const (
@@ -185,6 +188,14 @@ func parsePayment(tx *wire.MsgTx) (chainhash.Hash, bool) {
 }
 
 // parseDestinationTag reads a DVMD or DVMO destination.
+// isContribution reports whether tx carries the DVMC tag: what it pays to
+// the peg address is the peg's own operating capital (the anchor of a new
+// set's first payout, and surplus), not a deposit.
+func isContribution(tx *wire.MsgTx) bool {
+	tag, payload, ok := opReturnData(tx)
+	return ok && bytes.Equal(tag, tagContrib) && len(payload) == 0
+}
+
 func parseDestinationTag(tx *wire.MsgTx, want []byte) (destination, bool) {
 	tag, payload, ok := opReturnData(tx)
 	if !ok || !bytes.Equal(tag, want) {

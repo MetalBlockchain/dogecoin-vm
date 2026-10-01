@@ -430,6 +430,7 @@ func bridgeFlags(fs *flag.FlagSet) *bridge {
 	fs.Int64Var(&b.minPegOut, "min-peg-out", 2*koinuPerDoge, "smallest peg-out paid, in koinu")
 	fs.Int64Var(&b.maxDeposit, "max-deposit", 0, "largest deposit credited, in koinu; larger ones are held for refund (0: no cap)")
 	fs.Int64Var(&b.maxCirculating, "max-circulating", 0, "most DOGE, in koinu, the bridge lets circulate on DogecoinVM (0: no cap)")
+	fs.Int64Var(&b.maxShallow, "max-shallow", 0, "most credited, in total, from deposits short of -confirmations, in koinu (0: the largest confirmation tier's amount)")
 	fs.StringVar(&b.cosignersPath, "cosigners", "", "JSON list of remote signers, [{\"url\": ...}] (from dogevm signer-setup assemble)")
 	fs.StringVar(&b.coordinatorKeyPath, "coordinator-key-file", "", "the coordinator key, to sign requests to the signers (from dogevm signer-setup coordinator)")
 	fs.StringVar(&b.coordinatorTLSCert, "coordinator-tls-cert", "", "the coordinator's transport certificate, for signers over TLS (default: tls.crt next to -coordinator-key-file)")
@@ -464,6 +465,9 @@ func (b *bridge) connect(s *settings, signers *signerSet) error {
 	b.confirmationTiers = tiers
 	if err := b.applyPolicy(signers.Policy); err != nil {
 		return err
+	}
+	if s.dogeNet == "mainnet" {
+		b.confFloor = minMainnetConfirmations
 	}
 	if b.cosignersPath != "" {
 		var err error

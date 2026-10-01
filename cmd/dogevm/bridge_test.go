@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -18,6 +19,21 @@ import (
 // unspent, but not signatures.
 type fakeChain struct {
 	txs []*chainTx
+	// listSpentInMempool makes unspent still list an output a transaction
+	// in the mempool spends, as DogecoinVM's btcd does.
+	listSpentInMempool bool
+}
+
+// spentInBlock reports whether a confirmed transaction spends op.
+func (c *fakeChain) spentInBlock(op wire.OutPoint) bool {
+	for _, t := range c.txs {
+		for _, in := range t.tx.TxIn {
+			if in.PreviousOutPoint == op && t.confirmations > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (c *fakeChain) output(op wire.OutPoint) (*wire.TxOut, bool) {
@@ -70,7 +86,11 @@ func (c *fakeChain) unspent(addresses []btcutil.Address, minConf int64) ([]utxo,
 		hash := t.tx.TxHash()
 		for i, o := range t.tx.TxOut {
 			op := wire.OutPoint{Hash: hash, Index: uint32(i)}
-			if scripts[string(o.PkScript)] && !c.spent(op) {
+			gone := c.spent(op)
+			if c.listSpentInMempool {
+				gone = c.spentInBlock(op)
+			}
+			if scripts[string(o.PkScript)] && !gone {
 				out = append(out, utxo{outPoint: op, value: o.Value, pkScript: o.PkScript, confirmations: t.confirmations})
 			}
 		}
@@ -102,8 +122,38 @@ func (c *fakeChain) send(tx *wire.MsgTx) (chainhash.Hash, error) {
 	if out > in {
 		return chainhash.Hash{}, errors.New("outputs exceed inputs")
 	}
-	c.txs = append(c.txs, &chainTx{tx: tx})
+	c.txs = append(c.txs, &chainTx{tx: tx, time: time.Now().Unix()})
 	return tx.TxHash(), nil
+}
+
+// inUTXOSet is utxoSetter for the fake chain: in a block and not spent by
+// one.
+func (c *fakeChain) inUTXOSet(op wire.OutPoint) (bool, error) {
+	if _, ok := c.output(op); !ok {
+		return false, nil
+	}
+	confirmed := false
+	for _, t := range c.txs {
+		if t.tx.TxHash() == op.Hash {
+			confirmed = t.confirmations > 0
+		}
+		for _, in := range t.tx.TxIn {
+			if in.PreviousOutPoint == op && t.confirmations > 0 {
+				return false, nil // spent in a block
+			}
+		}
+	}
+	return confirmed, nil
+}
+
+// confirmed is confirmer for the fake chain.
+func (c *fakeChain) confirmed(txid chainhash.Hash) (bool, error) {
+	for _, t := range c.txs {
+		if t.tx.TxHash() == txid {
+			return t.confirmations > 0, nil
+		}
+	}
+	return false, nil
 }
 
 // add puts tx on the chain with the given confirmations, without checks.
@@ -126,7 +176,35 @@ type harness struct {
 
 const doge = koinuPerDoge
 
+// newHarness is a bridge whose peg address holds a seed contribution, as a
+// new set's does before its first payout.
 func newHarness(t *testing.T) *harness {
+	h := newBareHarness(t)
+	h.seed()
+	return h
+}
+
+// seedValue is the contribution every harness makes to its peg address
+// first: the anchor of the first payout (pegAnchorOf), owed to no one.
+const seedValue = doge
+
+// seed contributes seedValue to the peg address (DVMC), confirmed before
+// anything else.
+func (h *harness) seed() *wire.MsgTx { return h.contribute(seedValue, 100) }
+
+// contribute pays value to the peg address with the DVMC tag: operating
+// capital.
+func (h *harness) contribute(value, confirmations int64) *wire.MsgTx {
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+	tx.AddTxOut(wire.NewTxOut(value, h.b.signers.pkScript()))
+	tx.AddTxOut(nullData(tagContrib))
+	h.doge.add(tx, confirmations)
+	return tx
+}
+
+// newBareHarness is a bridge with nothing on Dogecoin yet.
+func newBareHarness(t *testing.T) *harness {
 	signers, err := newSignerSet(2, 3)
 	require.NoError(t, err)
 	h := &harness{t: t, vm: &fakeChain{}, doge: &fakeChain{}}
@@ -233,21 +311,27 @@ func TestPegInCreditsOnceAfterConfirmations(t *testing.T) {
 	a := h.audit()
 	require.True(a.solvent())
 	require.Equal(int64(100*doge), a.Circulating)
-	require.Equal(int64(100*doge), a.Locked)
+	require.Equal(int64(100*doge+seedValue), a.Locked)
 	require.Zero(a.PendingPegIns)
-	require.Zero(a.Surplus)
+	require.Equal(int64(seedValue), a.Surplus)
 }
 
 func TestSpoofedReleaseTagIsIgnored(t *testing.T) {
 	require := require.New(t)
 	h := newHarness(t)
-	alice := h.user(1)
+	alice, bob := h.user(1), h.user(2)
+	// Bob holds DOGE on DogecoinVM: every coin there came out of the
+	// reserve.
+	h.deposit(50*doge, &bob, 6)
+	require.NotEmpty(h.step())
+	h.vm.mine()
 	dep := h.deposit(100*doge, &alice, 6)
 
 	// Anyone can pay the reserve with a release tag; it must not count as
 	// crediting the deposit.
+	credit := h.vm.txs[len(h.vm.txs)-1].tx
 	spoof := wire.NewMsgTx(1)
-	spoof.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+	spoof.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: credit.TxHash(), Index: 0}, nil, nil))
 	spoof.AddTxOut(wire.NewTxOut(doge, h.b.signers.pkScript()))
 	spoof.AddTxOut(nullData(encodeRelease(wire.OutPoint{Hash: dep.TxHash(), Index: 0})))
 	h.vm.add(spoof, 1)
@@ -281,8 +365,8 @@ func TestRoundTrip(t *testing.T) {
 	a := h.audit()
 	require.True(a.solvent(), "%+v", a)
 	require.Equal(int64(60*doge), a.Circulating)
-	require.Equal(int64(60*doge), a.Locked)
-	require.Zero(a.Surplus)
+	require.Equal(int64(60*doge+seedValue), a.Locked)
+	require.Equal(int64(seedValue), a.Surplus)
 }
 
 func TestUntaggedDepositsAreNotCredited(t *testing.T) {
@@ -298,7 +382,9 @@ func TestUntaggedDepositsAreNotCredited(t *testing.T) {
 	require.True(a.solvent())
 	require.Zero(a.Circulating)
 	require.Equal(int64(100*doge+doge/2), a.UnclaimedOnDoge)
-	require.Equal(a.UnclaimedOnDoge, a.Surplus)
+	// Owed back as refunds, so not surplus: only the contribution is.
+	require.Equal(int64(seedValue), a.Surplus)
+	require.Equal(int64(seedValue), a.Contributed)
 }
 
 func TestBridgeHaltsWhenInsolvent(t *testing.T) {
@@ -436,7 +522,7 @@ func TestPegOutSpendsPersonalDeposit(t *testing.T) {
 	a := h.audit()
 	require.True(a.solvent(), "%+v", a)
 	require.Equal(int64(40*doge), a.Circulating)
-	require.Equal(int64(40*doge), a.Locked)
+	require.Equal(int64(40*doge+seedValue), a.Locked)
 }
 
 func TestDepositCaps(t *testing.T) {
@@ -500,7 +586,7 @@ func TestRefundHeldDeposit(t *testing.T) {
 	require.Zero(a.UnclaimedOnDoge)
 	require.True(a.solvent(), "%+v", a)
 	require.Equal(int64(50*doge), a.Circulating)
-	require.Equal(int64(50*doge), a.Locked)
+	require.Equal(int64(50*doge+seedValue), a.Locked)
 	_, err = h.b.refund(op, aliceOnDoge, false)
 	require.ErrorContains(err, "already refunded")
 

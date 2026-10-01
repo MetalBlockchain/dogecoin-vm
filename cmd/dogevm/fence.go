@@ -10,9 +10,9 @@ package main
 // signs nothing until its operator restores the log and removes the marker.
 //
 // This catches a stale log once anything signed after it reaches a chain. A
-// signature the coordinator holds back is not visible to it; until
-// DogecoinVM has the anchor rule (every transaction on a chain spends its
-// oldest coin), nothing else keeps that from confirming alongside another.
+// signature the coordinator holds back is not visible to it; the anchor
+// rule (every transaction on a chain spends its oldest coin, oldestCoin)
+// keeps such a transaction from confirming alongside another.
 
 import (
 	"bytes"
@@ -265,6 +265,14 @@ func cmdSignerLog(args []string) error {
 	b := bridgeFlags(fs)
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
+	}
+	// A log checked or rebuilt against the wrong network would be wrong, and
+	// the networks default to testnet: name them, by flag or environment
+	// (a signer's signer.env sets both).
+	named := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { named[f.Name] = true })
+	if !named["doge-network"] && os.Getenv("DOGECOIN_NETWORK") == "" || !named["vm-network"] && os.Getenv("DOGEVM_NETWORK") == "" {
+		return errors.New("name the networks: -doge-network and -vm-network, or DOGECOIN_NETWORK and DOGEVM_NETWORK (a signer's signer.env sets both)")
 	}
 	if err := s.resolve(); err != nil {
 		return err

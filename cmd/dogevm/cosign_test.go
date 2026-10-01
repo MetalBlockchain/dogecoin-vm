@@ -199,7 +199,7 @@ func TestSignerRefusesBadProposals(t *testing.T) {
 		}), "unsigned"},
 		"spends a non-reserve output": {tamper(func(tx *wire.MsgTx) {
 			tx.TxIn[0].PreviousOutPoint = *h.coin()
-		}), "not a confirmed peg output"},
+		}), "the oldest confirmed coin, first"},
 		"unknown deposit": {func() signRequest {
 			r := good
 			r.Action.Deposit = wire.OutPoint{Hash: chainhash.Hash{7}}.String()
@@ -233,41 +233,52 @@ func TestSignerRefusesBadProposals(t *testing.T) {
 func TestSignerWontDoubleSign(t *testing.T) {
 	require := require.New(t)
 	h := newCosignHarness(t)
-	// A second reserve output, so two different releases are possible.
+	// A second reserve output, so two different releases could be built.
 	coinbase := wire.NewMsgTx(1)
-	coinbase.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{1}, wire.MaxPrevOutIndex), []byte{2}, nil))
+	coinbase.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{}, wire.MaxPrevOutIndex), []byte{2}, nil))
 	coinbase.AddTxOut(wire.NewTxOut(9_000_000_000*doge, h.b.signers.pkScript()))
 	h.vm.add(coinbase, 1)
 
 	alice := h.user(1)
 	h.deposit(100*doge, &alice, 6)
-	reserve := h.reserveUTXOs()
-	require.Len(reserve, 2)
-	first, _ := h.releaseRequest(reserve[:1])
-	second, _ := h.releaseRequest(reserve[1:])
+	s, err := h.b.load()
+	require.NoError(err)
+	require.Len(s.reserveUTXOs, 2)
+	anchor := *s.reserveAnchor
+	var other utxo
+	for _, u := range s.reserveUTXOs {
+		if u.outPoint != anchor.outPoint {
+			other = u
+		}
+	}
+	first, _ := h.releaseRequest([]utxo{anchor})
+	second, _ := h.releaseRequest([]utxo{other})
 	r := h.b.cosigners[0]
 
 	sign := func(req signRequest) error {
 		return r.post("/v1/sign", req, &signResponse{})
 	}
 	require.NoError(sign(first))
-	// Could confirm alongside the first: refused.
-	require.ErrorContains(sign(second), "could confirm alongside")
+	// From another coin it could confirm alongside the first: refused, by
+	// the anchor (every release spends the reserve's oldest coin).
+	require.ErrorContains(sign(second), "the oldest confirmed coin")
 	// A different textual encoding of the same deposit is the same action.
 	// The deposit output is vout 0, so appending a zero changes :0 to :00.
 	aliased := second
 	aliased.Action.Deposit += "0"
-	require.ErrorContains(sign(aliased), "could confirm alongside")
+	require.ErrorContains(sign(aliased), "the oldest confirmed coin")
 	// The same transaction again is fine.
 	require.NoError(sign(first))
 
-	// Once the first can no longer confirm (its input is spent by
-	// something else), a replacement may be signed.
+	// Once the first can no longer confirm (its input is spent in a block
+	// by something else), the anchor moves, and a new one may be signed.
 	spend := wire.NewMsgTx(1)
-	spend.AddTxIn(wire.NewTxIn(&reserve[0].outPoint, nil, nil))
-	spend.AddTxOut(wire.NewTxOut(reserve[0].value, h.b.signers.pkScript()))
+	spend.AddTxIn(wire.NewTxIn(&anchor.outPoint, nil, nil))
+	spend.AddTxOut(wire.NewTxOut(anchor.value, h.b.signers.pkScript()))
 	h.vm.add(spend, 1)
-	second, _ = h.releaseRequest(reserve[1:])
+	s, err = h.b.load()
+	require.NoError(err)
+	second, _ = h.releaseRequest([]utxo{*s.reserveAnchor})
 	require.NoError(sign(second))
 
 	// The log survives a restart.
