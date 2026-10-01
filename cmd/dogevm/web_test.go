@@ -174,6 +174,14 @@ func TestPageIDsUnique(t *testing.T) {
 			seen[m[1]] = true
 		}
 		current := regexp.MustCompile(`href="([^"]+)" aria-current="page"`).FindAllStringSubmatch(string(page), -1)
+		inMenu := false
+		for _, l := range siteNav {
+			inMenu = inMenu || l.Path == path
+		}
+		if !inMenu { // a page only the footer links to, such as the terms
+			require.Empty(t, current, path)
+			continue
+		}
 		require.Len(t, current, 1, path)
 		require.Equal(t, path, current[0][1])
 	}
