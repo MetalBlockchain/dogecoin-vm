@@ -738,6 +738,7 @@ func cmdServe(args []string) error {
 	faucetAmount := flags.String("faucet-amount", "100", "DOGE per faucet claim")
 	chainID := flags.String("chain-id", "", "the DogecoinVM chain's ID on Metal, shown on the page")
 	dogeIndexPath := flags.String("doge-index", "", "directory for the wallet's Dogecoin address index (default: dogeindex next to -signers; \"off\" disables Dogecoin balances)")
+	finalityPath := flags.String("finality", "", "file for the finality samples the site shows (default: finality.json next to -doge-index); its directory must be writable")
 	s.register(flags)
 	b := bridgeFlags(flags)
 	health := &healthChecker{b: b}
@@ -819,7 +820,10 @@ func cmdServe(args []string) error {
 			return fmt.Errorf("opening the Dogecoin index: %w", err)
 		}
 		srv.dogeIdx = idx
-		srv.finality = newFinalityMeter(filepath.Join(filepath.Dir(*dogeIndexPath), "finality.json"))
+		if *finalityPath == "" {
+			*finalityPath = filepath.Join(filepath.Dir(*dogeIndexPath), "finality.json")
+		}
+		srv.finality = newFinalityMeter(*finalityPath)
 		go idx.run(make(chan struct{}))
 	}
 

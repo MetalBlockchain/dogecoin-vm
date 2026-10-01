@@ -11,10 +11,16 @@
 # Each service gets a read-only system, no home directories, no new
 # privileges, no capabilities, a private /tmp, a syscall filter, only the
 # network families it uses, and write access only where it writes:
-#   bridge   the secrets directory (pause, lock, the deposit registry)
-#   web      the deposit registry (it registers deposit addresses), its
-#            coin index and finality samples; not the chain configs
+#   bridge   the secrets directory (pause, lock) and the deposit
+#            registry's directory
+#   web      the deposit registry's directory (it registers deposit
+#            addresses), its coin index and its finality samples; nothing
+#            in the secrets directory (the pause file, signer set,
+#            cosigners.json and contribution list stay read-only to it)
 #   monitor  nothing
+# The registry and finality samples must sit in a directory of their own
+# first (deploy/move-web-state.sh): a web server that can write the secrets
+# directory could remove the pause or rewrite the contribution list.
 # The node's own data (database, chain data, plugins) is hidden from all
 # three, the coordinator's key from the web and monitor, and the Telegram
 # token from the bridge and web. If a service doesn't come back up, or
@@ -31,18 +37,36 @@ die() { echo "sandbox-units: $*" >&2; exit 1; }
 [[ $(id -u) == 0 ]] || die "run as root"
 path_of() { echo "/etc/systemd/system/$1.service.d/$DROPIN"; }
 
+web_start=$(systemctl show -p ExecStart --value "$CHAIN-web-main")
+WEB=$(sed -nE 's/.* -listen ([^ ;]+).*/\1/p' <<<"$web_start")
+INDEX=$(sed -nE 's/.* -[a-z]+-index ([^ ;]+).*/\1/p' <<<"$web_start")
+REGISTRY=$(sed -nE 's/.* -deposits ([^ ;]+).*/\1/p' <<<"$web_start")
+FINALITY=$(sed -nE 's/.* -finality ([^ ;]+).*/\1/p' <<<"$web_start")
+[[ -n $WEB ]] || die "can't read the web server's -listen"
+code_now() { curl -s -o /dev/null --max-time 30 -w '%{http_code}' "http://$WEB/api/health" || true; }
+
 if [[ ${1:-} == remove ]]; then
   for u in "${UNITS[@]}"; do rm -f "$(path_of "$u")"; done
   systemctl daemon-reload
   systemctl restart "${UNITS[@]}"
-  echo "sandbox-units: removed"
+  sleep 15
+  for u in "${UNITS[@]}"; do
+    systemctl is-active --quiet "$u" || die "$u didn't come back up without the sandbox: journalctl -u $u"
+  done
+  echo "sandbox-units: removed; /api/health answers $(code_now)"
   exit 0
 fi
 
-web_start=$(systemctl show -p ExecStart --value "$CHAIN-web-main")
-WEB=$(sed -nE 's/.* -listen ([^ ;]+).*/\1/p' <<<"$web_start")
-INDEX=$(sed -nE 's/.* -[a-z]+-index ([^ ;]+).*/\1/p' <<<"$web_start")
-[[ -n $WEB ]] || die "can't read the web server's -listen"
+# The web server writes only directories of its own.
+[[ -n $REGISTRY ]] || die "the web server has no -deposits"
+[[ -n $INDEX && -n $FINALITY ]] || die "the web server needs -doge-index and -finality: run deploy/move-web-state.sh first"
+for dir in "$(dirname "$REGISTRY")" "$(dirname "$FINALITY")"; do
+  case $dir in
+    "$SECRETS" | "$SECRETS"/* | "$STATE" | / | "$(dirname "$STATE")")
+      die "the web server would write $dir, which holds more than its own files: run deploy/move-web-state.sh first" ;;
+  esac
+done
+case $INDEX in "$SECRETS" | "$SECRETS"/*) die "the coin index $INDEX is inside the secrets directory; move it out first" ;; esac
 curl -sf -o /dev/null --max-time 20 "http://$WEB/api/health" || die "the bridge isn't healthy now (http://$WEB/api/health); fix that first"
 
 BACKUP=$(mktemp -d)
@@ -95,12 +119,12 @@ write() {
   mkdir -p "$(dirname "$(path_of "$1")")"
   { common; printf '%s\n' "$2"; } >"$(path_of "$1")"
 }
-write "$CHAIN-bridge-main" "ReadWritePaths=$SECRETS
+write "$CHAIN-bridge-main" "ReadWritePaths=$SECRETS $(dirname "$REGISTRY")
 InaccessiblePaths=-$SECRETS/telegram-token"
-# The web server renames files in the secrets directory (the registry) and
-# beside its index (finality samples), so it can write those directories;
-# everything else stays read-only.
-write "$CHAIN-web-main" "ReadWritePaths=$SECRETS ${INDEX:+-$INDEX} ${INDEX:+$(dirname "$INDEX")}
+# The web server renames files in the registry's directory and beside its
+# finality samples, and writes its coin index; everything else, the
+# secrets directory included, stays read-only to it.
+write "$CHAIN-web-main" "ReadWritePaths=$(dirname "$REGISTRY") -$INDEX $(dirname "$FINALITY")
 ReadOnlyPaths=-$STATE/chain-configs -$STATE/genesis.json -$STATE/chain.json
 InaccessiblePaths=-$SECRETS/separate-signers/coordinator -$SECRETS/telegram-token -$SECRETS/rotation-1"
 write "$CHAIN-monitor-main" "ReadOnlyPaths=$SECRETS
