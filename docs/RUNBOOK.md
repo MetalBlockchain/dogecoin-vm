@@ -92,18 +92,21 @@ With separate signers, each operator first adds `TXID:VOUT DOGEADDR` to their
 `-refund-approvals` file.
 
 A deposit that is still **creditable** (waiting for room under the cap)
-needs `force` at the end of that line, and `-force` on the command. Before
-writing `force`, every operator checks their own signer has never signed a
-release of it:
+needs `force` at the end of each operator's approval line, and `-force` on
+the command, which then takes two runs:
 
-```sh
-grep -c '"release:TXID:VOUT"' /var/lib/dogevm-signer-N/signing-log.json   # must print 0
-```
+1. The first cancels the deposit on DogecoinVM: a small transaction that
+   spends the reserve's anchor (its fee comes from operating capital). Any
+   release of the deposit that someone signed and kept back spends that same
+   anchor, or an earlier one already spent, so once the cancellation is in a
+   block (final on DogecoinVM) no release of the deposit can ever confirm,
+   and no signer will sign one.
+2. Run it again once the cancellation is in a block: the deposit is now
+   held, and is refunded like any held deposit, once it has its
+   confirmations.
 
-A signer refuses to refund a deposit it signed a release for, and never
-credits one it signed a refund for, but a release and a refund are on
-different chains: two signers can't stop a third from having signed the
-other, so all three operators check.
+A signer that signed a release of the deposit refuses both steps; the other
+two can still do them.
 
 ## Suspected compromise of the server
 

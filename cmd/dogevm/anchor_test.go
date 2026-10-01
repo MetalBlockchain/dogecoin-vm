@@ -131,7 +131,7 @@ func TestAnchorMovesOnlyAlongItsLineage(t *testing.T) {
 		return tx
 	}
 	first := spending(x)
-	require.NoError(l.record("payout:w", chainDogecoin, first, 100))
+	require.NoError(l.record("payout:w", chainDogecoin, first, 100, 0))
 	require.Equal(x.String(), l.Anchors[chainDogecoin])
 
 	stillThere := func(op wire.OutPoint) bool { return op == x }
@@ -195,7 +195,7 @@ func TestSignedTransactionIsDeadOnlyOnChainEvidence(t *testing.T) {
 	b := wire.OutPoint{Hash: chainhash.Hash{2}}
 	first := wire.NewMsgTx(1)
 	first.AddTxIn(wire.NewTxIn(&a, nil, nil))
-	require.NoError(l.record("payout:x", chainDogecoin, first, 100))
+	require.NoError(l.record("payout:x", chainDogecoin, first, 100, 0))
 	second := wire.NewMsgTx(1)
 	second.AddTxIn(wire.NewTxIn(&b, nil, nil))
 	none := map[wire.OutPoint]bool{}
@@ -300,9 +300,11 @@ func TestShallowCreditIsCapped(t *testing.T) {
 }
 
 // TestForcedRefundThroughSigners: a deposit waiting under the circulating
-// cap is refunded through signers only with "force", never by one that
-// signed a release of it, and a signer that signed the refund never
-// credits it.
+// cap is refunded through signers only on "force" in each operator's
+// approval, and only after it is cancelled on DogecoinVM, which spends the
+// reserve's anchor, so a release of it someone kept back can never confirm.
+// A signer that signed a release of it signs neither the cancellation nor
+// the refund, and no signer credits a cancelled deposit.
 func TestForcedRefundThroughSigners(t *testing.T) {
 	require := require.New(t)
 	h := newCosignHarness(t)
@@ -311,6 +313,7 @@ func TestForcedRefundThroughSigners(t *testing.T) {
 		c.b.maxCirculating = 1 * doge
 	}
 	alice, back := h.user(1), h.user(9)
+	h.contribute(1*doge, 6) // a cancellation's fee comes from operating capital
 	dep := h.deposit(5*doge, &alice, 6)
 	require.Empty(h.step())
 	op := wire.OutPoint{Hash: dep.TxHash()}
@@ -321,32 +324,37 @@ func TestForcedRefundThroughSigners(t *testing.T) {
 		require.NoError(os.WriteFile(path, []byte(op.String()+" "+backAddr.EncodeAddress()+extra+"\n"), 0o600))
 		c.refundApprovals = path
 	}
-	approve(h.signers[0], "")
-	approve(h.signers[1], "")
+	for _, c := range h.signers {
+		approve(c, "")
+	}
 	_, err = h.b.refund(op, back, true)
-	require.ErrorContains(err, "not held for a refund")
+	require.ErrorContains(err, "hasn't approved a forced refund")
 
+	// Signer 1 once signed a release of it (kept back by someone).
 	h.signers[1].log.Actions[actionRelease+":"+op.String()] = &loggedAction{Txs: []loggedTx{{Txid: "00"}}}
 	for _, c := range h.signers {
 		approve(c, " force")
 	}
-	_, err = h.b.refund(op, back, true) // signers 0 and 2 sign it
-	require.NoError(err)
-	refund := h.doge.txs[len(h.doge.txs)-1].tx
-	_, _, _, err = h.signers[1].check(signRequest{Chain: chainDogecoin, Action: refundAction(op, back), Tx: encodeTx(refund)})
-	require.Error(err)
+	_, err = h.b.refund(op, back, true)
+	require.ErrorIs(err, errCancelSent, "signers 0 and 2 cancel it; signer 1 refuses")
+	require.True(h.signers[0].log.has(actionCancel + ":" + op.String()))
+	require.False(h.signers[1].log.has(actionCancel + ":" + op.String()))
+	h.vm.mine()
 
-	require.True(h.signers[0].log.has(actionRefund + ":" + op.String()))
-	// Kept back rather than sent: signer 0's log alone still stops it
-	// crediting the deposit.
-	h.doge.txs = h.doge.txs[:len(h.doge.txs)-1]
+	_, err = h.b.refund(op, back, true)
+	require.NoError(err, "then 0 and 2 refund it")
+	require.False(h.signers[1].log.has(actionRefund + ":" + op.String()))
+
+	// No signer credits it now.
 	s, err := h.b.load()
 	require.NoError(err)
 	d := deposit{outPoint: op, value: 5 * doge, dest: alice, valid: true, confirmations: 6}
 	tx := h.b.buildRelease([]utxo{*s.reserveAnchor}, s.reserveAnchor.value, d)
 	release := signRequest{Chain: chainDogecoinVM, Tx: encodeTx(tx), Action: action{Kind: actionRelease, Deposit: op.String()}}
-	_, _, _, err = h.signers[0].check(release)
-	require.ErrorContains(err, "never credits it")
+	for _, c := range h.signers {
+		_, _, _, err = c.check(release)
+		require.Error(err)
+	}
 }
 
 // TestStuckPaymentAndHeldDepositAlert: a payout unconfirmed long after it
@@ -391,4 +399,46 @@ func TestStuckPaymentAndHeldDepositAlert(t *testing.T) {
 func TestWalletHistoryIsNeverTruncated(t *testing.T) {
 	require.NoError(t, historyComplete(maxWalletEntries-1))
 	require.ErrorContains(t, historyComplete(maxWalletEntries), "stops rather than miss old payouts")
+}
+
+// TestRefundStaysOwedUntilConfirmed: while a refund is unconfirmed its
+// deposit is still owed (the refund's inputs still count as locked).
+func TestRefundStaysOwedUntilConfirmed(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	alice := h.user(1)
+	held := h.deposit(30*doge, nil, 6) // no destination: held
+	before := h.audit()
+	_, err := h.b.refund(wire.OutPoint{Hash: held.TxHash()}, alice, false)
+	require.NoError(err)
+	during := h.audit()
+	require.Equal(int64(30*doge), during.PendingRefunds)
+	require.Equal(before.Surplus, during.Surplus, "no surplus appears while the refund is unconfirmed")
+	h.doge.mine()
+	after := h.audit()
+	require.Zero(after.PendingRefunds)
+	require.True(after.solvent())
+}
+
+// TestNoRefundAfterARelease: a signer that signed a release of a deposit
+// refuses to refund it even after a policy change makes it look held.
+func TestNoRefundAfterARelease(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	alice, back := h.user(1), h.user(9)
+	dep := h.deposit(3*doge, &alice, 6)
+	op := wire.OutPoint{Hash: dep.TxHash()}
+	c := h.signers[0]
+	c.log.Actions[actionRelease+":"+op.String()] = &loggedAction{Txs: []loggedTx{{Txid: "00"}}}
+	c.b.minDeposit = 5 * doge // now it looks held
+	path := t.TempDir() + "/approvals"
+	backAddr, err := back.address(h.b.dogeParams)
+	require.NoError(err)
+	require.NoError(os.WriteFile(path, []byte(op.String()+" "+backAddr.EncodeAddress()+"\n"), 0o600))
+	c.refundApprovals = path
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(wire.NewTxIn(&op, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(1, back.pkScript()))
+	_, _, _, err = c.check(signRequest{Chain: chainDogecoin, Action: refundAction(op, back), Tx: encodeTx(tx)})
+	require.ErrorContains(err, "signed a release of deposit")
 }

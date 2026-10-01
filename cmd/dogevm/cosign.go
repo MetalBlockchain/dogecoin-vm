@@ -44,6 +44,7 @@ const (
 	actionRelease = "release" // credit a Dogecoin deposit on DogecoinVM
 	actionPayout  = "payout"  // pay a DogecoinVM peg-out on Dogecoin
 	actionRefund  = "refund"  // return a held deposit on Dogecoin
+	actionCancel  = "cancel"  // cancel a creditable deposit on DogecoinVM, before a forced refund
 )
 
 // action is what a proposed transaction is for.
@@ -63,7 +64,7 @@ func refundAction(op wire.OutPoint, dest destination) action {
 // (for example TXID:0 and TXID:00) cannot create separate log entries.
 func (a action) key() (string, error) {
 	switch a.Kind {
-	case actionRelease, actionRefund:
+	case actionRelease, actionRefund, actionCancel:
 		op, err := parseOutPoint(a.Deposit)
 		if err != nil {
 			return "", err
@@ -561,7 +562,11 @@ func (c *cosigner) handleSign(r *http.Request) (any, error) {
 		return nil, err
 	}
 	// Record before answering: if the log cannot be written, sign nothing.
-	if err := c.log.record(key, req.Chain, tx, value); err != nil {
+	var fee int64
+	if req.Action.Kind == actionCancel {
+		fee = c.b.vmFee
+	}
+	if err := c.log.record(key, req.Chain, tx, value, fee); err != nil {
 		return nil, fmt.Errorf("writing the signing log: %w", err)
 	}
 	c.b.logf("signed %s in %v", key, tx.TxHash())
@@ -614,6 +619,30 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 	if err := c.fence(s); err != nil {
 		return nil, nil, 0, err
 	}
+	// Fees this signer signed for that can still confirm count against the
+	// surplus, whether or not anyone has sent them yet.
+	known := map[wire.OutPoint]bool{}
+	for _, coins := range [][]utxo{s.lockedUTXOs, s.reserveUTXOs} {
+		for _, u := range coins {
+			known[u.outPoint] = true
+		}
+	}
+	chainNamed := func(name string) chain {
+		if name == chainDogecoin {
+			return b.doge
+		}
+		return b.vm
+	}
+	except, _ := req.Action.key()
+	onVM := map[string]bool{}
+	for _, t := range s.vmTxs {
+		onVM[t.tx.TxHash().String()] = true
+	}
+	s.pendingFees += c.log.unseenFees(known,
+		func(name, txid string) bool { f := confirmedOn(chainNamed(name)); return f != nil && f(txid) },
+		func(name string, op wire.OutPoint) bool { f := unspentOn(chainNamed(name)); return f != nil && f(op) },
+		except,
+		func(name, txid string) bool { return name == chainDogecoinVM && onVM[txid] })
 	if a := b.audit(s); !a.solvent() {
 		return nil, nil, 0, fmt.Errorf("%w (%+v)", errInsolvent, a)
 	}
@@ -656,6 +685,9 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		}
 		if txid, done := s.refunded[op]; done {
 			return nil, nil, 0, fmt.Errorf("deposit %v was refunded in %v", op, txid)
+		}
+		if isCancelled(s, op) || c.log.has(actionCancel+":"+op.String()) {
+			return nil, nil, 0, fmt.Errorf("deposit %v was cancelled for a refund, so it is never credited", op)
 		}
 		if c.log.has(actionRefund + ":" + op.String()) {
 			// A forced refund this signer signed may still confirm, on
@@ -721,6 +753,47 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 			unspent[u.outPoint] = true
 		}
 
+	case actionCancel:
+		// The first step of a forced refund (bridge.cancel): only on its
+		// operator's "force" approval, never for a deposit this signer
+		// signed a release of, and always spending the reserve's anchor,
+		// so a release of it anyone kept back can never confirm after it.
+		if req.Chain != chainDogecoinVM {
+			return nil, nil, 0, errors.New("a cancellation is a DogecoinVM transaction")
+		}
+		op, err := parseOutPoint(req.Action.Deposit)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if txid, done := s.released[op]; done {
+			return nil, nil, 0, fmt.Errorf("deposit %v was credited in %v", op, txid)
+		}
+		if c.log.has(actionRelease + ":" + op.String()) {
+			return nil, nil, 0, fmt.Errorf("this signer signed a release of deposit %v, so it never cancels it", op)
+		}
+		if _, ok := findDeposit(s.deposits, op); !ok {
+			return nil, nil, 0, fmt.Errorf("deposit %v is not a creditable deposit in this signer's view", op)
+		}
+		if !c.forceApproved(op) {
+			return nil, nil, 0, fmt.Errorf("this signer's operator hasn't approved a forced refund of %v (\"force\" in -refund-approvals)", op)
+		}
+		if err := spendsAnchor(tx, s.reserveAnchor); err != nil {
+			return nil, nil, 0, err
+		}
+		inputs, _, err := pick([]utxo{*s.reserveAnchor})
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if want, err = b.buildCancel(inputs[0], op); err != nil {
+			return nil, nil, 0, err
+		}
+		redeems = [][]byte{b.signers.redeemScript}
+		// The fee leaves the reserve and circulates: it needs the surplus.
+		if a := b.audit(s); a.Surplus < b.vmFee {
+			return nil, nil, 0, fmt.Errorf("the %s DOGE fee is more than the peg's surplus of %s DOGE; contribute first", formatDoge(b.vmFee), formatDoge(a.Surplus))
+		}
+		unspent[s.reserveAnchor.outPoint] = true
+
 	case actionPayout, actionRefund:
 		if req.Chain != chainDogecoin {
 			return nil, nil, 0, fmt.Errorf("a %s is a Dogecoin transaction", req.Action.Kind)
@@ -756,22 +829,23 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 			if dest, err = parseDest(req.Action.To); err != nil {
 				return nil, nil, 0, err
 			}
-			force, err := c.refundApproved(op, dest)
-			if err != nil {
+			// Whatever the deposit looks like now (a policy change can make a
+			// creditable one held), a signer that signed a release of it
+			// never refunds it: the two are on different chains and could
+			// both confirm.
+			if c.log.has(actionRelease + ":" + op.String()) {
+				return nil, nil, 0, fmt.Errorf("this signer signed a release of deposit %v, so it never refunds it", op)
+			}
+			if _, err := c.refundApproved(op, dest); err != nil {
 				return nil, nil, 0, err
 			}
-			d, ok := findDeposit(s.held, op)
-			if !ok && force {
-				// A creditable deposit waiting (for capacity, say) is refunded
-				// only on its operator's explicit "force", and never by a
-				// signer that signed a release of it: that release and this
-				// refund are on different chains and could both confirm.
-				// Every operator checks their own log before approving
-				// (docs/RUNBOOK.md): two signers can't enforce it alone.
-				if d, ok = findDeposit(s.deposits, op); ok && c.log.has(actionRelease+":"+op.String()) {
-					return nil, nil, 0, fmt.Errorf("this signer signed a release of deposit %v, so it never refunds it", op)
-				}
+			// A creditable deposit is never refunded directly: it is
+			// cancelled on DogecoinVM first (actionCancel), which makes it
+			// held, and refunded once that cancellation is in a block.
+			if done, cancelled := s.cancelled[op]; cancelled && !done {
+				return nil, nil, 0, fmt.Errorf("deposit %v's cancellation on DogecoinVM isn't in a block yet", op)
 			}
+			d, ok := findDeposit(s.held, op)
 			if !ok {
 				return nil, nil, 0, fmt.Errorf("deposit %v is not held for a refund in this signer's view", op)
 			}
@@ -929,6 +1003,25 @@ func (c *cosigner) catchUp(s *pegState, req signRequest, tx *wire.MsgTx) (*pegSt
 // refundApproved checks the operator listed this refund in the approvals
 // file. Each line is "TXID:VOUT ADDRESS", and "force" after it to refund a
 // deposit that is still creditable.
+// forceApproved reports whether this signer's operator approved a forced
+// refund of op ("force" at the end of its approval line).
+func (c *cosigner) forceApproved(op wire.OutPoint) bool {
+	if c.refundApprovals == "" {
+		return false
+	}
+	raw, err := os.ReadFile(c.refundApprovals)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 3 && f[0] == op.String() && f[2] == "force" {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *cosigner) refundApproved(op wire.OutPoint, dest destination) (force bool, err error) {
 	if c.refundApprovals == "" {
 		return false, errors.New("this signer approves no refunds (no -refund-approvals file)")
@@ -1020,6 +1113,11 @@ type loggedAction struct {
 type loggedTx struct {
 	Txid   string   `json:"txid"`
 	Inputs []string `json:"inputs"`
+	// Chain and Fee are set for a transaction whose fee comes out of the
+	// peg's surplus (a cancellation): until it is in a block, or can't be,
+	// its fee stays reserved (unseenFees).
+	Chain string `json:"chain,omitempty"`
+	Fee   int64  `json:"fee,omitempty"`
 }
 
 // openSigningLog reads a signer's log. A missing log is an error, never an
@@ -1091,6 +1189,47 @@ func (l *signingLog) normalizeKeys() error {
 }
 
 func (l *signingLog) has(key string) bool { return l.Actions[key] != nil }
+
+// unseenFees is the surplus this signer has already promised: for each
+// action, the largest fee of the transactions it signed for it that could
+// still confirm (not in a block, and no input gone from both its view and
+// its node's UTXO set). Alternatives of one action conflict, so each action
+// counts once; the action being signed (except) isn't counted on top of
+// itself, and a transaction DogecoinVM already shows (shown) has its fee in
+// what circulates already.
+func (l *signingLog) unseenFees(known map[wire.OutPoint]bool, confirmed func(chain, txid string) bool, inChain func(chain string, op wire.OutPoint) bool, except string, shown func(chain, txid string) bool) int64 {
+	var total int64
+actions:
+	for key, a := range l.Actions {
+		if key == except {
+			continue
+		}
+		var most int64
+		for _, t := range a.Txs {
+			if t.Fee > 0 && confirmed != nil && confirmed(t.Chain, t.Txid) {
+				continue actions
+			}
+		}
+		for _, t := range a.Txs {
+			if t.Fee <= 0 || t.Fee <= most {
+				continue
+			}
+			if shown != nil && shown(t.Chain, t.Txid) {
+				continue
+			}
+			live := true
+			for _, in := range t.Inputs {
+				op, err := parseOutPoint(in)
+				live = live && err == nil && (known[op] || inChain != nil && inChain(t.Chain, op))
+			}
+			if live {
+				most = t.Fee
+			}
+		}
+		total += most
+	}
+	return total
+}
 
 // anchorMoved checks tx may use its anchor (first input) on chain, given
 // the anchor this signer last signed with there. It may if they are the
@@ -1204,7 +1343,7 @@ func (l *signingLog) permit(key string, tx *wire.MsgTx, unspent map[wire.OutPoin
 
 // record adds tx to the log, and its first input as the chain's anchor, and
 // writes it out before returning.
-func (l *signingLog) record(key, chain string, tx *wire.MsgTx, value int64) error {
+func (l *signingLog) record(key, chain string, tx *wire.MsgTx, value, fee int64) error {
 	if chain != "" && len(tx.TxIn) > 0 {
 		if l.Anchors == nil {
 			l.Anchors = map[string]string{}
@@ -1217,6 +1356,9 @@ func (l *signingLog) record(key, chain string, tx *wire.MsgTx, value int64) erro
 		l.Actions[key] = a
 	}
 	entry := loggedTx{Txid: tx.TxHash().String()}
+	if fee > 0 {
+		entry.Chain, entry.Fee = chain, fee
+	}
 	for _, in := range tx.TxIn {
 		entry.Inputs = append(entry.Inputs, in.PreviousOutPoint.String())
 	}

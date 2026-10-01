@@ -95,7 +95,7 @@ type pegState struct {
 	reserveCreated int64                  // reserve paid in by consensus (coinbases)
 	reserveUnspent int64                  // reserve still held
 	reserveUTXOs   []utxo
-	vmPending      bool                             // a release is still in the VM mempool
+	vmPending      bool // a release is still in the VM mempool
 	// reserveAnchor and pegAnchor are the oldest confirmed coins of the
 	// reserve and of the peg address. Every release spends reserveAnchor,
 	// and every payout and refund spends pegAnchor, so any two transactions
@@ -103,11 +103,14 @@ type pegState struct {
 	// oldestCoin).
 	reserveAnchor *utxo
 	pegAnchor     *utxo
-	released       map[wire.OutPoint]chainhash.Hash // deposit -> release txid
-	pegOuts        []pegOut
-	deposits       []deposit
-	paid           map[chainhash.Hash]chainhash.Hash // peg-out -> payment txid
-	refunded       map[wire.OutPoint]chainhash.Hash  // deposit -> refund txid
+	released      map[wire.OutPoint]chainhash.Hash // deposit -> release txid
+	// cancelled maps a deposit cancelled on DogecoinVM (before a forced
+	// refund) to whether that cancellation is in a block.
+	cancelled map[wire.OutPoint]bool
+	pegOuts   []pegOut
+	deposits  []deposit
+	paid      map[chainhash.Hash]chainhash.Hash // peg-out -> payment txid
+	refunded  map[wire.OutPoint]chainhash.Hash  // deposit -> refund txid
 	// unconfirmed are Dogecoin payments and refunds not yet in a block.
 	unconfirmed     map[chainhash.Hash]chainTx
 	held            []deposit // deposits not credited: no destination, or outside the limits
@@ -117,6 +120,12 @@ type pegState struct {
 	unclaimedOnDoge int64 // deposits not credited: owed back as refunds
 	unclaimedOnVM   int64 // untagged or too-small payments into the reserve: owed back
 	contributed     int64 // DVMC payments to the peg address: operating capital
+	// pendingRefunds is deposits refunded by a transaction not yet in a
+	// block: still owed until it is (its inputs still count as locked).
+	pendingRefunds int64
+	// pendingFees is the surplus already promised to cancellations signed
+	// but not yet in a block (a signer's unseenFees).
+	pendingFees int64
 	// vmTxs and dogeTxs are the transactions read from each chain, for a
 	// signer's check of its log against them (fence.go).
 	vmTxs, dogeTxs []chainTx
@@ -133,6 +142,8 @@ type audit struct {
 	UnclaimedOnDoge int64 `json:"unclaimedOnDoge"` // part of required: deposits owed back as refunds
 	UnclaimedOnVM   int64 `json:"unclaimedOnVM"`   // part of required: reserve payments owed back
 	Contributed     int64 `json:"contributed"`     // DVMC operating capital paid in
+	PendingRefunds  int64 `json:"pendingRefunds"`  // part of required: refunds sent, not yet in a block
+	PendingFees     int64 `json:"pendingFees"`     // part of required: fees of cancellations signed, not yet in a block
 }
 
 // solvent: what is locked covers what is owed. Negative circulation can't
@@ -208,9 +219,10 @@ func outputsTo(tx *wire.MsgTx, script []byte) (map[wire.OutPoint]bool, int64) {
 func (b *bridge) load() (*pegState, error) {
 	script := b.signers.pkScript()
 	s := &pegState{
-		released: map[wire.OutPoint]chainhash.Hash{},
-		paid:     map[chainhash.Hash]chainhash.Hash{},
-		refunded: map[wire.OutPoint]chainhash.Hash{},
+		cancelled: map[wire.OutPoint]bool{},
+		released:  map[wire.OutPoint]chainhash.Hash{},
+		paid:      map[chainhash.Hash]chainhash.Hash{},
+		refunded:  map[wire.OutPoint]chainhash.Hash{},
 
 		unconfirmed: map[chainhash.Hash]chainTx{},
 	}
@@ -243,6 +255,9 @@ func (b *bridge) load() (*pegState, error) {
 			// Only the signers can spend the reserve.
 			if deposit, ok := parseRelease(t.tx); ok {
 				s.released[deposit] = t.tx.TxHash()
+			}
+			if deposit, ok := parseCancel(t.tx); ok {
+				s.cancelled[deposit] = s.cancelled[deposit] || t.confirmations > 0
 			}
 			if t.confirmations == 0 {
 				s.vmPending = true
@@ -404,7 +419,12 @@ func (b *bridge) load() (*pegState, error) {
 		switch {
 		case s.refunded[d.outPoint] != (chainhash.Hash{}):
 			s.settled = append(s.settled, d)
-		case d.valid:
+			// Owed until the refund is in a block: until then it can be
+			// evicted, and its inputs still count as locked.
+			if _, pending := s.unconfirmed[s.refunded[d.outPoint]]; pending && d.confirmations > 0 {
+				s.pendingRefunds += d.value
+			}
+		case d.valid && !isCancelled(s, d.outPoint):
 			s.deposits = append(s.deposits, d)
 		case s.released[d.outPoint] != (chainhash.Hash{}):
 			// Credited while it was in range (a cap changed since): it
@@ -484,6 +504,8 @@ func (b *bridge) audit(s *pegState) audit {
 		UnclaimedOnDoge: s.unclaimedOnDoge,
 		UnclaimedOnVM:   s.unclaimedOnVM,
 		Contributed:     s.contributed,
+		PendingRefunds:  s.pendingRefunds,
+		PendingFees:     s.pendingFees,
 	}
 	for _, d := range s.deposits {
 		if _, done := s.released[d.outPoint]; !done && d.confirmations > 0 {
@@ -499,7 +521,7 @@ func (b *bridge) audit(s *pegState) audit {
 	// Deposits not credited and payments into the reserve that weren't
 	// valid peg-outs are owed back to whoever paid them, so they are never
 	// surplus.
-	a.Required = a.Circulating + a.PendingPegIns + a.PendingPegOuts + a.UnclaimedOnDoge + a.UnclaimedOnVM
+	a.Required = a.Circulating + a.PendingPegIns + a.PendingPegOuts + a.UnclaimedOnDoge + a.UnclaimedOnVM + a.PendingRefunds + a.PendingFees
 	a.Surplus = a.Locked - a.Required
 	return a
 }
@@ -754,6 +776,9 @@ func (b *bridge) refund(op wire.OutPoint, dest destination, force bool) (chainha
 	if txid, done := s.released[op]; done {
 		return chainhash.Hash{}, fmt.Errorf("already credited in %v", txid)
 	}
+	if done, ok := s.cancelled[op]; ok && !done {
+		return chainhash.Hash{}, errors.New("the deposit's cancellation on DogecoinVM isn't in a block yet; run this again in a moment")
+	}
 	for _, d := range s.held {
 		if d.outPoint == op {
 			if err := b.refundable(d); err != nil {
@@ -767,10 +792,62 @@ func (b *bridge) refund(op wire.OutPoint, dest destination, force bool) (chainha
 			if !force {
 				return chainhash.Hash{}, errCreditable
 			}
-			return b.payFromPeg(s, d.value, dest, encodeRefund(op), refundAction(op, dest))
+			// Still creditable: cancel it on DogecoinVM first. A refund then
+			// follows on the next run, once the cancellation is in a block.
+			txid, err := b.cancel(s, op)
+			if err != nil {
+				return chainhash.Hash{}, err
+			}
+			return txid, errCancelSent
 		}
 	}
 	return chainhash.Hash{}, errNotRefundable
+}
+
+// errCancelSent: a forced refund's first step is done; run it again.
+var errCancelSent = errors.New("cancelled the deposit on DogecoinVM; run the refund again once that is in a block")
+
+// isCancelled reports whether deposit op was cancelled on DogecoinVM (in a
+// block or not): it is never credited, only refunded.
+func isCancelled(s *pegState, op wire.OutPoint) bool {
+	_, ok := s.cancelled[op]
+	return ok
+}
+
+// buildCancel is the unsigned DogecoinVM transaction cancelling deposit op:
+// it spends the reserve's anchor alone, back to the reserve less the fee,
+// tagged with op. Any release of op signed and kept back spends that same
+// anchor (or an earlier one, already spent), so once this is in a block
+// (final on DogecoinVM) no release of op can ever confirm.
+func (b *bridge) buildCancel(anchor utxo, op wire.OutPoint) (*wire.MsgTx, error) {
+	if anchor.value <= b.vmFee {
+		return nil, errors.New("the reserve's anchor is too small to pay a cancellation's fee")
+	}
+	tx := wire.NewMsgTx(wire.TxVersion)
+	tx.AddTxIn(wire.NewTxIn(&anchor.outPoint, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(anchor.value-b.vmFee, b.signers.pkScript()))
+	tx.AddTxOut(nullData(encodeCancel(op)))
+	return tx, nil
+}
+
+// cancel proposes and sends the DogecoinVM cancellation of deposit op.
+func (b *bridge) cancel(s *pegState, op wire.OutPoint) (chainhash.Hash, error) {
+	if s.vmPending {
+		return chainhash.Hash{}, errors.New("a DogecoinVM transaction of the peg is pending; try again in a moment")
+	}
+	if s.reserveAnchor == nil {
+		return chainhash.Hash{}, errors.New("the reserve has no anchor")
+	}
+	tx, err := b.buildCancel(*s.reserveAnchor, op)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+	p := &proposal{Chain: chainDogecoinVM, tx: tx, redeems: [][]byte{b.signers.redeemScript},
+		Action: action{Kind: actionCancel, Deposit: op.String()}}
+	if err := b.authorize(p); err != nil {
+		return chainhash.Hash{}, err
+	}
+	return b.vm.send(tx)
 }
 
 // dogecoinHardDust is Dogecoin Core's DEFAULT_HARD_DUST_LIMIT.

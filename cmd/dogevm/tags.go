@@ -32,6 +32,7 @@ var (
 	tagPayment = []byte("DVMR")
 	tagRefund  = []byte("DVMF")
 	tagContrib = []byte("DVMC")
+	tagCancel  = []byte("DVMX")
 )
 
 const (
@@ -110,6 +111,18 @@ func decodeDestination(payload []byte) (destination, error) {
 
 func encodeRelease(deposit wire.OutPoint) []byte {
 	return encodeOutPointTag(tagRelease, deposit)
+}
+
+// encodeCancel tags DogecoinVM's cancellation of a deposit, before a forced
+// refund: it spends the reserve's anchor, so no release of the deposit the
+// signers kept back can confirm afterwards.
+func encodeCancel(deposit wire.OutPoint) []byte {
+	return encodeOutPointTag(tagCancel, deposit)
+}
+
+// parseCancel reads the deposit a DogecoinVM cancellation cancels.
+func parseCancel(tx *wire.MsgTx) (wire.OutPoint, bool) {
+	return parseOutPointTag(tx, tagCancel)
 }
 
 func encodeRefund(deposit wire.OutPoint) []byte {

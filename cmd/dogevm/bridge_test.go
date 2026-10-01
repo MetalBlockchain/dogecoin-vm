@@ -597,6 +597,7 @@ func TestRefundHeldDeposit(t *testing.T) {
 func TestRefundCreditableDepositNeedsForce(t *testing.T) {
 	require := require.New(t)
 	h := newHarness(t)
+	h.contribute(1*doge, 6) // a cancellation's fee comes from operating capital
 	alice, aliceOnDoge := h.user(1), h.user(2)
 
 	// Waiting for confirmations: the bridge would credit it later.
@@ -605,6 +606,7 @@ func TestRefundCreditableDepositNeedsForce(t *testing.T) {
 		tx := wire.NewMsgTx(1)
 		tx.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
 		tx.AddTxOut(wire.NewTxOut(100*doge, h.b.signers.pkScript()))
+		tx.AddTxOut(nullData(tagContrib))
 		return tx
 	}(), 6)
 	op := wire.OutPoint{Hash: dep.TxHash(), Index: 0}
@@ -612,12 +614,26 @@ func TestRefundCreditableDepositNeedsForce(t *testing.T) {
 	_, err := h.b.refund(op, aliceOnDoge, false)
 	require.ErrorIs(err, errCreditable)
 
+	// Forced: first it is cancelled on DogecoinVM, spending the reserve's
+	// anchor.
 	_, err = h.b.refund(op, aliceOnDoge, true)
-	require.NoError(err)
+	require.ErrorIs(err, errCancelSent)
+	cancelled, ok := parseCancel(h.vm.txs[len(h.vm.txs)-1].tx)
+	require.True(ok)
+	require.Equal(op, cancelled)
+	_, err = h.b.refund(op, aliceOnDoge, true)
+	require.ErrorContains(err, "isn't in a block yet")
+
+	// Once that is in a block, the deposit is held, and refunded like any
+	// held deposit: once it has its confirmations.
+	h.vm.mine()
 	for i := 0; i < 6; i++ {
 		h.doge.mine()
 	}
-	require.Empty(h.step(), "a refunded deposit is never credited")
+	_, err = h.b.refund(op, aliceOnDoge, true)
+	require.NoError(err)
+	h.doge.mine()
+	require.Empty(h.step(), "a cancelled, refunded deposit is never credited")
 
 	_, err = h.b.refund(wire.OutPoint{Index: 9}, aliceOnDoge, false)
 	require.ErrorIs(err, errNotRefundable)
