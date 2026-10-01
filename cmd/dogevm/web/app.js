@@ -844,7 +844,18 @@ $('create-key').addEventListener('click', () => {
   // Never replace a key this browser already holds.
   if (key || store.get(KEY_STORE) || store.get(PASSKEY_STORE)) return;
   setKey(chain.newPrivateKey());
+  protectByDefault();
 });
+
+// protectByDefault offers passkey protection straight away, while the click
+// that made or imported the key still counts as the user's: a key left as
+// plain text in browser storage is readable by anything that can run script
+// on this page or read the profile's files. Declining leaves it stored as it
+// was, with the setup checklist still suggesting it.
+function protectByDefault() {
+  if (!key || !passkey.available() || store.get(PASSKEY_STORE) !== null) return;
+  $('passkey-protect').click();
+}
 
 $('import-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -858,6 +869,7 @@ $('import-form').addEventListener('submit', async (e) => {
       setKey(restored, 'unlocked');
     } else {
       setKey(chain.parseKey(value));
+      protectByDefault();
     }
     // An imported key is one the viewer already has a copy of.
     saveSetup({ backedUp: true });
