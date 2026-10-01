@@ -34,7 +34,7 @@ REASON=${REASON:-"Upgrading the bridge software. Funds are safe; deposits and wi
 
 log() { printf '\n== %s\n' "$*"; }
 die() { echo "upgrade-bridge: $*" >&2; exit 1; }
-as_dogevm() { runuser -u dogevm -- env HOME=$HOME_DIR PATH="$HOME_DIR/go/bin:$PATH" "$@"; }
+as_dogevm() { runuser -u dogevm -- env HOME="$HOME_DIR" PATH="/usr/local/go/bin:$PATH" GOTOOLCHAIN=local "$@"; }
 
 [[ $(id -u) == 0 ]] || die "run as root"
 [[ -f $SET ]] || die "no signer set at $SET"
