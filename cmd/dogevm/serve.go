@@ -628,15 +628,18 @@ func (srv *server) faucetClaim(r *http.Request) (any, error) {
 }
 
 // clientIP is the request's client address. Behind a local reverse proxy it
-// is the first X-Forwarded-For entry.
+// is the last X-Forwarded-For entry, the one that proxy added.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			return strings.TrimSpace(strings.Split(fwd, ",")[0])
+		// The last entry is the one the local proxy added; earlier ones
+		// come from the client and could be anything.
+		if fwd := r.Header.Values("X-Forwarded-For"); len(fwd) > 0 {
+			parts := strings.Split(fwd[len(fwd)-1], ",")
+			return strings.TrimSpace(parts[len(parts)-1])
 		}
 	}
 	return host
