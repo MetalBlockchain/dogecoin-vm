@@ -146,9 +146,16 @@ func (b *BlockAdapter) Bytes() []byte {
 
 // Verify checks that the block is valid on top of the last accepted block. It
 // does not modify btcd's chain state.
+// errBroken: accepting a block failed part-way (VM.broken).
+var errBroken = errors.New("accepting a block failed part-way; restart the node so the chain reloads from disk")
+
 func (b *BlockAdapter) Verify(ctx context.Context) error {
 	b.vm.blocksMu.Lock()
 	defer b.vm.blocksMu.Unlock()
+
+	if b.vm.broken.Load() {
+		return errBroken
+	}
 
 	if b.parentID != b.vm.lastAccepted {
 		return fmt.Errorf("%w: parent %s, last accepted %s",
@@ -198,8 +205,12 @@ func (b *BlockAdapter) accept() error {
 			errParentNotAccepted, b.id, b.parentID, b.vm.lastAccepted)
 	}
 
+	if b.vm.broken.Load() {
+		return errBroken
+	}
 	isMainChain, isOrphan, err := b.vm.btcdAdapter.ProcessBlockNoPoW(b.btcBlock)
 	if err != nil {
+		b.vm.broken.Store(true)
 		return fmt.Errorf("failed to connect accepted block %s: %w", b.id, err)
 	}
 	if isOrphan || !isMainChain {
@@ -209,6 +220,7 @@ func (b *BlockAdapter) accept() error {
 	// Accepted is final: write it to disk before saying so, so a crash or
 	// a kill can't take it back.
 	if err := b.vm.btcdAdapter.Persist(); err != nil {
+		b.vm.broken.Store(true)
 		return fmt.Errorf("failed to persist accepted block %s: %w", b.id, err)
 	}
 

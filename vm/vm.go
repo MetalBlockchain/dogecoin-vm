@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	btcd "github.com/MetalBlockchain/dogecoin-vm/btcd"
@@ -58,6 +59,11 @@ type VM struct {
 	// Metal context
 	ctx *snow.Context
 	db  database.Database
+
+	// broken is set when accepting a block failed part-way: btcd's chain in
+	// memory may be ahead of what is on disk and of lastAccepted. Nothing
+	// is built or verified until a restart reloads the chain from disk.
+	broken atomic.Bool
 
 	config *btcd.Config
 
@@ -458,6 +464,9 @@ func (vm *VM) BuildBlock(ctx context.Context) (snowman.Block, error) {
 	vm.buildBlockLock.Lock()
 	defer vm.buildBlockLock.Unlock()
 
+	if vm.broken.Load() {
+		return nil, errBroken
+	}
 	if vm.btcdAdapter == nil {
 		return nil, fmt.Errorf("btcd adapter not initialized")
 	}
