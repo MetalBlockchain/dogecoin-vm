@@ -187,8 +187,8 @@ async function loadInfo() {
   band.hidden = false;
   $('import-key').placeholder = mainnet ? 'Q…, 6… or 64 hex characters' : 'c…, 9… or 64 hex characters';
   if (mainnet) {
-    $('network-name').textContent = 'beta';
-    band.textContent = 'Beta, with real DOGE. Keep amounts small: the bridge is new and has not been audited.';
+    $('network-name').textContent = 'alpha';
+    band.textContent = 'Alpha, with real DOGE. Keep amounts small: the bridge is new and has not been audited.';
   } else {
     $('network-name').textContent = 'testnet';
     band.textContent = 'Testnet. These coins have no value, and the network may be reset at any time.';
@@ -206,7 +206,7 @@ function renderInfo() {
   $('min-pegout').textContent = show(info.minPegOut);
   const limits = [];
   if (chain.parseDoge(info.maxDeposit) > 0n) limits.push(`Deposits over ${show(info.maxDeposit)} are not credited; they are held for a refund.`);
-  if (chain.parseDoge(info.maxCirculating) > 0n) limits.push(`At most ${show(info.maxCirculating)} can be on DogecoinVM in total during the beta.`);
+  if (chain.parseDoge(info.maxCirculating) > 0n) limits.push(`At most ${show(info.maxCirculating)} can be on DogecoinVM in total during the alpha.`);
   $('deposit-limits').textContent = limits.length ? ' ' + limits.join(' ') : '';
   if (info.faucet.enabled) {
     $('faucet-text').textContent =
@@ -222,7 +222,7 @@ function renderPeg() {
   const a = lastAudit;
   if (!a) return;
   $('peg-capacity').textContent = koinu(info.maxCirculating) > 0n
-    ? `Beta capacity: ${show(a.circulating)} of ${show(info.maxCirculating)} in use.`
+    ? `Alpha capacity: ${show(a.circulating)} of ${show(info.maxCirculating)} in use.`
     : '';
   $('locked').textContent = show(a.locked);
   $('circulating').textContent = show(a.circulating);
@@ -328,8 +328,8 @@ async function refreshStatus() {
     const a = s.audit;
     const locked = chain.parseDoge(a.locked);
     const circulating = chain.parseDoge(a.circulating);
-    // During the beta the bars are drawn against the circulating cap, so
-    // they show how much of the beta's room is used.
+    // During the alpha the bars are drawn against the circulating cap, so
+    // they show how much of the alpha's room is used.
     const cap = chain.parseDoge(info.maxCirculating);
     let max = locked > circulating ? locked : circulating;
     if (cap > max) max = cap;
@@ -1149,7 +1149,7 @@ function renderInflight() {
     } else if (d.status === 'crediting' || d.confirmations >= d.required) {
       cards.push(card(title, blocks(`${d.txid}:${d.vout}`, d.required, d.required), `Confirmed. Crediting ${gets} now.`));
     } else if (d.status === 'waiting_for_capacity') {
-      cards.push(card(title, null, 'Confirmed, and waiting for room under the beta limit.'));
+      cards.push(card(title, null, 'Confirmed, and waiting for room under the alpha limit.'));
     } else {
       const left = d.required - d.confirmations;
       cards.push(dogeWaiting(card(title, blocks(`${d.txid}:${d.vout}`, d.confirmations, d.required),
@@ -1273,7 +1273,7 @@ $('move-form').addEventListener('submit', async (e) => {
     const max = chain.parseDoge(info.maxDeposit);
     if (amount < min) throw new Error(`The smallest deposit is ${show(info.minDeposit)}.`);
     if (max > 0n && amount > max) {
-      throw new Error(`During the beta a deposit can be at most ${show(info.maxDeposit)}; a larger one is held for a refund.`);
+      throw new Error(`During the alpha a deposit can be at most ${show(info.maxDeposit)}; a larger one is held for a refund.`);
     }
     if (depositShownFor !== myAddress()) await showDeposit();
     if (depositShownFor !== myAddress()) throw new Error("Your deposit address couldn't be checked, so nothing was sent. See below.");
@@ -1301,7 +1301,7 @@ function depositStatus(d) {
     case 'credited': return { text: `Credited ${show(d.credited)}`, class: 'status-done' };
     case 'refunded': return { text: 'Refunded on Dogecoin', class: 'status-done' };
     case 'held': return { text: `Held for a refund: ${d.reason}`, class: 'status-held' };
-    case 'waiting_for_capacity': return { text: 'Confirmed; waiting for room under the beta limit', class: 'status-waiting' };
+    case 'waiting_for_capacity': return { text: 'Confirmed; waiting for room under the alpha limit', class: 'status-waiting' };
     case 'crediting': return { text: 'Confirmed; crediting now', class: 'status-waiting' };
     default: return { text: `${Math.min(d.confirmations, d.required)} of ${d.required} confirmations`, class: 'status-waiting' };
   }

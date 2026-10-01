@@ -36,8 +36,8 @@
       <dt>Bridge fee on each deposit</dt><dd><span data-info="vmFee" data-doge>…</span> DOGE</dd>
       <dt>Dogecoin fee on each withdrawal</dt><dd><span data-info="dogeFee" data-doge>…</span> DOGE</dd>
       <dt>Smallest deposit</dt><dd><span data-info="minDeposit" data-doge>…</span> DOGE</dd>
-      <dt>Largest deposit (beta)</dt><dd><span data-info="maxDeposit" data-doge>…</span> DOGE; larger ones are held for a refund</dd>
-      <dt>Most DOGE on DogecoinVM in total (beta)</dt><dd><span data-info="maxCirculating" data-doge>…</span> DOGE</dd>
+      <dt>Largest deposit (alpha)</dt><dd><span data-info="maxDeposit" data-doge>…</span> DOGE; larger ones are held for a refund</dd>
+      <dt>Most DOGE on DogecoinVM in total (alpha)</dt><dd><span data-info="maxCirculating" data-doge>…</span> DOGE</dd>
       <dt>Smallest withdrawal</dt><dd><span data-info="minPegOut" data-doge>…</span> DOGE</dd>
       <dt>Signers</dt><dd><span data-info="signers">…</span></dd>
       <dt>Peg address on Dogecoin</dt><dd><code data-info="pegAddress">…</code></dd>
@@ -75,13 +75,13 @@
     <p><strong>No fee is destroyed or leaves the peg.</strong> Fees paid on DogecoinVM stay there as ordinary DOGE, backed by DOGE locked on Dogecoin like any other. The bridge's signers aren't paid from fees yet.</p>
 
     <h2 id="trust">Trust and limits</h2>
-    <div class="callout"><p><strong>Beta, with real DOGE.</strong> The bridge is new and hasn't had an external audit. Keep amounts small.</p></div>
+    <div class="callout"><p><strong>Alpha, with real DOGE.</strong> The bridge is new and hasn't had an external audit. Keep amounts small.</p></div>
     <ul>
       <li><strong>Custody.</strong> The DOGE locked on Dogecoin and the reserve on DogecoinVM are held by a 2-of-3 multisig of peg signers. Any two of them could move it. Signer keys aren't yet held by independent operators; bringing them in is the next phase of the <a href="/roadmap">roadmap</a>, and the software and setup ceremony for it are built.</li>
       <li><strong>What the signers check.</strong> In the separate-signer design, each signer checks every transaction against its own view of both chains, and signs only what is owed, exactly as it would build it.</li>
-      <li><strong>Caps.</strong> During the beta, deposits and the total on DogecoinVM are capped, so the amount at risk is known in advance.</li>
+      <li><strong>Caps.</strong> During the alpha, deposits and the total on DogecoinVM are capped, so the amount at risk is known in advance.</li>
       <li><strong>Pause.</strong> The bridge can be paused in an emergency: nothing is signed or paid, and the site shows why. Deposits and withdrawals made while paused are processed after it resumes.</li>
-      <li><strong>Refunds.</strong> A deposit that can't be credited, for example one over the beta limit, is held on Dogecoin and can be refunded.</li>
+      <li><strong>Refunds.</strong> A deposit that can't be credited, for example one over the alpha limit, is held on Dogecoin and can be refunded.</li>
       <li><strong>Backups.</strong> The bridge's keys and settings are backed up daily, encrypted to a key held off the server, and a backup has been restored and checked against the live keys.</li>
     </ul>
 

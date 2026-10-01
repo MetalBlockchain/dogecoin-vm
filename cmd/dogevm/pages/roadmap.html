@@ -21,7 +21,7 @@
   <p class="meta">Status as of 23 September 2026 · Source: <a href="https://github.com/MetalBlockchain/dogecoin-vm">github.com/MetalBlockchain/dogecoin-vm</a> · Live: <a href="https://metaldoge.com">metaldoge.com</a></p>
 
   <div class="headline">
-    <p><strong>Where it stands.</strong> DogecoinVM is live on Metal Blockchain mainnet with real DOGE, limited by beta caps, and the bridge has completed its first round trip: DOGE moved from Dogecoin to DogecoinVM and back, with every step on chain. The software for independent signers, and the ceremony that brings them in, are built and staged with the live keys. Moving the bridge onto them is next.</p>
+    <p><strong>Where it stands.</strong> DogecoinVM is live on Metal Blockchain mainnet with real DOGE, limited by alpha caps, and the bridge has completed its first round trip: DOGE moved from Dogecoin to DogecoinVM and back, with every step on chain. The software for independent signers, and the ceremony that brings them in, are built and staged with the live keys. Moving the bridge onto them is next.</p>
   </div>
 
   <h2 id="the-first-round-trip">The first round trip</h2>
@@ -77,7 +77,7 @@
       <ol>
         <li>The wallet gives each user a personal Dogecoin deposit address. Its script commits to the user's DogecoinVM address, followed by a 2-of-3 multisig of the peg signers. The browser derives the address itself and refuses to show one that doesn't match.</li>
         <li>After enough Dogecoin confirmations for the deposit's size (1 for 1 DOGE, up to 20 above 50 DOGE), the signers release the same amount from the peg reserve to the user's DogecoinVM address, less a 0.01 DOGE fee. The release is tagged with the deposit it pays for, so a deposit can't be credited twice.</li>
-        <li>Deposits over the beta cap, or arriving while the total is at its limit, are held and can be refunded on Dogecoin.</li>
+        <li>Deposits over the alpha cap, or arriving while the total is at its limit, are held and can be refunded on Dogecoin.</li>
       </ol>
     </section>
     <section>
@@ -134,7 +134,7 @@
   <table>
     <thead><tr><th>Stage</th><th>What you trust</th><th class="state">State</th></tr></thead>
     <tbody>
-      <tr><td>One operator</td><td>The beta: every key on one server, one operator. The caps limit what's at risk.</td><td class="state"><span class="chip wait">Today</span></td></tr>
+      <tr><td>One operator</td><td>The alpha: every key on one server, one operator. The caps limit what's at risk.</td><td class="state"><span class="chip wait">Today</span></td></tr>
       <tr><td>Independent signers</td><td>That fewer than the threshold of known, separate key holders collude: 2 of 3, then 3 of 5.</td><td class="state"><span class="chip wait">Staged</span></td></tr>
       <tr><td>Metal validators as signers</td><td>That no two-thirds of the chain's own validators collude: the same assumption that secures DogecoinVM itself.</td><td class="state"><span class="chip plan">Planned</span></td></tr>
       <tr><td>Bonded signers</td><td>As above, but signing anything the rules don't allow forfeits collateral worth more than the signer could take.</td><td class="state"><span class="chip plan">Planned</span></td></tr>
@@ -149,7 +149,7 @@
   <ul class="plain">
     <li><strong>Consensus-enforced supply.</strong> Blocks that create reserve DOGE in the wrong amount, to the wrong address or at the wrong height are invalid, so no other code path can create DOGE.</li>
     <li><strong>Solvency check before every action.</strong> The bridge audits both chains and moves nothing unless locked DOGE covers circulating DOGE plus pending transfers.</li>
-    <li><strong>Beta caps.</strong> 100 DOGE per deposit and 1,000 DOGE in total, so the most that can be at risk is known in advance.</li>
+    <li><strong>Alpha caps.</strong> 100 DOGE per deposit and 1,000 DOGE in total, so the most that can be at risk is known in advance.</li>
     <li><strong>A wallet that checks the server.</strong> The browser verifies deposit addresses and the value of every coin it spends against the raw transactions, caps fees, and computes transaction IDs itself. A strict content security policy limits what the page can load.</li>
     <li><strong>Refunds and alerts.</strong> Held deposits can be returned on Dogecoin. Health checks alert on insolvency, overdue transfers, stalled nodes and a low validator balance.</li>
     <li><strong>No secrets in the source.</strong> Every commit and push is scanned for private keys, tokens and passwords, both locally and in CI, and GitHub push protection is on. Keys live only on the machines that use them.</li>
@@ -157,7 +157,7 @@
   </ul>
 
   <h2>Known limits</h2>
-  <p>These are the gaps between today's beta and a bridge that can hold significant value. Every phase below closes one or more of them.</p>
+  <p>These are the gaps between today's alpha and a bridge that can hold significant value. Every phase below closes one or more of them.</p>
   <div class="table-wrap">
   <table>
     <thead><tr><th>Limit</th><th>Why it matters</th><th>Closed in</th></tr></thead>
@@ -167,7 +167,7 @@
       <tr><td>The signers credit deposits</td><td>Two signers acting together could credit DOGE on DogecoinVM that isn't backed on Dogecoin.</td><td class="state"><span class="chip plan">Phase 5</span></td></tr>
       <tr><td>No external audit</td><td>The bridge and consensus changes have only been reviewed internally.</td><td class="state"><span class="chip plan">Phase 4</span></td></tr>
       <tr><td>A single Dogecoin node</td><td>The bridge sees Dogecoin through one node it runs itself.</td><td class="state"><span class="chip plan">Phase 4</span></td></tr>
-      <tr><td>Beta caps</td><td>Deliberate for now; they're raised only once the items above are done.</td><td class="state"><span class="chip plan">Phase 7</span></td></tr>
+      <tr><td>Alpha caps</td><td>Deliberate for now; they're raised only once the items above are done.</td><td class="state"><span class="chip plan">Phase 7</span></td></tr>
     </tbody>
   </table>
   </div>
@@ -177,7 +177,7 @@
 
   <ol class="phases">
     <li class="phase done">
-      <div class="phase-head"><h3>Build and launch the beta</h3><span class="chip live">Done</span></div>
+      <div class="phase-head"><h3>Build and launch the alpha</h3><span class="chip live">Done</span></div>
       <ul>
         <li>DogecoinVM running on Metal Blockchain's current release, with Dogecoin chain parameters, fee and dust policy, and the consensus-enforced peg reserve.</li>
         <li>Bridge with personal deposit addresses, solvency audit, caps, refunds and a health monitor.</li>
@@ -201,7 +201,7 @@
         <li><span class="step-tag">Built</span><strong>Staged with the live keys.</strong> Each key in its own signer service and a coordinator that holds none, with the peg address unchanged. Next: move the live bridge onto them.</li>
         <li><span class="step-tag todo">Next</span><strong>Independent operators.</strong> At least two people or organisations besides us, each running their own Dogecoin and DogecoinVM nodes and a signer, brought in through the ceremony. Then grow from 2-of-3 to 3-of-5.</li>
         <li><span class="step-tag todo">Next</span><strong>Metal validators as signers.</strong> A one-command install of the signer, a Dogecoin node and DogecoinVM for Metal validators, who already run the infrastructure. Grow to 5 to 7 validator signers with a two-thirds threshold, so the bridge is secured by the same operators as the chain.</li>
-        <li><span class="step-tag todo">Next</span><strong>Key rotation.</strong> Move the locked DOGE and the reserve to a new signer set made entirely by the new operators, retiring the beta's keys.</li>
+        <li><span class="step-tag todo">Next</span><strong>Key rotation.</strong> Move the locked DOGE and the reserve to a new signer set made entirely by the new operators, retiring the alpha's keys.</li>
         <li><span class="step-tag todo">Next</span>Hardware-backed storage for signer keys.</li>
         <li><span class="step-tag todo">Next</span><strong>At least three validators</strong> run by different operators, with a validator manager, so validators can be added and replaced without relaunching the chain.</li>
       </ul>
@@ -212,7 +212,7 @@
       <ul>
         <li>External security audit of the consensus changes, bridge and wallet signing, then fix what it finds.</li>
         <li>Have signers cross-check Dogecoin through more than one node.</li>
-        <li>More transfers from separate wallets, including a deposit over the beta limit, held, and its refund.</li>
+        <li>More transfers from separate wallets, including a deposit over the alpha limit, held, and its refund.</li>
         <li><span class="step-tag">Built</span>An emergency pause that stops all signing, and a written runbook for incidents, refunds and restoring from the daily encrypted backups. Next: rehearse it once, and a public bug bounty.</li>
         <li><strong>Bonded signers.</strong> Each signer locks collateral that is forfeited if they sign anything the rules don't allow. Theft stays possible in principle, but it becomes costly.</li>
         <li><strong>Delays on large withdrawals.</strong> Withdrawals above a set size wait a few hours before they're paid, giving the monitor and the other signers time to pause the bridge if anything looks wrong.</li>
