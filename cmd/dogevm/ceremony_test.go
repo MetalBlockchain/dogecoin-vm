@@ -146,6 +146,7 @@ func TestSignerCeremony(t *testing.T) {
 		log, err := openSigningLog(filepath.Join(dir, signingLogKey))
 		require.NoError(err)
 		c := &cosigner{b: &own, key: key, log: log}
+		setAnchors(t, c) // signer-log anchors -set
 		srv := httptest.NewServer(c.handler())
 		t.Cleanup(srv.Close)
 		h.signers = append(h.signers, c)

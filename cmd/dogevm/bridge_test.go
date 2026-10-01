@@ -591,7 +591,14 @@ func TestRefundHeldDeposit(t *testing.T) {
 	require.Empty(h.step())
 	require.Equal(int64(150*doge), h.audit().UnclaimedOnDoge)
 
+	// It names a destination, so it is cancelled on DogecoinVM first: a
+	// release of it someone kept back could otherwise still confirm.
 	_, err := h.b.refund(op, aliceOnDoge, false)
+	require.ErrorIs(err, errCancelSent)
+	_, err = h.b.refund(op, aliceOnDoge, false)
+	require.ErrorContains(err, "isn't in a block yet")
+	h.vm.mine()
+	_, err = h.b.refund(op, aliceOnDoge, false)
 	require.NoError(err)
 	require.Equal(int64(149*doge), paidTo(h.doge, aliceOnDoge), "150 DOGE less the 1 DOGE fee")
 	refundTx := h.doge.txs[len(h.doge.txs)-1].tx
@@ -604,7 +611,7 @@ func TestRefundHeldDeposit(t *testing.T) {
 	a := h.audit()
 	require.Zero(a.UnclaimedOnDoge)
 	require.True(a.solvent(), "%+v", a)
-	require.Equal(int64(50*doge), a.Circulating)
+	require.Equal(int64(50*doge)+h.b.vmFee, a.Circulating, "the cancellation's fee left the reserve")
 	require.Equal(int64(50*doge+seedValue), a.Locked)
 	_, err = h.b.refund(op, aliceOnDoge, false)
 	require.ErrorContains(err, "already refunded")

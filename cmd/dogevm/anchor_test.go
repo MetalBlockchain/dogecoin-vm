@@ -60,14 +60,14 @@ func TestColludingSignerCantDoublePay(t *testing.T) {
 	require.NoError(sign(0, kept))
 	require.NoError(sign(1, kept))
 
-	require.ErrorContains(sign(2, h.payoutRequest(req, []utxo{other})), "the oldest confirmed coin")
+	require.ErrorContains(sign(2, h.payoutRequest(req, []utxo{other})), "the anchor, first")
 	h.deposit(20*doge, &alice, 1)
-	require.ErrorContains(sign(2, h.payoutRequest(req, []utxo{other})), "the oldest confirmed coin")
+	require.ErrorContains(sign(2, h.payoutRequest(req, []utxo{other})), "the anchor, first")
 	decoy := wire.NewMsgTx(1)
 	decoy.AddTxIn(wire.NewTxIn(&s.pegAnchor.outPoint, nil, nil))
 	decoy.AddTxOut(wire.NewTxOut(s.pegAnchor.value-pegDust, h.b.signers.pkScript()))
 	h.doge.add(decoy, 0)
-	require.ErrorContains(sign(2, h.payoutRequest(req, []utxo{other})), "the oldest confirmed coin")
+	require.ErrorContains(sign(2, h.payoutRequest(req, []utxo{other})), "the anchor, first")
 }
 
 // TestLateRegisteredDepositCantMoveTheAnchor: a personal deposit address
@@ -111,7 +111,7 @@ func TestLateRegisteredDepositCantMoveTheAnchor(t *testing.T) {
 
 	_, err = h.b.registry.add(mallory)
 	require.NoError(err)
-	require.ErrorContains(sign(2, h.payoutRequest(req, []utxo{oldCoin})), "the oldest confirmed coin")
+	require.ErrorContains(sign(2, h.payoutRequest(req, []utxo{oldCoin})), "the anchor, first")
 }
 
 // TestAnchorMovesOnlyAlongItsLineage: a signer moves off the anchor it
@@ -135,15 +135,14 @@ func TestAnchorMovesOnlyAlongItsLineage(t *testing.T) {
 	require.Equal(x.String(), l.Anchors[chainDogecoin])
 
 	stillThere := func(op wire.OutPoint) bool { return op == x }
-	none := map[wire.OutPoint]*wire.MsgTx{}
-	require.ErrorContains(l.anchorMoved(chainDogecoin, spending(y), stillThere, none, peg), "still unspent")
-	require.NoError(l.anchorMoved(chainDogecoin, first, stillThere, none, peg), "the same anchor again")
-	require.NoError(l.anchorMoved(chainDogecoinVM, spending(y), stillThere, none, peg), "each chain has its own")
+	none := newLineage(nil, peg, 1)
+	require.ErrorContains(l.anchorMoved(chainDogecoin, spending(y), stillThere, none), "still unspent")
+	require.NoError(l.anchorMoved(chainDogecoin, first, stillThere, none), "the same anchor again")
 
 	// A reorganisation removes X's funding: X is gone, but nothing spent
 	// it. Moving to Y is refused.
 	gone := func(wire.OutPoint) bool { return false }
-	require.ErrorContains(l.anchorMoved(chainDogecoin, spending(y), gone, none, peg), "no confirmed transaction it knows spends it")
+	require.ErrorContains(l.anchorMoved(chainDogecoin, spending(y), gone, none), "no confirmed transaction it knows spends it")
 
 	// A confirmed payout spent X and paid change C to the peg; C was then
 	// spent by another, whose change is D. Moving to D is fine; to Y isn't.
@@ -154,23 +153,25 @@ func TestAnchorMovesOnlyAlongItsLineage(t *testing.T) {
 	pay2 := spending(c)
 	pay2.AddTxOut(wire.NewTxOut(330, peg))
 	d := wire.OutPoint{Hash: pay2.TxHash(), Index: 0}
-	spent := map[wire.OutPoint]*wire.MsgTx{x: pay1, c: pay2}
-	require.NoError(l.anchorMoved(chainDogecoin, spending(d), gone, spent, peg))
-	require.ErrorContains(l.anchorMoved(chainDogecoin, spending(y), gone, spent, peg), "no confirmed transaction it knows spends it")
+	line := newLineage([]chainTx{{tx: pay1, confirmations: 2}, {tx: pay2, confirmations: 1}}, peg, 1)
+	require.NoError(l.anchorMoved(chainDogecoin, spending(d), gone, line))
+	require.ErrorContains(l.anchorMoved(chainDogecoin, spending(y), gone, line), "no confirmed transaction it knows spends it")
 }
 
-// TestAnchorFollowsTheSignersOwnChange: once the signers have paid change
-// to the peg address, only coins they made there can anchor. A coin someone
-// else pays to the peg address never does, however old.
+// TestAnchorFollowsTheSignersOwnChange: the anchor is the tip of the
+// line of the signers' own change. A coin someone else pays to the peg
+// address doesn't move it, and an older one a wallet only now lists (a
+// rescan) doesn't move a signer's: it follows its logged anchor forward,
+// along confirmed spends, and refuses anything else.
 func TestAnchorFollowsTheSignersOwnChange(t *testing.T) {
 	require := require.New(t)
-	h := newHarness(t)
+	h := newCosignHarness(t)
 	alice, bob := h.user(1), h.user(2)
 	h.deposit(10*doge, &alice, 9)
 	for h.step() != "" {
 		h.vm.mine()
 	}
-	h.pegOut(5*doge, bob)
+	req := h.pegOut(5*doge, bob)
 	require.Contains(h.step(), "paid")
 	payout := h.doge.txs[len(h.doge.txs)-1].tx
 	h.doge.mine()
@@ -178,11 +179,19 @@ func TestAnchorFollowsTheSignersOwnChange(t *testing.T) {
 	require.NoError(err)
 	require.Equal(payout.TxHash(), s.pegAnchor.outPoint.Hash, "the payout's change is the anchor")
 
-	old := h.contribute(1*doge, 1000)
+	h.contribute(1*doge, 1) // newer: never the anchor
 	s, err = h.b.load()
 	require.NoError(err)
 	require.Equal(payout.TxHash(), s.pegAnchor.outPoint.Hash)
-	require.NotEqual(old.TxHash(), s.pegAnchor.outPoint.Hash)
+
+	old := h.contribute(10*doge, 1000) // older than the seed, listed late
+	oldCoin := utxo{outPoint: wire.OutPoint{Hash: old.TxHash()}, value: 10 * doge, pkScript: old.TxOut[0].PkScript, confirmations: 1000}
+	_ = req
+	other := h.payoutRequest(h.pegOut(5*doge, bob), []utxo{oldCoin})
+	for i, c := range h.signers {
+		_, _, _, err := c.check(other)
+		require.Error(err, "signer %d", i)
+	}
 }
 
 // TestSignedTransactionIsDeadOnlyOnChainEvidence: an earlier signed
@@ -199,10 +208,10 @@ func TestSignedTransactionIsDeadOnlyOnChainEvidence(t *testing.T) {
 	second := wire.NewMsgTx(1)
 	second.AddTxIn(wire.NewTxIn(&b, nil, nil))
 	none := map[wire.OutPoint]bool{}
-	require.ErrorContains(l.permit("payout:x", second, none, nil, func(op wire.OutPoint) bool { return op == a }), "could confirm alongside")
-	require.NoError(l.permit("payout:x", second, none, nil, func(wire.OutPoint) bool { return false }))
-	inBlock := func(txid string) bool { return txid == first.TxHash().String() }
-	require.ErrorContains(l.permit("payout:x", second, none, inBlock, nil), "in a block")
+	require.ErrorContains(l.permit("payout:x", chainDogecoin, second, none, nil, func(op wire.OutPoint) bool { return op == a }), "could confirm alongside")
+	require.NoError(l.permit("payout:x", chainDogecoin, second, none, nil, func(wire.OutPoint) bool { return false }))
+	inBlock := &chainEvidence{listed: map[string]map[string]chainTx{chainDogecoin: {first.TxHash().String(): {tx: first, confirmations: 1}}}}
+	require.ErrorContains(l.permit("payout:x", chainDogecoin, second, none, inBlock, nil), "in a block")
 }
 
 // TestContributionIsOperatingCapital: a DVMC payment to the peg address is
@@ -446,10 +455,25 @@ func TestListedContribution(t *testing.T) {
 	require.Equal(int64(20*doge), h.audit().UnclaimedOnDoge)
 	before := h.audit().Surplus
 	h.b.contributionsPath = t.TempDir() + "/contributions.txt"
+	// A bare transaction ID is refused: it would cover every output of it.
 	require.NoError(os.WriteFile(h.b.contributionsPath, []byte("# a top-up\n"+topUp.TxHash().String()+"\n"), 0o600))
+	_, err := h.b.load()
+	require.ErrorContains(err, "not an output")
+	require.NoError(os.WriteFile(h.b.contributionsPath, []byte("# a top-up\n"+topUp.TxHash().String()+":0\n"), 0o600))
 	a := h.audit()
 	require.Zero(a.UnclaimedOnDoge)
 	require.Equal(before+20*doge, a.Surplus)
+
+	// One transaction paying a top-up and a customer's deposit: listing the
+	// top-up's output leaves the deposit owed.
+	mixed := wire.NewMsgTx(1)
+	mixed.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+	mixed.AddTxOut(wire.NewTxOut(5*doge, h.b.signers.pkScript()))
+	mixed.AddTxOut(wire.NewTxOut(7*doge, h.b.signers.pkScript()))
+	h.doge.add(mixed, 6)
+	require.NoError(os.WriteFile(h.b.contributionsPath, []byte(topUp.TxHash().String()+":0\n"+mixed.TxHash().String()+":0\n"), 0o600))
+	a = h.audit()
+	require.Equal(int64(7*doge), a.UnclaimedOnDoge, "the other output is still owed back")
 }
 
 // TestStuckPayoutIsReplaced: a payout unconfirmed past -bump-after is
@@ -490,6 +514,7 @@ func TestStuckPayoutIsReplaced(t *testing.T) {
 	require.NoError(err)
 	_, _, _, err = h.signers[0].check(signRequest{Chain: chainDogecoin, Fee: 10 * h.b.dogeFee, Tx: encodeTx(tooMuch),
 		Action: action{Kind: actionPayout, PegOut: s.pegOuts[0].txid.String()}})
-	require.ErrorContains(err, "at most")
+	require.ErrorContains(err, "exactly one -doge-fee more")
 	require.Greater(oldFee, int64(0))
+	require.ErrorContains(h.b.checkBumpFee(5*h.b.dogeFee, 4*h.b.dogeFee, 100*doge), "at most")
 }

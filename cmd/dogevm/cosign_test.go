@@ -43,6 +43,8 @@ func newCosignHarness(t *testing.T) *cosignHarness {
 		log, err := createSigningLog(filepath.Join(dir, "signing-log.json"))
 		require.NoError(t, err)
 		c := &cosigner{b: &own, key: key, log: log, token: "token-" + string(rune('a'+i))}
+		// Each operator sets its anchors once the set's coins are there.
+		setAnchors(t, c)
 		srv := httptest.NewServer(c.handler())
 		t.Cleanup(srv.Close)
 		h.signers = append(h.signers, c)
@@ -50,6 +52,17 @@ func newCosignHarness(t *testing.T) *cosignHarness {
 		h.b.cosigners = append(h.b.cosigners, &remoteSigner{URL: srv.URL, Token: c.token})
 	}
 	return h
+}
+
+// setAnchors is signer-log anchors -set: the operator sets the signer's
+// anchors to the tips of the lines, as its own nodes see them.
+func setAnchors(t *testing.T, c *cosigner) {
+	t.Helper()
+	state, err := c.b.load()
+	require.NoError(t, err)
+	_, err = c.fillAnchors(state)
+	require.NoError(t, err)
+	require.NoError(t, c.log.write())
 }
 
 func TestActionKeyIsCanonical(t *testing.T) {
@@ -199,7 +212,7 @@ func TestSignerRefusesBadProposals(t *testing.T) {
 		}), "unsigned"},
 		"spends a non-reserve output": {tamper(func(tx *wire.MsgTx) {
 			tx.TxIn[0].PreviousOutPoint = *h.coin()
-		}), "the oldest confirmed coin, first"},
+		}), "the anchor, first"},
 		"unknown deposit": {func() signRequest {
 			r := good
 			r.Action.Deposit = wire.OutPoint{Hash: chainhash.Hash{7}}.String()
@@ -233,7 +246,9 @@ func TestSignerRefusesBadProposals(t *testing.T) {
 func TestSignerWontDoubleSign(t *testing.T) {
 	require := require.New(t)
 	h := newCosignHarness(t)
-	// A second reserve output, so two different releases could be built.
+	// A second reserve output, in a later block, so two different releases
+	// could be built.
+	h.vm.mine()
 	coinbase := wire.NewMsgTx(1)
 	coinbase.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{}, wire.MaxPrevOutIndex), []byte{2}, nil))
 	coinbase.AddTxOut(wire.NewTxOut(9_000_000_000*doge, h.b.signers.pkScript()))
@@ -261,12 +276,12 @@ func TestSignerWontDoubleSign(t *testing.T) {
 	require.NoError(sign(first))
 	// From another coin it could confirm alongside the first: refused, by
 	// the anchor (every release spends the reserve's oldest coin).
-	require.ErrorContains(sign(second), "the oldest confirmed coin")
+	require.ErrorContains(sign(second), "the anchor, first")
 	// A different textual encoding of the same deposit is the same action.
 	// The deposit output is vout 0, so appending a zero changes :0 to :00.
 	aliased := second
 	aliased.Action.Deposit += "0"
-	require.ErrorContains(sign(aliased), "the oldest confirmed coin")
+	require.ErrorContains(sign(aliased), "the anchor, first")
 	// The same transaction again is fine.
 	require.NoError(sign(first))
 

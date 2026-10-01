@@ -226,24 +226,41 @@ func (h *healthChecker) dogecoinVM() check {
 		return check{"dogecoinvm", false, "DogecoinVM is not answering: " + err.Error()}
 	}
 	// The Metal node's own health includes the VM's: answering RPC isn't
-	// enough (a VM latched after a failed accept still answers).
+	// enough (a VM latched after a failed accept still answers). Not being
+	// able to read it is a failure too: that is the evidence this check
+	// exists for.
 	if h.pChainURI != "" {
-		if u, err := url.Parse(h.pChainURI); err == nil {
-			u.Path = "/ext/health"
-			client := http.Client{Timeout: 10 * time.Second}
-			if resp, err := client.Get(u.String()); err == nil {
-				var body struct {
-					Healthy bool `json:"healthy"`
-				}
-				_ = json.NewDecoder(resp.Body).Decode(&body)
-				resp.Body.Close()
-				if !body.Healthy {
-					return check{"dogecoinvm", false, fmt.Sprintf("block %d, but the Metal node reports unhealthy (%s)", height, u)}
-				}
-			}
+		if err := metalHealthy(h.pChainURI); err != nil {
+			return check{"dogecoinvm", false, fmt.Sprintf("block %d, but %v", height, err)}
 		}
 	}
 	return check{"dogecoinvm", true, fmt.Sprintf("block %d", height)}
+}
+
+// metalHealthy reads the Metal node's /ext/health, on the host of
+// pChainURI, and fails unless it answers that the node is healthy.
+func metalHealthy(pChainURI string) error {
+	u, err := url.Parse(pChainURI)
+	if err != nil {
+		return fmt.Errorf("the P-Chain URI %q: %w", pChainURI, err)
+	}
+	u.Path = "/ext/health"
+	client := http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(u.String())
+	if err != nil {
+		return fmt.Errorf("the Metal node's health can't be read (%s): %w", u, err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Healthy *bool `json:"healthy"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.Healthy == nil {
+		return fmt.Errorf("the Metal node's health (%s) answered %s without a verdict", u, resp.Status)
+	}
+	if !*body.Healthy {
+		return fmt.Errorf("the Metal node reports unhealthy (%s)", u)
+	}
+	return nil
 }
 
 // validatorBalance checks the L1 validator can keep paying its continuous

@@ -11,7 +11,7 @@ package main
 //
 // This catches a stale log once anything signed after it reaches a chain. A
 // signature the coordinator holds back is not visible to it; the anchor
-// rule (every transaction on a chain spends its oldest coin, oldestCoin)
+// rule (every transaction on a chain spends the tip of its line, lineage.go)
 // keeps such a transaction from confirming alongside another.
 
 import (
@@ -137,7 +137,10 @@ func adoptedKey(tx *wire.MsgTx) (string, bool) {
 func (c *cosigner) adopt(s *pegState) ([]string, error) {
 	missing := c.unlogged(s)
 	if len(missing) == 0 {
-		return nil, nil
+		if _, err := c.fillAnchors(s); err != nil {
+			return nil, err
+		}
+		return nil, c.log.write()
 	}
 	byID := map[string]chainTx{}
 	for _, t := range append(append([]chainTx{}, s.vmTxs...), s.dogeTxs...) {
@@ -162,13 +165,78 @@ func (c *cosigner) adopt(s *pegState) ([]string, error) {
 			a = &loggedAction{First: t.time}
 			c.log.Actions[keys[i]] = a
 		}
-		entry := loggedTx{Txid: unsignedHash(t.tx).String()}
+		entry := loggedTx{Txid: unsignedHash(t.tx).String(), Signed: []string{id}}
 		for _, in := range t.tx.TxIn {
 			entry.Inputs = append(entry.Inputs, in.PreviousOutPoint.String())
 		}
 		a.Txs = append(a.Txs, entry)
 	}
+	// The anchors too: a log rebuilt from the chains starts where the
+	// lines are now, not empty (anchorMoved refuses an empty one once a
+	// line has moved).
+	if _, err := c.fillAnchors(s); err != nil {
+		return nil, err
+	}
 	return missing, c.log.write()
+}
+
+// tips is the tip of each chain's anchor line in s (lineage.go), by chain;
+// a chain whose line has no root yet is left out.
+func tips(s *pegState) (map[string]string, error) {
+	out := map[string]string{}
+	for chain, line := range map[string]*lineage{chainDogecoin: s.pegLine, chainDogecoinVM: s.reserveLine} {
+		if line == nil {
+			continue
+		}
+		tip, _, _, ok, err := line.tip()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", chain, err)
+		}
+		if ok {
+			out[chain] = tip.String()
+		}
+	}
+	return out, nil
+}
+
+// fillAnchors sets each chain's anchor in c's log that is empty to the tip
+// of that chain's line, and checks each one already there leads to the
+// tip; it changes nothing on a failure. Run by adopt and by signer-log
+// anchors -set: every signer of a set must end up with the same anchors
+// (deploy/upgrade-bridge.sh compares them), or one could follow a line of
+// its own.
+func (c *cosigner) fillAnchors(s *pegState) (map[string]string, error) {
+	t, err := tips(s)
+	if err != nil {
+		return nil, err
+	}
+	set := map[string]string{}
+	for chain, tip := range t {
+		op, err := parseOutPoint(tip)
+		if err != nil {
+			return nil, err
+		}
+		line := s.pegLine
+		if chain == chainDogecoinVM {
+			line = s.reserveLine
+		}
+		probe := wire.NewMsgTx(1)
+		probe.AddTxIn(wire.NewTxIn(&op, nil, nil))
+		if c.log.Anchors[chain] != "" {
+			if err := c.log.anchorMoved(chain, probe, nil, line); err != nil {
+				return nil, fmt.Errorf("%s: the log's anchor doesn't lead to the line's tip %v: %w", chain, op, err)
+			}
+			continue
+		}
+		set[chain] = tip
+	}
+	if c.log.Anchors == nil {
+		c.log.Anchors = map[string]string{}
+	}
+	for chain, tip := range set {
+		c.log.Anchors[chain] = tip
+	}
+	return t, nil
 }
 
 // txids is every transaction in the log, by its unsigned txid.
@@ -224,6 +292,30 @@ func (c *cosigner) fence(s *pegState) error {
 	return nil
 }
 
+// printTips prints the tips of the anchor lines as the coordinator's nodes
+// see them.
+func printTips(b *bridge, s *settings, signersPath, depositsPath string) error {
+	signers, err := readSignerSet(signersPath)
+	if err != nil {
+		return err
+	}
+	if err := b.connect(s, signers); err != nil {
+		return err
+	}
+	b.registry = registryFor(depositsPath, signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(signersPath), "contributions.txt")
+	state, err := b.load()
+	if err != nil {
+		return err
+	}
+	t, err := tips(state)
+	if err != nil {
+		return err
+	}
+	printJSON(map[string]any{"tips": t})
+	return nil
+}
+
 // syncDir makes a rename or a new file in dir durable.
 func syncDir(dir string) error {
 	d, err := os.Open(dir)
@@ -250,8 +342,8 @@ func syncDir(dir string) error {
 // transaction the key signed: that key's log was lost, and must be restored
 // from a backup instead.
 func cmdSignerLog(args []string) error {
-	const usage = "usage: dogevm signer-log check|init|adopt -signers FILE -key-file FILE [-log FILE]"
-	if len(args) == 0 || (args[0] != "init" && args[0] != "check" && args[0] != "adopt") {
+	const usage = "usage: dogevm signer-log check|init|adopt|anchors -signers FILE -key-file FILE [-log FILE]"
+	if len(args) == 0 || (args[0] != "init" && args[0] != "check" && args[0] != "adopt" && args[0] != "anchors") {
 		return errors.New(usage)
 	}
 	step := args[0]
@@ -261,6 +353,7 @@ func cmdSignerLog(args []string) error {
 	keyFile := fs.String("key-file", "", "this signer's private key")
 	depositsPath := fs.String("deposits", "", "this signer's deposit address registry (default: deposits.json next to -signers)")
 	logPath := fs.String("log", "", "signing log (default: signing-log.json next to -key-file)")
+	setAnchors := fs.Bool("set", false, "anchors: set the log's empty anchors to the lines' tips")
 	s.register(fs)
 	b := bridgeFlags(fs)
 	if err := fs.Parse(args[1:]); err != nil {
@@ -276,6 +369,11 @@ func cmdSignerLog(args []string) error {
 	}
 	if err := s.resolve(); err != nil {
 		return err
+	}
+	if step == "anchors" && *keyFile == "" {
+		// The coordinator's view: the lines' tips alone, to compare with
+		// the signers'.
+		return printTips(b, &s, *signersPath, *depositsPath)
 	}
 	if err := required(map[string]string{"signers": *signersPath, "key-file": *keyFile}); err != nil {
 		return err
@@ -318,6 +416,24 @@ func cmdSignerLog(args []string) error {
 		return err
 	}
 	c := &cosigner{b: b, key: key, log: log}
+	if step == "anchors" {
+		if _, err := os.Lstat(*logPath); err != nil {
+			return fmt.Errorf("there is no signing log at %s", *logPath)
+		}
+		var t map[string]string
+		if *setAnchors {
+			if t, err = c.fillAnchors(state); err != nil {
+				return err
+			}
+			if err := log.write(); err != nil {
+				return err
+			}
+		} else if t, err = tips(state); err != nil {
+			return err
+		}
+		printJSON(map[string]any{"signingLog": *logPath, "anchors": log.Anchors, "tips": t})
+		return nil
+	}
 	missing := c.unlogged(state)
 	if step == "adopt" {
 		adopted, err := c.adopt(state)
