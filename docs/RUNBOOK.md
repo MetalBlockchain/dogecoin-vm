@@ -48,9 +48,12 @@ resumed. Only each signer's own operator resumes it, with `dogevm resume
 
 **What a pause does not do.** It stops the software. It does not stop
 someone who has stolen the keys. While all three signer keys are on one
-server, a compromise of that server exposes them all, and the beta caps
-(100 DOGE per deposit, 1,000 in total) bound the loss. Separate signers
-(Phase 2) are the real fix.
+server, a compromise of that server exposes them all. The beta caps (100
+DOGE per deposit, 1,000 in total) do **not** bound that loss: they are
+enforced by the signer software, not by the peg's script, so whoever holds
+two keys can move everything locked, held deposits included. The caps bound
+what a bug or a misbehaving coordinator can do. Separate signers (Phase 2)
+are the real fix.
 
 ## Alerts
 
@@ -61,7 +64,8 @@ The monitor checks every minute and alerts on Telegram when a check changes.
 | --- | --- | --- |
 | `peg` | Locked DOGE no longer covers circulating DOGE plus pending transfers. The bridge has already stopped itself. | Pause. Run `dv audit -signers $S/signers.json`, and compare proof of reserves on the site with a public Dogecoin explorer. Don't resume until the difference is explained. |
 | `pause` | The bridge is paused. | Expected during an incident. Confirm who paused it and why (`cat $S/paused.json`). |
-| `bridge` | A deposit or withdrawal is well past due. | `journalctl -u dogevm-bridge-main -n 50`. Common causes: a node behind, the circulating cap reached (the deposit waits), or signers unreachable. |
+| `bridge` | A deposit or withdrawal is well past due; a payout or refund has waited unconfirmed for `-stall-blocks` minutes (every later payout waits behind it, since each spends the peg's anchor); a deposit is held and owed back; or one waits for room under the cap. | `journalctl -u dogevm-bridge-main -n 50`. A stuck payout: the bridge hands it back to Dogecoin Core every 10 minutes; check `dogecoin-cli getmempoolentry TXID` and the node's peers. A held deposit: refund it (below). Common causes otherwise: a node behind, or signers unreachable. |
+| `wallet` | Dogecoin Core's wallet holds 100,000 or more transactions. The bridge stops at a million rather than read a truncated history (it would miss old payouts and pay them again). | Find what is filling it (dust sent to deposit addresses?). |
 | `dogecoin` | Dogecoin Core is down or behind. | `systemctl status dogecoind-main`; restart it if stopped. While it syncs, deposits wait and nothing is lost. |
 | `dogecoinvm` | The DogecoinVM node isn't answering. | `systemctl status metal-mainnet`, and its logs. |
 | `validator` | The validator's P-Chain balance is low; at zero the validator stops and the chain halts. | Top up the validator balance on the P-Chain. This isn't scripted yet, so do it before the balance runs out; the alert gives the days left. |
@@ -72,7 +76,10 @@ The monitor checks every minute and alerts on Telegram when a check changes.
 dv refund -signers $S/signers.json -list     # held or not yet credited, and why
 ```
 
-- **Waiting for confirmations** (20): nothing to do.
+- **Waiting for confirmations** (20, or fewer for small deposits under the
+  tiers, never fewer than 6 on mainnet): nothing to do. Small deposits
+  credited early are capped in total (`-max-shallow`, by default the
+  largest tier's amount); the rest wait for all 20.
 - **Waiting for room under the circulating cap:** it's credited when there is room, or refund it.
 - **Above the maximum deposit, below the minimum, or no destination:** refund it.
 
@@ -83,6 +90,20 @@ dv refund -signers $S/signers.json -deposit TXID:VOUT -to DOGEADDR
 
 With separate signers, each operator first adds `TXID:VOUT DOGEADDR` to their
 `-refund-approvals` file.
+
+A deposit that is still **creditable** (waiting for room under the cap)
+needs `force` at the end of that line, and `-force` on the command. Before
+writing `force`, every operator checks their own signer has never signed a
+release of it:
+
+```sh
+grep -c '"release:TXID:VOUT"' /var/lib/dogevm-signer-N/signing-log.json   # must print 0
+```
+
+A signer refuses to refund a deposit it signed a release for, and never
+credits one it signed a refund for, but a release and a refund are on
+different chains: two signers can't stop a third from having signed the
+other, so all three operators check.
 
 ## Suspected compromise of the server
 
@@ -111,9 +132,11 @@ scripts/restore-check.sh ~/DogecoinVM-backups/dogevm-YYYYMMDDTHHMMSSZ.tar.age
 
 Rebuild a host from one:
 
-1. Provision a new Ubuntu 24.04 server. Run the install parts of
-   `deploy/provision.sh` (Go, metalgo, DogecoinVM, Dogecoin Core), and the
-   node setup in `deploy/mainnet.sh`.
+1. Provision a new Ubuntu 24.04 server. Install Go, metalgo, DogecoinVM and
+   Dogecoin Core by hand, following the install steps of
+   `deploy/provision.sh` but **not running it** (it's the testnet
+   provisioner, and refuses on a mainnet host), then the node setup in
+   `deploy/mainnet.sh`.
 2. Copy the backup over and unpack it at the filesystem root. It holds its
    files at their original paths:
 
@@ -130,3 +153,44 @@ Rebuild a host from one:
 
 Only the restored secrets can move funds, so wipe the unpacked copy and
 anything else holding them once the host is running.
+
+## Operating capital (contributions)
+
+Every payout and refund spends the oldest coin at the signer set's own peg
+address first (the anchor), so any two the signers sign conflict and at most
+one confirms; every payout pays change of at least 0.01 DOGE back to the peg
+address, which becomes the next anchor. A payout waits while the one before
+it is unconfirmed. A new set's peg address holds nothing until something is
+paid to it, so it needs one contribution before its first payout.
+
+The peg's surplus is only what operators deliberately contribute. Deposits
+that weren't credited, and payments into the reserve that weren't valid
+peg-outs, are owed back to whoever sent them, so they count as liabilities,
+never surplus. To contribute, pay the peg address with an `OP_RETURN` of
+`DVMC` (hex `44564d43`) and nothing else, for example with
+`createrawtransaction '[]' '{"PEG_ADDRESS": 1, "data": "44564d43"}'`, then
+fund, sign and send it from a Dogecoin Core wallet. It is never credited and
+never refunded, and `/api/audit` shows it as `contributed`. A payment to the
+peg address without a tag is a deposit without a destination: held, and owed
+back as a refund.
+
+## Upgrading the bridge software
+
+`deploy/upgrade-bridge.sh` (as root) upgrades the coordinator and every
+separate signer together, since they must speak the same request format,
+and touches nothing else: the Metal node and Dogecoin Core keep running. It
+pauses the bridge with a public reason, stops the bridge and signers,
+installs the new binary, checks each signer's signing log (rebuilding a
+missing one from the chains with `signer-log adopt`: a signer won't start
+without one), fills in each signer's public key in `cosigners.json` from its
+`card.json` if missing, starts everything, and resumes. On any failure it
+puts the previous binary back and leaves the bridge paused.
+
+**Never run `deploy/provision.sh` on the mainnet host.** It is the testnet
+provisioner: it rewrites the bridge to hold every key in one process and
+restarts the node. It refuses to run where it finds Metal mainnet or
+separate signers.
+
+Before the first upgrade to the anchor rule, check the current set's peg
+address holds a confirmed coin (`dv audit`, or the peg address on an
+explorer); if not, contribute first, or payouts wait.

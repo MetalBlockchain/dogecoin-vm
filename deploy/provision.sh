@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# ##########################################################################
+# WARNING: TESTNET ONLY. NEVER RUN THIS ON THE MAINNET HOST.
+# It rewrites and enables dogevm-bridge and dogevm-web with one process
+# holding every signer key, and restarts the node and the web wallet. To
+# upgrade the mainnet bridge, use deploy/upgrade-bridge.sh.
+# ##########################################################################
+#
 # Provisions a public DogecoinVM test network on a fresh Ubuntu 24.04 x86_64
 # host. Run as root:
 #
@@ -13,6 +20,11 @@
 #
 # This is a test network: one process holds every peg signer key.
 set -euo pipefail
+
+if [[ ${I_KNOW_THIS_IS_TESTNET:-} != yes ]] && { [[ -e /etc/systemd/system/metal-mainnet.service ]] || systemctl list-unit-files 'dogevm-signer-*' --no-legend 2>/dev/null | grep -q .; }; then
+  echo "provision.sh: this host runs Metal mainnet or separate signers; this script is the TESTNET provisioner and must not run here (deploy/upgrade-bridge.sh upgrades the mainnet bridge). Set I_KNOW_THIS_IS_TESTNET=yes only on a test host." >&2
+  exit 1
+fi
 
 REPO=${REPO:-https://github.com/MetalBlockchain/dogecoin-vm}
 BRANCH=${BRANCH:-dogecoin}
