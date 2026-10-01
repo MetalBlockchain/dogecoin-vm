@@ -111,6 +111,10 @@ func (srv *server) refresh() {
 	srv.mu.Unlock()
 }
 
+// staleHealth is how old the health checks may be before /api/health
+// reports them as stale.
+const staleHealth = 5 * time.Minute
+
 func (srv *server) current() *snapshot {
 	srv.mu.RLock()
 	defer srv.mu.RUnlock()
@@ -271,8 +275,14 @@ func (srv *server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// A Dogecoin node catching up, or a deliberate pause, is degraded, not
 	// down: uptime monitors should not page for them.
+	// The checks are as of the last refresh: if refreshing has stalled,
+	// they say nothing about now.
+	checks := snap.checks
+	if age := time.Since(snap.updated); age > staleHealth {
+		checks = append([]check{{"fresh", false, fmt.Sprintf("these checks are %s old: the web server's refresh has stalled", age.Round(time.Second))}}, checks...)
+	}
 	status := "ok"
-	for _, c := range snap.checks {
+	for _, c := range checks {
 		if c.OK {
 			continue
 		}
@@ -288,7 +298,7 @@ func (srv *server) healthHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok": status == "ok", "status": status, "checks": snap.checks, "updated": snap.updated.UTC().Format(time.RFC3339),
+		"ok": status == "ok", "status": status, "checks": checks, "updated": snap.updated.UTC().Format(time.RFC3339),
 	})
 }
 
