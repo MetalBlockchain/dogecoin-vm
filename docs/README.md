@@ -1,49 +1,25 @@
-## Overview
+# DogecoinVM documentation
 
-This repository uses a Makefile to automate building and running a local Metal network environment with the `metal-network-runner`. It also handles log output and cleanup tasks.
+DogecoinVM is a Dogecoin-compatible virtual machine running on Metal Blockchain. It embeds btcd, configured with Dogecoin's parameters, under Metal's Snowman consensus. Blocks are built only when there are transactions to include.
 
-## Targets
+| Page | What it covers |
+| --- | --- |
+| [TESTING.md](TESTING.md) | The live mainnet alpha's IDs, and running the whole stack on your own machine with `scripts/devnet.sh` |
+| [BRIDGE.md](BRIDGE.md) | The two-way peg: deposits, withdrawals, tags, safety properties and trust model |
+| [SIGNERS.md](SIGNERS.md) | Separate signer services and the `dogevm signer-setup` ceremony |
+| [RUNBOOK.md](RUNBOOK.md) | What the operator does when something goes wrong: pause, alerts, refunds, restore |
+| [FIRST-ROUND-TRIP.md](FIRST-ROUND-TRIP.md) | The record of the first mainnet round trip and the move to separate signers |
 
-- **build**  
-  Builds the BTCVM plugin.  
-  ```bash
-  make build
-  ```
+The user-facing docs are at [metaldoge.com/docs](https://metaldoge.com/docs), and the roadmap at [metaldoge.com/roadmap](https://metaldoge.com/roadmap).
 
-- **run_local**  
-  Runs the local network with five nodes, captures logs per node, and performs text substitutions on console output.  
-  ```bash
-  make run_local
-  ```
+## Makefile targets
 
-- **cleanup**  
-  Cleans up running processes and removes artifacts.  
-  ```bash
-  make cleanup
-  ```
+- `make hooks` installs git hooks that refuse commits and pushes containing secrets.
+- `make secretscan` scans every commit on every branch for secrets.
+- `make build` and `make run_local` are inherited from upstream btcvm: they still use btcvm's VM ID and a five-node `metal-network-runner` setup. For a local DogecoinVM network, use `scripts/devnet.sh` as described in [TESTING.md](TESTING.md); it builds the plugin under DogecoinVM's VM ID.
 
-- **compile**  
-  Watches for changes and rebuilds the Go code in `vm/main/`.  
-  ```bash
-  make compile
-  ```
+## How the VM fits together
 
-- **teardown**  
-  Force-kills the network runner process.  
-  ```bash
-  make teardown
-  ```
-
-Use `make <target>` to run the commands above.
-
-
-## How it works
-- For detailed  instructions use `https://build.avax.network/docs/virtual-machines/golang-vms/complex-golang-vm`
-- We create the vm which is under `vm/vm/vm.go`, it initializes the vm and runs the network
-
-- This code defines a Bitcoin-based virtual machine (BTC VM) running on the Metal blockchain platform.
-- It extends Metal’s Snowman consensus by embedding a local btcd instance to maintain Bitcoin’s state.
-- The VM struct manages node context, database, mempool, block building, gossiping, and network interactions.
-- Core methods include Initialize, Shutdown, SetState, LastAccepted, and block parsing/verification routines.
-- This allows for a self-contained environment where Bitcoin transactions and blocks are synchronized using Metal’s consensus and network layers.
-- It is configured to mint a block every 5 seconds by triggering it with a timer
+- `vm/vm.go` creates the VM: node context, database, mempool, block building, gossip and network handlers, and the methods metalgo calls (`Initialize`, `Shutdown`, `SetState`, `LastAccepted`, block parsing and verification).
+- `vm/block_adapter.go` keeps btcd holding only accepted blocks; see "How it works" in the [main README](../README.md).
+- The VM follows the pattern in Avalanche's guide to [complex Go VMs](https://build.avax.network/docs/virtual-machines/golang-vms/complex-golang-vm).
