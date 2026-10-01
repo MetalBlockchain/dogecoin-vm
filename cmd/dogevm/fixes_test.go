@@ -65,7 +65,7 @@ func TestSignerNeverRefundsACreditedDeposit(t *testing.T) {
 		return confirmed
 	}(), 3*doge)
 	require.NoError(err)
-	tx, err := h.b.buildPayout(from, 3*doge, back, encodeRefund(op))
+	tx, err := h.b.buildPayout(from, 3*doge, back, encodeRefund(op), h.b.dogeFee)
 	require.NoError(err)
 	_, _, _, err = c.check(signRequest{Chain: chainDogecoin, Tx: encodeTx(tx), Action: refundAction(op, back)})
 	require.ErrorContains(err, "was credited")

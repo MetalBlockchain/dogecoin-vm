@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
@@ -270,6 +272,10 @@ func sendRaw(rpc *rpcClient, tx *wire.MsgTx) (chainhash.Hash, error) {
 // be imported into its wallet (watch-only is enough) with importaddress.
 type dogeChain struct {
 	rpc *rpcClient
+
+	mu    sync.Mutex
+	hist  *walletHistory
+	known map[string]*wire.MsgTx // wallet transactions read so far, by txid: their bytes never change
 }
 
 // importTx adds one transaction, already in a block, to the wallet without a
@@ -295,38 +301,28 @@ func (c *dogeChain) watch(address btcutil.Address, rescan bool) error {
 
 func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
 	scripts := scriptSet(addresses)
-	var entries []struct {
-		TxID    string `json:"txid"`
-		Address string `json:"address"`
-	}
-	// listtransactions account count skip include_watchonly
-	if err := c.rpc.call(&entries, "listtransactions", "*", maxWalletEntries, 0, true); err != nil {
+	tip, entries, err := c.history()
+	if err != nil {
 		return nil, err
 	}
-	if err := historyComplete(len(entries)); err != nil {
-		return nil, err
+	ids := make([]string, 0, len(entries))
+	for txid := range entries {
+		ids = append(ids, txid)
 	}
-
-	seen := map[string]bool{}
+	sort.Slice(ids, func(i, j int) bool {
+		a, b := entries[ids[i]], entries[ids[j]]
+		if a.time != b.time {
+			return a.time < b.time
+		}
+		return ids[i] < ids[j]
+	})
 	var txs []chainTx
-	for _, e := range entries {
-		if seen[e.TxID] {
-			continue
-		}
-		seen[e.TxID] = true
-
-		var t struct {
-			Hex           string `json:"hex"`
-			Confirmations int64  `json:"confirmations"`
-			Time          int64  `json:"time"`
-		}
-		if err := c.rpc.call(&t, "gettransaction", e.TxID, true); err != nil {
-			return nil, err
-		}
-		if t.Confirmations < 0 {
+	for _, txid := range ids {
+		e := entries[txid]
+		if e.conflicted {
 			continue // conflicts with a transaction in a block: it won't confirm
 		}
-		tx, err := decodeTx(t.Hex)
+		tx, err := c.walletTx(txid)
 		if err != nil {
 			return nil, err
 		}
@@ -334,25 +330,145 @@ func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			txs = append(txs, chainTx{tx: tx, confirmations: t.Confirmations, time: t.Time})
+		if !ok {
+			continue
 		}
+		var confirmations int64
+		if e.height > 0 {
+			confirmations = tip - e.height + 1
+		}
+		txs = append(txs, chainTx{tx: tx, confirmations: confirmations, time: e.time})
 	}
 	return txs, nil
 }
 
-// maxWalletEntries is the most wallet entries the bridge reads in one pass.
-const maxWalletEntries = 1_000_000
-
-// historyComplete checks a read of n wallet entries (asking for at most
-// maxWalletEntries) got them all. Never read a truncated history: past the
-// cap, older payouts would drop out and look unpaid, and be paid again.
-// Stop instead (the monitor alerts well before this, at walletAlertTxs).
-func historyComplete(n int) error {
-	if n >= maxWalletEntries {
-		return fmt.Errorf("the Dogecoin wallet lists %d or more entries, more than the bridge reads at once; it stops rather than miss old payouts (RUNBOOK.md)", maxWalletEntries)
+// walletTx is wallet transaction txid, read from the node once.
+func (c *dogeChain) walletTx(txid string) (*wire.MsgTx, error) {
+	c.mu.Lock()
+	tx, ok := c.known[txid]
+	c.mu.Unlock()
+	if ok {
+		return tx, nil
 	}
-	return nil
+	var t struct {
+		Hex string `json:"hex"`
+	}
+	if err := c.rpc.call(&t, "gettransaction", txid, true); err != nil {
+		return nil, err
+	}
+	tx, err := decodeTx(t.Hex)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if c.known == nil {
+		c.known = map[string]*wire.MsgTx{}
+	}
+	c.known[txid] = tx
+	c.mu.Unlock()
+	return tx, nil
+}
+
+// walletHistory is this process's copy of the wallet's transaction list.
+// Reading the whole list on every pass would cost time in proportion to the
+// wallet's history, which anyone can lengthen by paying the peg's public
+// addresses, and listing it in one call stops at a cap; so after the first
+// read, each pass reads only what changed since the block the last one
+// ended at (listsinceblock). Dogecoin Core 1.14 doesn't say which
+// transactions a reorganisation took out of blocks, so when the block the
+// last read ended at is no longer on the main chain, the whole list is read
+// again; so is a wallet that gained transactions the read didn't show (an
+// import of an old payment).
+type walletHistory struct {
+	last    string // the block the last read ended at
+	entries map[string]historyEntry
+}
+
+type historyEntry struct {
+	height     int64 // the block holding it; 0 if none
+	conflicted bool  // conflicts with a transaction in a block
+	time       int64
+}
+
+// history brings the wallet history up to date and returns the tip's height
+// and a copy of every entry.
+func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tip, err := c.readHistory(false)
+	if err != nil {
+		return 0, nil, err
+	}
+	var info struct {
+		TxCount int `json:"txcount"`
+	}
+	if err := c.rpc.call(&info, "getwalletinfo"); err != nil {
+		return 0, nil, err
+	}
+	if info.TxCount != len(c.hist.entries) {
+		if tip, err = c.readHistory(true); err != nil {
+			return 0, nil, err
+		}
+	}
+	entries := make(map[string]historyEntry, len(c.hist.entries))
+	for txid, e := range c.hist.entries {
+		entries[txid] = e
+	}
+	return tip, entries, nil
+}
+
+// readHistory reads what changed since the last read, or everything if
+// full, there was none, or the block that read ended at is no longer on the
+// main chain, and returns the height of the block it ended at.
+func (c *dogeChain) readHistory(full bool) (int64, error) {
+	if c.hist == nil {
+		c.hist = &walletHistory{}
+	}
+	if !full && c.hist.last != "" {
+		var at struct {
+			Confirmations int64 `json:"confirmations"`
+		}
+		if err := c.rpc.call(&at, "getblockheader", c.hist.last); err != nil || at.Confirmations < 1 {
+			full = true // reorganised away (or unreadable): start again
+		}
+	} else {
+		full = true
+	}
+	from := c.hist.last
+	if full {
+		from = ""
+	}
+	var since struct {
+		Transactions []struct {
+			TxID          string `json:"txid"`
+			Confirmations int64  `json:"confirmations"`
+			Time          int64  `json:"time"`
+		} `json:"transactions"`
+		LastBlock string `json:"lastblock"`
+	}
+	// listsinceblock blockhash target_confirmations include_watchonly
+	if err := c.rpc.call(&since, "listsinceblock", from, 1, true); err != nil {
+		return 0, err
+	}
+	var header struct {
+		Height int64 `json:"height"`
+	}
+	if err := c.rpc.call(&header, "getblockheader", since.LastBlock); err != nil {
+		return 0, err
+	}
+	entries := c.hist.entries
+	if full || entries == nil {
+		entries = map[string]historyEntry{}
+	}
+	for _, e := range since.Transactions {
+		h := historyEntry{conflicted: e.Confirmations < 0, time: e.Time}
+		if e.Confirmations > 0 {
+			h.height = header.Height - e.Confirmations + 1
+		}
+		entries[e.TxID] = h // one entry per output; they agree
+	}
+	c.hist.entries, c.hist.last = entries, since.LastBlock
+	return header.Height, nil
 }
 
 // touches reports whether tx pays to one of scripts or spends an output

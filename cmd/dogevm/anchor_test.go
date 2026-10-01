@@ -17,7 +17,7 @@ func (h *cosignHarness) payoutRequest(req *wire.MsgTx, inputs []utxo) signReques
 	require.NoError(h.t, err)
 	p, ok := findPegOut(s.pegOuts, req.TxHash())
 	require.True(h.t, ok)
-	tx, err := h.b.buildPayout(inputs, p.value, p.dest, encodePayment(p.txid))
+	tx, err := h.b.buildPayout(inputs, p.value, p.dest, encodePayment(p.txid), h.b.dogeFee)
 	require.NoError(h.t, err)
 	return signRequest{Chain: chainDogecoin, Action: action{Kind: actionPayout, PegOut: p.txid.String()}, Tx: encodeTx(tx)}
 }
@@ -394,13 +394,6 @@ func TestStuckPaymentAndHeldDepositAlert(t *testing.T) {
 	require.Contains(c.Detail, "held and owed back")
 }
 
-// TestWalletHistoryIsNeverTruncated: past the cap the read fails rather
-// than drop old payouts, which would then be paid again.
-func TestWalletHistoryIsNeverTruncated(t *testing.T) {
-	require.NoError(t, historyComplete(maxWalletEntries-1))
-	require.ErrorContains(t, historyComplete(maxWalletEntries), "stops rather than miss old payouts")
-}
-
 // TestRefundStaysOwedUntilConfirmed: while a refund is unconfirmed its
 // deposit is still owed (the refund's inputs still count as locked).
 func TestRefundStaysOwedUntilConfirmed(t *testing.T) {
@@ -457,4 +450,46 @@ func TestListedContribution(t *testing.T) {
 	a := h.audit()
 	require.Zero(a.UnclaimedOnDoge)
 	require.Equal(before+20*doge, a.Surplus)
+}
+
+// TestStuckPayoutIsReplaced: a payout unconfirmed past -bump-after is
+// replaced, through the signers, by one spending the same inputs and paying
+// another -doge-fee; a signer refuses a "replacement" with other inputs or
+// a fee past the bound.
+func TestStuckPayoutIsReplaced(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	h.b.bumpAfter = time.Minute
+	alice, bob := h.user(1), h.user(2)
+	h.deposit(50*doge, &alice, 9)
+	for h.step() != "" {
+		h.vm.mine()
+	}
+	h.pegOut(20*doge, bob)
+	require.Contains(h.step(), "paid")
+	first := h.doge.txs[len(h.doge.txs)-1]
+	require.Equal(wire.MaxTxInSequenceNum-2, first.tx.TxIn[0].Sequence, "BIP125: replaceable")
+	require.Empty(h.step(), "not yet stuck")
+
+	first.time = time.Now().Add(-time.Hour).Unix()
+	did := h.step()
+	require.Contains(did, "replaced")
+	second := h.doge.txs[len(h.doge.txs)-1].tx
+	require.Len(second.TxIn, len(first.tx.TxIn))
+	for i := range second.TxIn {
+		require.Equal(first.tx.TxIn[i].PreviousOutPoint, second.TxIn[i].PreviousOutPoint, "the same inputs")
+	}
+	require.Equal(first.tx.TxOut[0].Value-h.b.dogeFee, second.TxOut[0].Value, "another fee, out of the payout")
+
+	// A signer refuses a replacement past the fee bound, or with other inputs.
+	s, err := h.b.load()
+	require.NoError(err)
+	r, oldFee, ok := s.unconfirmedFor(encodePayment(s.pegOuts[0].txid))
+	require.True(ok)
+	tooMuch, err := h.b.buildPayout(s.coinsOf(r.tx), s.pegOuts[0].value, bob, encodePayment(s.pegOuts[0].txid), 10*h.b.dogeFee)
+	require.NoError(err)
+	_, _, _, err = h.signers[0].check(signRequest{Chain: chainDogecoin, Fee: 10 * h.b.dogeFee, Tx: encodeTx(tooMuch),
+		Action: action{Kind: actionPayout, PegOut: s.pegOuts[0].txid.String()}})
+	require.ErrorContains(err, "at most")
+	require.Greater(oldFee, int64(0))
 }

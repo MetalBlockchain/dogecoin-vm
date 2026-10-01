@@ -98,7 +98,26 @@ func (c *fakeChain) unspent(addresses []btcutil.Address, minConf int64) ([]utxo,
 	return out, nil
 }
 
+// replace drops unconfirmed transactions that spend any of tx's inputs, as
+// a node does when a replacement (BIP125) is accepted.
+func (c *fakeChain) replace(tx *wire.MsgTx) {
+	kept := c.txs[:0]
+	for _, t := range c.txs {
+		conflicts := false
+		for _, in := range t.tx.TxIn {
+			for _, mine := range tx.TxIn {
+				conflicts = conflicts || in.PreviousOutPoint == mine.PreviousOutPoint
+			}
+		}
+		if !conflicts || t.confirmations > 0 {
+			kept = append(kept, t)
+		}
+	}
+	c.txs = kept
+}
+
 func (c *fakeChain) send(tx *wire.MsgTx) (chainhash.Hash, error) {
+	c.replace(tx)
 	var in, out int64
 	for i, txIn := range tx.TxIn {
 		prev, ok := c.output(txIn.PreviousOutPoint)

@@ -426,6 +426,7 @@ func bridgeFlags(fs *flag.FlagSet) *bridge {
 	fs.StringVar(&b.tiersFlag, "confirmation-tiers", "", `fewer confirmations for smaller deposits, as DOGE:CONFIRMATIONS pairs, e.g. "1:1,10:6,50:12"; larger deposits need -confirmations`)
 	fs.Int64Var(&b.vmFee, "vm-fee", koinuPerDoge/100, "koinu deducted from each credit for the DogecoinVM fee")
 	fs.Int64Var(&b.dogeFee, "doge-fee", koinuPerDoge, "koinu deducted from each peg-out for the Dogecoin fee")
+	fs.DurationVar(&b.bumpAfter, "bump-after", 30*time.Minute, "replace a payout or refund still unconfirmed after this long with one paying another -doge-fee (0: never)")
 	fs.Int64Var(&b.minDeposit, "min-deposit", koinuPerDoge, "smallest deposit credited, in koinu")
 	fs.Int64Var(&b.minPegOut, "min-peg-out", 2*koinuPerDoge, "smallest peg-out paid, in koinu")
 	fs.Int64Var(&b.maxDeposit, "max-deposit", 0, "largest deposit credited, in koinu; larger ones are held for refund (0: no cap)")

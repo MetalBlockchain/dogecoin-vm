@@ -91,6 +91,9 @@ type proposal struct {
 
 	tx      *wire.MsgTx
 	redeems [][]byte
+	// Fee is a replacement payout's Dogecoin fee (bumpStuck); 0 for the
+	// usual -doge-fee.
+	Fee int64
 }
 
 type signRequest struct {
@@ -98,6 +101,10 @@ type signRequest struct {
 	Action   action   `json:"action"`
 	Tx       string   `json:"tx"` // unsigned
 	Register []string `json:"register,omitempty"`
+	// Fee is the Dogecoin fee of a replacement payout or refund: the same
+	// inputs as the unconfirmed one it replaces, paying more. 0: a first
+	// payment, at -doge-fee.
+	Fee int64 `json:"fee,omitempty"`
 }
 
 type signResponse struct {
@@ -352,7 +359,7 @@ func (r *remoteSigner) do(method, path string, body []byte, result any) error {
 // sign asks the signer to sign p, returning its position in set and its
 // signature for each input.
 func (r *remoteSigner) sign(p *proposal, set *signerSet) (int, [][]byte, error) {
-	req := signRequest{Chain: p.Chain, Action: p.Action, Tx: encodeTx(p.tx)}
+	req := signRequest{Chain: p.Chain, Action: p.Action, Tx: encodeTx(p.tx), Fee: p.Fee}
 	for _, d := range p.Register {
 		req.Register = append(req.Register, encodeDest(d))
 	}
@@ -805,7 +812,7 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 			if err != nil {
 				return nil, nil, 0, err
 			}
-			if paid, done := s.paid[*txid]; done {
+			if paid, done := s.paid[*txid]; done && !(req.Fee > 0 && s.isUnconfirmed(paid)) {
 				return nil, nil, 0, fmt.Errorf("peg-out %v was already paid in %v", txid, paid)
 			}
 			p, ok := findPegOut(s.pegOuts, *txid)
@@ -818,8 +825,12 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 			if err != nil {
 				return nil, nil, 0, err
 			}
+			replacing := false
 			if txid, done := s.refunded[op]; done {
-				return nil, nil, 0, fmt.Errorf("deposit %v was already refunded in %v", op, txid)
+				if !(req.Fee > 0 && s.isUnconfirmed(txid)) {
+					return nil, nil, 0, fmt.Errorf("deposit %v was already refunded in %v", op, txid)
+				}
+				replacing = true
 			}
 			// Signers only refund deposits the bridge will never credit,
 			// never one it has, and only once confirmed.
@@ -845,7 +856,11 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 			if done, cancelled := s.cancelled[op]; cancelled && !done {
 				return nil, nil, 0, fmt.Errorf("deposit %v's cancellation on DogecoinVM isn't in a block yet", op)
 			}
-			d, ok := findDeposit(s.held, op)
+			held := s.held
+			if replacing {
+				held = s.settled // refunded, by the transaction this one replaces
+			}
+			d, ok := findDeposit(held, op)
 			if !ok {
 				return nil, nil, 0, fmt.Errorf("deposit %v is not held for a refund in this signer's view", op)
 			}
@@ -857,24 +872,54 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		if value <= b.dogeFee {
 			return nil, nil, 0, errors.New("the amount does not cover the Dogecoin fee")
 		}
-		var confirmed []utxo
-		for _, u := range s.lockedUTXOs {
-			unspent[u.outPoint] = true
-			if u.confirmations > 0 {
-				confirmed = append(confirmed, u)
+		fee := b.dogeFee
+		var inputs []utxo
+		var total int64
+		if req.Fee > 0 {
+			// A replacement (bumpStuck): exactly the inputs of the
+			// unconfirmed payment it replaces, which it conflicts with, so
+			// at most one of them confirms; a higher fee, within bounds.
+			r, oldFee, ok := s.unconfirmedFor(data)
+			if !ok {
+				return nil, nil, 0, errors.New("a replacement needs an unconfirmed payment to replace")
 			}
-		}
-		if err := spendsAnchor(tx, s.pegAnchor); err != nil {
-			return nil, nil, 0, err
-		}
-		inputs, total, err := pick(confirmed)
-		if err != nil {
-			return nil, nil, 0, err
+			if len(tx.TxIn) != len(r.tx.TxIn) {
+				return nil, nil, 0, errors.New("a replacement must spend exactly what it replaces")
+			}
+			for i, in := range r.tx.TxIn {
+				if tx.TxIn[i].PreviousOutPoint != in.PreviousOutPoint {
+					return nil, nil, 0, errors.New("a replacement must spend exactly what it replaces")
+				}
+			}
+			if err := b.checkBumpFee(req.Fee, oldFee, value); err != nil {
+				return nil, nil, 0, err
+			}
+			if inputs, total, err = pick(s.coinsOf(r.tx)); err != nil {
+				return nil, nil, 0, err
+			}
+			for _, u := range inputs {
+				unspent[u.outPoint] = true
+			}
+			fee = req.Fee
+		} else {
+			var confirmed []utxo
+			for _, u := range s.lockedUTXOs {
+				unspent[u.outPoint] = true
+				if u.confirmations > 0 {
+					confirmed = append(confirmed, u)
+				}
+			}
+			if err := spendsAnchor(tx, s.pegAnchor); err != nil {
+				return nil, nil, 0, err
+			}
+			if inputs, total, err = pick(confirmed); err != nil {
+				return nil, nil, 0, err
+			}
 		}
 		if total < value {
 			return nil, nil, 0, errors.New("inputs do not cover the payment")
 		}
-		if want, err = b.buildPayout(inputs, value, dest, data); err != nil {
+		if want, err = b.buildPayout(inputs, value, dest, data, fee); err != nil {
 			return nil, nil, 0, err
 		}
 		for _, u := range inputs {

@@ -52,6 +52,9 @@ type bridge struct {
 	tiersFlag            string
 	vmFee                int64 // deducted from each credit to pay the VM fee
 	dogeFee              int64 // deducted from each peg-out to pay the Dogecoin fee
+	// bumpAfter is how long a payout or refund may wait unconfirmed before
+	// the bridge replaces it with one paying another -doge-fee (bumpStuck).
+	bumpAfter time.Duration
 	minDeposit           int64
 	minPegOut            int64
 	// maxDeposit and maxCirculating cap what the bridge will credit, so a
@@ -116,6 +119,9 @@ type pegState struct {
 	deposits  []deposit
 	paid      map[chainhash.Hash]chainhash.Hash // peg-out -> payment txid
 	refunded  map[wire.OutPoint]chainhash.Hash  // deposit -> refund txid
+	// pendingCoins are the confirmed peg coins unconfirmed Dogecoin
+	// transactions spend, by outpoint: what a replacement re-spends.
+	pendingCoins map[wire.OutPoint]utxo
 	// vmUnconfirmed are the signers' DogecoinVM transactions (releases,
 	// cancellations) not yet in a block, by txid.
 	vmUnconfirmed map[chainhash.Hash]chainTx
@@ -227,6 +233,7 @@ func outputsTo(tx *wire.MsgTx, script []byte) (map[wire.OutPoint]bool, int64) {
 func (b *bridge) load() (*pegState, error) {
 	script := b.signers.pkScript()
 	s := &pegState{
+		pendingCoins: map[wire.OutPoint]utxo{},
 		vmUnconfirmed: map[chainhash.Hash]chainTx{},
 		cancelled:     map[wire.OutPoint]bool{},
 		released:      map[wire.OutPoint]chainhash.Hash{},
@@ -485,6 +492,7 @@ func (b *bridge) load() (*pegState, error) {
 		for _, in := range t.tx.TxIn {
 			if c, ok := confirmedCoin[in.PreviousOutPoint]; ok && !pendingSpent[in.PreviousOutPoint] {
 				pendingSpent[in.PreviousOutPoint] = true
+				s.pendingCoins[in.PreviousOutPoint] = c
 				s.locked += c.value
 			}
 		}
@@ -559,6 +567,9 @@ func (b *bridge) step() (string, error) {
 		return "", fmt.Errorf("%w (%+v)", errInsolvent, a)
 	}
 	b.rebroadcast(s)
+	if did, err := b.bumpStuck(s); did != "" || err != nil {
+		return did, err
+	}
 
 	var failed error
 	// Releases chain off each other's reserve change, so wait for the
@@ -603,6 +614,142 @@ func (b *bridge) step() (string, error) {
 			formatDoge(p.value-b.dogeFee), p.txid, txid), nil
 	}
 	return "", failed
+}
+
+// maxBumpFees bounds a replacement's fee, in -doge-fees: a stuck payment is
+// bumped by one fee at a time, up to this many in all.
+const maxBumpFees = 4
+
+// checkBumpFee checks fee may replace a payment of value paying oldFee.
+func (b *bridge) checkBumpFee(fee, oldFee, value int64) error {
+	switch {
+	case fee <= oldFee:
+		return fmt.Errorf("a replacement must pay more than %s DOGE", formatDoge(oldFee))
+	case fee > maxBumpFees*b.dogeFee:
+		return fmt.Errorf("a replacement's fee may be at most %s DOGE", formatDoge(maxBumpFees*b.dogeFee))
+	case fee > value/2:
+		return fmt.Errorf("a %s DOGE fee would take more than half of %s DOGE", formatDoge(fee), formatDoge(value))
+	}
+	return nil
+}
+
+// isUnconfirmed reports whether txid is one of the peg's Dogecoin
+// transactions not yet in a block.
+func (s *pegState) isUnconfirmed(txid chainhash.Hash) bool {
+	_, ok := s.unconfirmed[txid]
+	return ok
+}
+
+// coinsOf is the peg coins tx spends, as this node knows them.
+func (s *pegState) coinsOf(tx *wire.MsgTx) []utxo {
+	var coins []utxo
+	for _, in := range tx.TxIn {
+		if c, ok := s.pendingCoins[in.PreviousOutPoint]; ok {
+			coins = append(coins, c)
+		}
+	}
+	return coins
+}
+
+// unconfirmedFor is the unconfirmed peg transaction tagged data paying the
+// highest fee (the latest replacement), and that fee.
+func (s *pegState) unconfirmedFor(data []byte) (chainTx, int64, bool) {
+	var best chainTx
+	var bestFee int64 = -1
+	for _, t := range s.unconfirmed {
+		tag, payload, ok := opReturnData(t.tx)
+		if !ok || !bytes.Equal(append(append([]byte{}, tag...), payload...), data) {
+			continue
+		}
+		var in, out int64
+		for _, c := range s.coinsOf(t.tx) {
+			in += c.value
+		}
+		for _, o := range t.tx.TxOut {
+			out += o.Value
+		}
+		if fee := in - out; fee > bestFee {
+			best, bestFee = t, fee
+		}
+	}
+	return best, bestFee, bestFee >= 0
+}
+
+// bumpStuck replaces one payout or refund still unconfirmed after
+// bumpAfter with one spending the same inputs and paying another
+// -doge-fee, up to maxBumpFees fees and half its value. The two conflict,
+// so at most one confirms. It returns what it did.
+func (b *bridge) bumpStuck(s *pegState) (string, error) {
+	if b.bumpAfter <= 0 {
+		return "", nil
+	}
+	type due struct {
+		value int64
+		dest  destination
+		data  []byte
+		why   action
+	}
+	var todo []due
+	for _, p := range s.pegOuts {
+		if txid, done := s.paid[p.txid]; done && s.isUnconfirmed(txid) {
+			todo = append(todo, due{p.value, p.dest, encodePayment(p.txid), action{Kind: actionPayout, PegOut: p.txid.String()}})
+		}
+	}
+	for _, d := range s.settled {
+		if txid := s.refunded[d.outPoint]; s.isUnconfirmed(txid) {
+			t := s.unconfirmed[txid]
+			if len(t.tx.TxOut) == 0 {
+				continue
+			}
+			dest, err := destinationOfScript(t.tx.TxOut[0].PkScript)
+			if err != nil {
+				continue
+			}
+			todo = append(todo, due{d.value, dest, encodeRefund(d.outPoint), refundAction(d.outPoint, dest)})
+		}
+	}
+	now := time.Now().Unix()
+	for _, d := range todo {
+		r, oldFee, ok := s.unconfirmedFor(d.data)
+		if !ok || r.time == 0 || now-r.time < int64(b.bumpAfter/time.Second) {
+			continue
+		}
+		fee := oldFee + b.dogeFee
+		if err := b.checkBumpFee(fee, oldFee, d.value); err != nil {
+			b.logf("not bumping %v: %v", r.tx.TxHash(), err)
+			continue
+		}
+		inputs := s.coinsOf(r.tx)
+		if len(inputs) != len(r.tx.TxIn) {
+			continue
+		}
+		tx, err := b.buildPayout(inputs, d.value, d.dest, d.data, fee)
+		if err != nil {
+			b.logf("not bumping %v: %v", r.tx.TxHash(), err)
+			continue
+		}
+		redeems := make([][]byte, len(inputs))
+		var register []destination
+		for i, u := range inputs {
+			if redeems[i] = s.redeemFor[string(u.pkScript)]; redeems[i] == nil {
+				return "", fmt.Errorf("no redeem script for peg output %v", u.outPoint)
+			}
+			if dd, ok := s.depositDest[string(u.pkScript)]; ok {
+				register = append(register, dd)
+			}
+		}
+		p := &proposal{Chain: chainDogecoin, Action: d.why, tx: tx, redeems: redeems, Register: register, Fee: fee}
+		if err := b.authorize(p); err != nil {
+			return "", fmt.Errorf("bumping %v: %w", r.tx.TxHash(), err)
+		}
+		txid, err := b.doge.send(tx)
+		if err != nil {
+			return "", fmt.Errorf("bumping %v: %w", r.tx.TxHash(), err)
+		}
+		return fmt.Sprintf("replaced %v, unconfirmed for %s, with %v paying %s DOGE", r.tx.TxHash(),
+			time.Duration(now-r.time)*time.Second, txid, formatDoge(fee)), nil
+	}
+	return "", nil
 }
 
 // logWaiting logs what couldn't be done in a step that did something else.
@@ -703,7 +850,7 @@ func (b *bridge) payFromPeg(s *pegState, value int64, dest destination, data []b
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
-	tx, err := b.buildPayout(inputs, value, dest, data)
+	tx, err := b.buildPayout(inputs, value, dest, data, b.dogeFee)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
@@ -732,11 +879,16 @@ func (b *bridge) payFromPeg(s *pegState, value int64, dest destination, data []b
 // Every payout pays something back to the shared peg address, which every
 // signer watches from the start: that output is the next anchor. Change
 // below pegDust is topped up from the payout.
-func (b *bridge) buildPayout(inputs []utxo, value int64, dest destination, data []byte) (*wire.MsgTx, error) {
+func (b *bridge) buildPayout(inputs []utxo, value int64, dest destination, data []byte, fee int64) (*wire.MsgTx, error) {
 	var total int64
 	tx := wire.NewMsgTx(1) // Dogecoin Core 1.14 relays version 1 and 2
 	for _, u := range inputs {
-		tx.AddTxIn(wire.NewTxIn(&u.outPoint, nil, nil))
+		in := wire.NewTxIn(&u.outPoint, nil, nil)
+		// BIP125: replaceable by one paying more (Dogecoin Core 1.14 has
+		// -mempoolreplacement on by default), so a stuck payout can be
+		// bumped (bumpStuck).
+		in.Sequence = wire.MaxTxInSequenceNum - 2
+		tx.AddTxIn(in)
 		total += u.value
 	}
 	if total < value {
@@ -756,9 +908,9 @@ func (b *bridge) buildPayout(inputs []utxo, value int64, dest destination, data 
 	}
 	tx.AddTxOut(wire.NewTxOut(change, b.signers.pkScript()))
 	tx.AddTxOut(nullData(data))
-	pays := value - b.dogeFee - topUp
+	pays := value - fee - topUp
 	if pays < pegDust {
-		return nil, fmt.Errorf("%s DOGE doesn't cover the %s DOGE fee and the peg's change", formatDoge(value), formatDoge(b.dogeFee))
+		return nil, fmt.Errorf("%s DOGE doesn't cover the %s DOGE fee and the peg's change", formatDoge(value), formatDoge(fee))
 	}
 	tx.TxOut[0].Value = pays
 	return tx, nil

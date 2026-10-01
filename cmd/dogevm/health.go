@@ -166,8 +166,9 @@ const vmStuckAfter = 10 * time.Minute
 const dogecoinBlockTime = time.Minute
 
 // walletAlertTxs is when the wallet's history is large enough to warrant a
-// look: the bridge stops at maxWalletEntries (see txsFor), and outsiders
-// can add entries by paying the peg's public addresses.
+// look: outsiders can add entries by paying the peg's public addresses.
+// Each pass reads only what changed (see walletHistory), but a restart or a
+// reorganisation reads it all, and every entry is held in memory.
 const walletAlertTxs = 100_000
 
 func (h *healthChecker) walletSize() check {
@@ -182,7 +183,7 @@ func (h *healthChecker) walletSize() check {
 		return check{"wallet", false, "can't read the Dogecoin wallet: " + err.Error()}
 	}
 	if info.TxCount >= walletAlertTxs {
-		return check{"wallet", false, fmt.Sprintf("%d transactions: find what is filling it (dust sent to deposit addresses?); the bridge stops at %d", info.TxCount, maxWalletEntries)}
+		return check{"wallet", false, fmt.Sprintf("%d transactions: find what is filling it (dust sent to deposit addresses?)", info.TxCount)}
 	}
 	return check{"wallet", true, fmt.Sprintf("%d transactions", info.TxCount)}
 }
