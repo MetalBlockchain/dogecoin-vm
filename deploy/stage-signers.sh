@@ -30,9 +30,9 @@ DOGEVM=${DOGEVM-/opt/dogevm/bin/dogevm}
 BRIDGE_ENV=${BRIDGE_ENV-/var/lib/metal-main/secrets/bridge.env}
 REGISTRY=${REGISTRY-/var/lib/metal-main/secrets/deposits.json}
 RUN_AS=${RUN_AS-dogevm}
-MAX_DAILY=${MAX_DAILY-1000}
+MAX_DAILY=${MAX_DAILY-4200}
 NETWORK=${NETWORK-mainnet}
-POLICY=${POLICY--confirmations 20 -confirmation-tiers 1:1,10:6,50:12 -max-deposit 10000000000 -max-circulating 100000000000 -doge-fee 10000000}
+POLICY=${POLICY--confirmations 20 -confirmation-tiers 1:1,10:6,50:12 -max-deposit 10000000000 -max-circulating 420000000000 -doge-fee 10000000}
 
 die() { echo "stage-signers: $*" >&2; exit 1; }
 as() { if [ -n "$RUN_AS" ]; then sudo -u "$RUN_AS" "$@"; else "$@"; fi; }

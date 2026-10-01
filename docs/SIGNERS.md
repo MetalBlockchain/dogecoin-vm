@@ -72,7 +72,7 @@ dogevm signer-setup init            # asks: name, URL, make a key or import one
 dogevm signer-setup coordinator
 dogevm signer-setup assemble -required 2 -coordinator-key PUB -coordinator-tls PIN \
   -doge-network mainnet -vm-network mainnet \
-  -confirmations 20 -max-deposit 10000000000 -max-circulating 100000000000 \
+  -confirmations 20 -max-deposit 10000000000 -max-circulating 420000000000 \
   alice.json bob.json carol.json
 # → sends signers.json to every operator, and reads the fingerprint out on a call
 
