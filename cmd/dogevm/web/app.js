@@ -212,6 +212,7 @@ function renderInfo() {
   if (chain.parseDoge(info.maxDeposit) > 0n) limits.push(`Deposits over ${show(info.maxDeposit)} are not credited; they are held for a refund.`);
   if (chain.parseDoge(info.maxCirculating) > 0n) limits.push(`At most ${show(info.maxCirculating)} can be on DogecoinVM in total during the alpha.`);
   $('deposit-limits').textContent = limits.length ? ' ' + limits.join(' ') : '';
+  if (chain.parseDoge(info.maxDeposit) > 0n) $('deposit-limits').append(' ', refundLink());
   if (info.faucet.enabled) {
     $('faucet-text').textContent =
       `The faucet sends ${show(info.faucet.amount)} straight to your DogecoinVM address, once a day.`;
@@ -730,7 +731,7 @@ function setupSteps() {
     },
     {
       title: 'Move it to DogecoinVM',
-      text: 'Move DOGE across the bridge from the Deposit tab. Payments on DogecoinVM are final in about two seconds.',
+      text: 'Move DOGE across the bridge from the Deposit tab. Payments on DogecoinVM are usually final in under a second.',
       done: seenVm === true,
       actions: [['Go to Deposit', () => goTo('deposit', 'move-amount')]],
     },
@@ -1087,6 +1088,14 @@ const minutes = (n) => (n <= 1 ? 'about a minute' : `about ${n} minutes`);
 
 // card builds one in-flight entry: a title, an optional progress row, and
 // a line of detail.
+// refundLink points to where to ask for a held deposit's refund.
+function refundLink() {
+  const a = document.createElement('a');
+  a.href = '/terms#contact';
+  a.textContent = 'How to ask for a refund.';
+  return a;
+}
+
 function card(title, progress, detail, cls = '') {
   const li = document.createElement('li');
   li.className = `inflight-card ${cls}`;
@@ -1149,7 +1158,9 @@ function renderInflight() {
     const gets = showKoinu(credit > 0n ? credit : 0n);
     const title = `Moving ${show(d.amount)} to DogecoinVM`;
     if (d.status === 'held') {
-      cards.push(card(title, null, `Held for a refund: ${d.reason}`, 'held'));
+      const held = card(title, null, `Held for a refund: ${d.reason}.`, 'held');
+      held.querySelector('.inflight-detail').append(' ', refundLink());
+      cards.push(held);
     } else if (d.status === 'crediting' || d.confirmations >= d.required) {
       cards.push(card(title, blocks(`${d.txid}:${d.vout}`, d.required, d.required), `Confirmed. Crediting ${gets} now.`));
     } else if (d.status === 'waiting_for_capacity') {
@@ -1167,7 +1178,7 @@ function renderInflight() {
     const final = p.status === 'pending' || p.status === 'paid';
     const paid = p.status === 'paid';
     const detail = paid ? `${show(p.pays)} is on its way; it confirms in the next Dogecoin block, usually within a minute.`
-      : final ? 'The bridge pays it within seconds.' : 'Waiting for it to be final on DogecoinVM, about two seconds.';
+      : final ? 'The bridge pays it within seconds.' : 'Waiting for it to be final on DogecoinVM, usually under a second.';
     const c = card(`Withdrawing ${show(w.amount)} to ${savedName(w.to, 'doge') || 'Dogecoin'}`,
       steps([['Final on DogecoinVM', final], ['Paid on Dogecoin', paid], ['In a Dogecoin block', false]]), detail);
     cards.push(paid ? dogeWaiting(c) : c);
