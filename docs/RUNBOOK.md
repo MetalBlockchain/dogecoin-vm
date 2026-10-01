@@ -91,9 +91,13 @@ dv refund -signers $S/signers.json -deposit TXID:VOUT -to DOGEADDR
 With separate signers, each operator first adds `TXID:VOUT DOGEADDR` to their
 `-refund-approvals` file.
 
-A deposit that is still **creditable** (waiting for room under the cap)
-needs `force` at the end of each operator's approval line, and `-force` on
-the command, which then takes two runs:
+A deposit with **no destination** (an untagged payment to the peg address)
+can never be credited, and is refunded in one run.
+
+A deposit that **names a destination** (a personal deposit address, or a
+`DVMD` tag) could have been credited under some policy, and a release of it
+signed and kept back could still confirm, whatever the limits say now. So
+its refund takes two runs:
 
 1. The first cancels the deposit on DogecoinVM: a small transaction that
    spends the reserve's anchor (its fee comes from operating capital). Any
@@ -102,11 +106,17 @@ the command, which then takes two runs:
    block (final on DogecoinVM) no release of the deposit can ever confirm,
    and no signer will sign one.
 2. Run it again once the cancellation is in a block: the deposit is now
-   held, and is refunded like any held deposit, once it has its
-   confirmations.
+   cancelled, and is refunded once it has its confirmations.
 
-A signer that signed a release of the deposit refuses both steps; the other
-two can still do them.
+Signers refund such a deposit only after its cancellation is in a block. A
+deposit that is still **creditable** (waiting for room under the cap)
+also needs `force` at the end of each operator's approval line, and
+`-force` on the command.
+
+A signer that signed a release of the deposit signs neither step while that
+release could still confirm; once the chain shows it can't (another
+transaction in a block spends its anchor), it signs both. The other two can
+always do them.
 
 ## Suspected compromise of the server
 
@@ -159,12 +169,19 @@ anything else holding them once the host is running.
 
 ## Operating capital (contributions)
 
-Every payout and refund spends the oldest coin at the signer set's own peg
-address first (the anchor), so any two the signers sign conflict and at most
-one confirms; every payout pays change of at least 0.01 DOGE back to the peg
-address, which becomes the next anchor. A payout waits while the one before
-it is unconfirmed. A new set's peg address holds nothing until something is
-paid to it, so it needs one contribution before its first payout.
+Every payout and refund spends the anchor first (see "Anchor lineage"), so
+any two the signers sign conflict, or one descends from the other; every
+payout pays change of at least 0.01 DOGE back to the peg address, which
+becomes the next anchor. A payout waits while the one before it is
+unconfirmed. A new set's peg address holds nothing until something is paid
+to it, so it needs one contribution, with full confirmations, before its
+first payout.
+
+Fees paid from the surplus (a cancellation's) need room: each signer signs
+one only if it, with the fees that signer already signed for and that could
+still confirm, is at most half the surplus (2 of 3 signers). Two pairs of
+signers that share a dishonest one then can't promise more than the
+surplus between them. Keep at least a few DOGE contributed.
 
 The peg's surplus is only what operators deliberately contribute. Deposits
 that weren't credited, and payments into the reserve that weren't valid
@@ -178,12 +195,15 @@ peg address without a tag is a deposit without a destination: held, and owed
 back as a refund.
 
 Top-ups made before the tag existed (untagged payments to the peg address)
-would count as deposits owed back. List each such transaction's ID, one per
-line, in `contributions.txt` next to the signer set: the coordinator's
+would count as deposits owed back. List each such output, `TXID:VOUT`, one
+per line, in `contributions.txt` next to the signer set: the coordinator's
 (`secrets/separate-signers/`) and every signer's (`/var/lib/dogevm-signer-N/`).
+Outputs, not transactions: a transaction ID alone is refused, since one
+transaction can pay a top-up and a customer's deposit. List only an output
+you can show was a top-up; listing a customer's deposit would hide a debt.
 The files must match, or the signers' audits disagree with the
 coordinator's. `deploy/upgrade-bridge.sh` copies the coordinator's to every
-signer.
+signer, beside the signer set its unit runs with, and checks they match.
 
 ## Upgrading the bridge software
 
@@ -194,17 +214,31 @@ running. It:
 
 1. builds the commit;
 2. pauses the bridge with a public reason (keeping a pause already there);
-3. backs up the binaries, every signing log and `cosigners.json`;
-4. stops the bridge and signers, installs the new binary, and checks each
-   signer's signing log;
-5. fills in each signer's public key in `cosigners.json` from its
+3. stops the bridge, web wallet and monitor; pauses every signer with its
+   own pause file; stops every signer. Only then, with nothing able to sign,
+   it backs up the binaries, every signing log, `cosigners.json` and the
+   contribution lists;
+4. installs the new binary;
+5. copies the coordinator's `contributions.txt` beside every signer's set,
+   and checks they match;
+6. checks each signer's signing log;
+7. sets each signer's empty anchors to the tips of the anchor lines as its
+   own nodes see them, and checks every signer's anchors are the tips the
+   coordinator sees (see "Anchor lineage");
+8. fills in each signer's public key in `cosigners.json` from its
    `card.json` if missing, checking every key is in the signer set;
-6. copies `contributions.txt` to every signer;
-7. starts everything, and checks the peg is solvent.
+9. starts the signers (still paused), then the bridge, and checks the peg
+   is solvent.
 
-It leaves the bridge paused unless `RESUME=1` (and it did the pausing):
-read `/api/health`, then resume. On any failure it puts the previous
-binaries, logs and `cosigners.json` back and leaves the bridge paused.
+It leaves the bridge and the signers paused unless `RESUME=1`, it did the
+pausing, and every check in `/api/health` but the pause passes; otherwise
+read `/api/health` and resume the signers and the bridge with the commands
+it prints. On a failure it puts the previous binaries, `cosigners.json` and
+contribution lists back and leaves everything paused. It never puts an older
+signing log back over a newer one: a log only grows, and an older copy would
+forget a signature. A log this run created, unchanged since, is removed;
+any other log that changed during the run is kept, with a warning: find out
+what that signer signed before resuming it.
 
 A signer with **no signing log** stops the upgrade: restore the log from a
 backup. The only exceptions are named explicitly:
@@ -212,12 +246,22 @@ backup. The only exceptions are named explicitly:
 - `INIT_LOGS="dogevm-signer-N"` for a key that never signed;
 - `ADOPT_LOGS="dogevm-signer-N ..."` for a key that signed only before
   separate signers existed, so every signature it made is on the chains.
-  It rebuilds the log from them.
+  It rebuilds the log from them, anchors included.
 
 The three DogecoinVM signers set up in September 2026 signed only under the
 old combined bridge, so the first upgrade adopts them:
 
     ADOPT_LOGS="dogevm-signer-1 dogevm-signer-2 dogevm-signer-3" deploy/upgrade-bridge.sh COMMIT
+
+After an upgrade to this version, move the web server's files out of the
+secrets directory once, then sandbox the services:
+
+    deploy/move-web-state.sh     # the registry and finality samples, to /var/lib/metal-main/web
+    deploy/sandbox-units.sh
+
+The web server then writes only that directory and its coin index, never
+the secrets directory (the pause file, the signer set, `cosigners.json`,
+`contributions.txt`).
 
 **Never run `deploy/provision.sh` on the mainnet host.** It is the testnet
 provisioner: it rewrites the bridge to hold every key in one process and
@@ -230,24 +274,47 @@ explorer); if not, contribute first, or payouts wait.
 
 ## Anchor lineage
 
-Every payout, refund and release spends an **anchor** first: the latest
-coin the signers themselves paid change to, at the peg address (Dogecoin)
-or the reserve (DogecoinVM). So any two transactions the signers sign on one
-chain conflict, and at most one can confirm. Before the signers have made
-anything there, the anchor is the oldest coin with at least the full
-confirmations (a contribution, see "Operating capital").
+Every payout, refund and release spends an **anchor** first, so any two
+transactions the signers sign on one chain conflict, or one descends from
+the other: a payout signed and kept back can't confirm beside a second one.
 
-Each signer remembers the anchor it last signed with, and moves on only by
-following confirmed spends forward from it: that anchor's confirmed spender,
-then that spender's change at the same address, and so on. If the trail
-breaks, the signer refuses with "anchor ... is gone, but no confirmed
-transaction it knows spends it". That happens when:
+The anchor is the tip of a **line** of coins, one per chain: at the peg
+address on Dogecoin, at the reserve on DogecoinVM. The line starts at its
+**root**, the oldest output ever paid to that address with full
+confirmations (on Dogecoin a contribution, see "Operating capital"; on
+DogecoinVM the reserve's first coin), and moves only along confirmed spends:
+each transaction in a block that spends the line's coin moves it to that
+transaction's last output to the same address, its change. Coins anyone
+else pays there (deposits, contributions, peg-outs) never become the anchor
+unless one is the root; they are spent beside it. Every signer reading the
+same chain finds the same line.
+
+Each signer's log keeps the anchor it last signed with, and moves on only
+by following the line forward from it. A log with **no anchor** signs
+nothing: a signer that picked its own, from a wallet whose history differed
+from the others' (missing an old payment, or rescanned since), could follow
+a line of its own. Set it, with the signer stopped, from that signer's own
+nodes:
+
+    dv signer-log anchors -set -signers SET -key-file KEY -log LOG
+
+and check the `anchors` it prints are the `tips` the coordinator sees
+(`dv signer-log anchors -signers SET` with the bridge's settings) and the
+other signers': `deploy/upgrade-bridge.sh` does this for every signer. A
+new signer set does it once its first contribution has full confirmations.
+
+If the trail breaks, the signer refuses with "anchor ... is gone, but no
+confirmed transaction it knows spends it". That happens when:
 
 - **A reorganisation removed the transaction that created or spent the
   anchor.** Wait: when the chain settles, the transactions are usually mined
   again and the trail is whole.
 - **The signer's wallet is missing history** (restored, or a new node).
   Rescan the signer's Dogecoin Core wallet (`rescan`), then retry.
+
+A signer whose `anchors -set` reports a tip different from the others' has
+a wallet that sees a different history: rescan it, and don't let it sign
+until the tips agree.
 
 Never hand-edit a signer's `anchors` entry, unless you've confirmed on a
 public explorer that the old anchor was spent by a signers' transaction in
