@@ -136,3 +136,29 @@ go test ./vm/ ./cmd/... ./btcd/ ./btcd/mempool/
 
 - `vm/`: block lifecycle, peg reserve consensus and a multisig reserve release, run in-process against a real btcd.
 - `cmd/dogevm/`: bridge logic against in-memory chains that run btcd's script engine on every signed input: exactly-once crediting, spoofed tags, personal deposit addresses, a round trip, and halting when insolvent. Also checks the web wallet's `chain.js` against the Go code under Node, when Node is installed.
+
+## Against Dogecoin Core (regtest)
+
+`cmd/dogevm/dogecoincore_test.go` runs the bridge against a real Dogecoin
+Core 1.14 node: a deposit credited, a payout relayed (version 1, BIP125,
+change to the peg), a stuck payout replaced, a payout evicted by a restart
+and resent, and the incremental wallet history across a reorganisation.
+They use `dogecoind` from the PATH, or, with `DOGECOIND_DOCKER` naming a
+Docker context, a `dogecoind:1.14.9` image there; otherwise they are
+skipped.
+
+There is no macOS build of `dogecoind`, so on a Mac build the image from
+the official aarch64 Linux release, checked against its `SHA256SUMS.asc`:
+
+    curl -sSLO https://github.com/dogecoin/dogecoin/releases/download/v1.14.9/dogecoin-1.14.9-aarch64-linux-gnu.tar.gz
+    shasum -a 256 dogecoin-1.14.9-aarch64-linux-gnu.tar.gz   # 6928c895a20d0bcb6d5c7dcec753d35c884a471aaf8ad4242a89a96acb4f2985
+    cat > Dockerfile <<'DOCKER'
+    FROM ubuntu:24.04
+    COPY dogecoin-1.14.9-aarch64-linux-gnu.tar.gz /tmp/d.tgz
+    RUN tar -C /opt -xzf /tmp/d.tgz && mv /opt/dogecoin-1.14.9 /opt/dogecoin && rm /tmp/d.tgz
+    ENV PATH=/opt/dogecoin/bin:$PATH
+    ENTRYPOINT ["dogecoind"]
+    DOCKER
+    colima start dogetest --cpu 2 --memory 2      # its own VM; then: docker context use colima (or your usual context)
+    docker --context colima-dogetest build -t dogecoind:1.14.9 .
+    DOGECOIND_DOCKER=colima-dogetest go test ./cmd/dogevm/ -run 'DogecoinCore|Evicted|Reorg'
