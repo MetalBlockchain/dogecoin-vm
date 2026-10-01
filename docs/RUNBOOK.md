@@ -177,6 +177,14 @@ never refunded, and `/api/audit` shows it as `contributed`. A payment to the
 peg address without a tag is a deposit without a destination: held, and owed
 back as a refund.
 
+Top-ups made before the tag existed (untagged payments to the peg address)
+would count as deposits owed back. List each such transaction's ID, one per
+line, in `contributions.txt` next to the signer set: the coordinator's
+(`secrets/separate-signers/`) and every signer's (`/var/lib/dogevm-signer-N/`).
+The files must match, or the signers' audits disagree with the
+coordinator's. `deploy/upgrade-bridge.sh` copies the coordinator's to every
+signer.
+
 ## Upgrading the bridge software
 
 `deploy/upgrade-bridge.sh COMMIT` (as root) upgrades the coordinator and

@@ -309,6 +309,7 @@ func cmdSignerLog(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 	if err := watchPeg(b, false); err != nil {
 		return err
 	}

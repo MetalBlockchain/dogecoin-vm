@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -430,6 +431,7 @@ func cmdMonitor(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 
 	if *once {
 		state, err := b.load()

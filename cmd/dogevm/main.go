@@ -606,6 +606,7 @@ func cmdDepositAddress(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 	if err := b.connect(&s, signers); err != nil {
 		return err
 	}
@@ -656,6 +657,7 @@ func cmdBridge(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 	if err := watchPeg(b, *rescan); err != nil {
 		return fmt.Errorf("importing the peg address into Dogecoin Core: %w", err)
 	}
@@ -715,6 +717,7 @@ func cmdAudit(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 	if err := watchPeg(b, false); err != nil {
 		return err
 	}
@@ -800,6 +803,7 @@ func cmdRefund(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 
 	if *list {
 		state, err := b.load()

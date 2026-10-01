@@ -759,6 +759,7 @@ func cmdServe(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 
 	srv := &server{
 		b:             b,

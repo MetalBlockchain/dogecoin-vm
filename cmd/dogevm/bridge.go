@@ -5,7 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
@@ -27,7 +29,10 @@ import (
 // payment tags are only trusted on transactions that spend peg outputs,
 // which only the signers can create.
 type bridge struct {
-	signers *signerSet
+	// contributionsPath lists payments to the peg address made before the
+	// DVMC tag existed that were operating capital (listedContributions).
+	contributionsPath string
+	signers           *signerSet
 	// cosigners are remote signers, each holding one key, asked to sign
 	// what this process cannot sign with the keys in signers.
 	cosigners          []*remoteSigner
@@ -356,6 +361,10 @@ func (b *bridge) load() (*pegState, error) {
 			made[t.tx.TxHash()] = true
 		}
 	}
+	listed, err := listedContributions(b.contributionsPath)
+	if err != nil {
+		return nil, err
+	}
 	var all []deposit
 	for _, t := range dogeTxs {
 		if spendsAny(t.tx, pegOuts) {
@@ -393,6 +402,9 @@ func (b *bridge) load() (*pegState, error) {
 		tagDest, hasTag := parseDestinationTag(t.tx, tagDeposit)
 		contribution := isContribution(t.tx)
 		hash := t.tx.TxHash()
+		if listed[hash.String()] {
+			contribution = true
+		}
 		for i, out := range t.tx.TxOut {
 			d := deposit{
 				time:          t.time,
@@ -811,6 +823,37 @@ func (b *bridge) refund(op wire.OutPoint, dest destination, force bool) (chainha
 
 // errCancelSent: a forced refund's first step is done; run it again.
 var errCancelSent = errors.New("cancelled the deposit on DogecoinVM; run the refund again once that is in a block")
+
+// listedContributions reads path: one transaction ID per line (# starts a
+// comment), each a payment to the peg address that was operating capital
+// before the DVMC tag existed. Its outputs to the peg address count as
+// contributions, not as deposits owed back. Every operator keeps the same
+// file next to their signer set, or their audits disagree. A missing file
+// lists nothing.
+func listedContributions(path string) (map[string]bool, error) {
+	listed := map[string]bool{}
+	if path == "" {
+		return listed, nil
+	}
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return listed, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 || strings.HasPrefix(f[0], "#") {
+			continue
+		}
+		if _, err := chainhash.NewHashFromStr(f[0]); err != nil {
+			return nil, fmt.Errorf("%s: %q is not a transaction ID", path, f[0])
+		}
+		listed[strings.ToLower(f[0])] = true
+	}
+	return listed, nil
+}
 
 // isCancelled reports whether deposit op was cancelled on DogecoinVM (in a
 // block or not): it is never credited, only refunded.

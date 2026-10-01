@@ -442,3 +442,19 @@ func TestNoRefundAfterARelease(t *testing.T) {
 	_, _, _, err = c.check(signRequest{Chain: chainDogecoin, Action: refundAction(op, back), Tx: encodeTx(tx)})
 	require.ErrorContains(err, "signed a release of deposit")
 }
+
+// TestListedContribution: a payment to the peg address listed in
+// contributions.txt (an untagged top-up from before DVMC existed) counts as
+// operating capital, not as a deposit owed back.
+func TestListedContribution(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	topUp := h.deposit(20*doge, nil, 6) // untagged: owed back, unless listed
+	require.Equal(int64(20*doge), h.audit().UnclaimedOnDoge)
+	before := h.audit().Surplus
+	h.b.contributionsPath = t.TempDir() + "/contributions.txt"
+	require.NoError(os.WriteFile(h.b.contributionsPath, []byte("# a top-up\n"+topUp.TxHash().String()+"\n"), 0o600))
+	a := h.audit()
+	require.Zero(a.UnclaimedOnDoge)
+	require.Equal(before+20*doge, a.Surplus)
+}
