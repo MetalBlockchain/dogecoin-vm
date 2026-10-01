@@ -111,6 +111,9 @@ type pegState struct {
 	deposits  []deposit
 	paid      map[chainhash.Hash]chainhash.Hash // peg-out -> payment txid
 	refunded  map[wire.OutPoint]chainhash.Hash  // deposit -> refund txid
+	// vmUnconfirmed are the signers' DogecoinVM transactions (releases,
+	// cancellations) not yet in a block, by txid.
+	vmUnconfirmed map[chainhash.Hash]chainTx
 	// unconfirmed are Dogecoin payments and refunds not yet in a block.
 	unconfirmed     map[chainhash.Hash]chainTx
 	held            []deposit // deposits not credited: no destination, or outside the limits
@@ -219,10 +222,11 @@ func outputsTo(tx *wire.MsgTx, script []byte) (map[wire.OutPoint]bool, int64) {
 func (b *bridge) load() (*pegState, error) {
 	script := b.signers.pkScript()
 	s := &pegState{
-		cancelled: map[wire.OutPoint]bool{},
-		released:  map[wire.OutPoint]chainhash.Hash{},
-		paid:      map[chainhash.Hash]chainhash.Hash{},
-		refunded:  map[wire.OutPoint]chainhash.Hash{},
+		vmUnconfirmed: map[chainhash.Hash]chainTx{},
+		cancelled:     map[wire.OutPoint]bool{},
+		released:      map[wire.OutPoint]chainhash.Hash{},
+		paid:          map[chainhash.Hash]chainhash.Hash{},
+		refunded:      map[wire.OutPoint]chainhash.Hash{},
 
 		unconfirmed: map[chainhash.Hash]chainTx{},
 	}
@@ -261,6 +265,7 @@ func (b *bridge) load() (*pegState, error) {
 			}
 			if t.confirmations == 0 {
 				s.vmPending = true
+				s.vmUnconfirmed[t.tx.TxHash()] = t
 			}
 		default:
 			if t.confirmations == 0 {
@@ -995,25 +1000,32 @@ type resender interface {
 // this, such a payment would sit listed as paid and never confirm, holding
 // up every later payout behind the anchor it spends.
 func (b *bridge) rebroadcast(s *pegState) {
-	r, ok := b.doge.(resender)
-	if !ok {
-		return
-	}
 	if b.resent == nil {
 		b.resent = map[chainhash.Hash]time.Time{}
 	}
 	now := time.Now()
-	for txid, t := range s.unconfirmed {
-		if now.Sub(b.resent[txid]) < resendEvery {
+	for _, side := range []struct {
+		c   chain
+		txs map[chainhash.Hash]chainTx
+	}{{b.doge, s.unconfirmed}, {b.vm, s.vmUnconfirmed}} {
+		r, ok := side.c.(resender)
+		if !ok {
 			continue
 		}
-		b.resent[txid] = now
-		if err := r.resend(t.tx); err != nil {
-			b.logf("rebroadcasting %v: %v", txid, err)
+		for txid, t := range side.txs {
+			if now.Sub(b.resent[txid]) < resendEvery {
+				continue
+			}
+			b.resent[txid] = now
+			if err := r.resend(t.tx); err != nil {
+				b.logf("rebroadcasting %v: %v", txid, err)
+			}
 		}
 	}
 	for txid := range b.resent {
-		if _, still := s.unconfirmed[txid]; !still {
+		_, doge := s.unconfirmed[txid]
+		_, vm := s.vmUnconfirmed[txid]
+		if !doge && !vm {
 			delete(b.resent, txid)
 		}
 	}

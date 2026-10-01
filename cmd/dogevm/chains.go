@@ -245,6 +245,15 @@ func (c *vmChain) send(tx *wire.MsgTx) (chainhash.Hash, error) {
 	return sendRaw(c.rpc, tx)
 }
 
+// resend hands tx back to DogecoinVM's node; one it already has is fine.
+func (c *vmChain) resend(tx *wire.MsgTx) error {
+	_, err := sendRaw(c.rpc, tx)
+	if err != nil && (strings.Contains(err.Error(), "already") || strings.Contains(err.Error(), "exists")) {
+		return nil
+	}
+	return err
+}
+
 func sendRaw(rpc *rpcClient, tx *wire.MsgTx) (chainhash.Hash, error) {
 	var txid string
 	if err := rpc.call(&txid, "sendrawtransaction", encodeTx(tx)); err != nil {

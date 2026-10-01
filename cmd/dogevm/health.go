@@ -6,8 +6,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -24,6 +26,10 @@ type check struct {
 // healthChecker runs the checks behind /api/health and dogevm monitor.
 type healthChecker struct {
 	b *bridge
+
+	// vmSeen is when this checker first saw each pending DogecoinVM
+	// transaction of the signers (DogecoinVM doesn't date unconfirmed ones).
+	vmSeen map[chainhash.Hash]time.Time
 
 	// P-Chain API and the L1 validator to watch; empty skips the check.
 	pChainURI    string
@@ -118,6 +124,27 @@ func (h *healthChecker) bridgeLiveness(s *pegState) check {
 			return check{"bridge", false, fmt.Sprintf("deposit %v (%s DOGE) is held and owed back: refund it (RUNBOOK.md)", d.outPoint, formatDoge(d.value))}
 		}
 	}
+	// A release or cancellation pending on DogecoinVM blocks every later
+	// one (they chain off the reserve's anchor); DogecoinVM blocks come in
+	// seconds, so one pending for minutes has stalled.
+	if h.vmSeen == nil {
+		h.vmSeen = map[chainhash.Hash]time.Time{}
+	}
+	for txid := range h.vmSeen {
+		if _, still := s.vmUnconfirmed[txid]; !still {
+			delete(h.vmSeen, txid)
+		}
+	}
+	for txid := range s.vmUnconfirmed {
+		first, ok := h.vmSeen[txid]
+		if !ok {
+			h.vmSeen[txid] = time.Now()
+			continue
+		}
+		if age := time.Since(first); age > vmStuckAfter {
+			return check{"bridge", false, fmt.Sprintf("DogecoinVM transaction %v has been pending %s; check the Metal node", txid, age.Round(time.Minute))}
+		}
+	}
 	for _, d := range s.deposits {
 		if _, done := s.released[d.outPoint]; done {
 			continue
@@ -129,6 +156,10 @@ func (h *healthChecker) bridgeLiveness(s *pegState) check {
 	}
 	return check{"bridge", true, "nothing overdue"}
 }
+
+// vmStuckAfter is how long a DogecoinVM transaction of the signers may stay
+// pending before the bridge check fails.
+const vmStuckAfter = 10 * time.Minute
 
 // dogecoinBlockTime is Dogecoin's target time between blocks.
 const dogecoinBlockTime = time.Minute
@@ -191,6 +222,24 @@ func (h *healthChecker) dogecoinVM() check {
 	var height int64
 	if err := h.b.vm.(*vmChain).rpc.call(&height, "getblockcount"); err != nil {
 		return check{"dogecoinvm", false, "DogecoinVM is not answering: " + err.Error()}
+	}
+	// The Metal node's own health includes the VM's: answering RPC isn't
+	// enough (a VM latched after a failed accept still answers).
+	if h.pChainURI != "" {
+		if u, err := url.Parse(h.pChainURI); err == nil {
+			u.Path = "/ext/health"
+			client := http.Client{Timeout: 10 * time.Second}
+			if resp, err := client.Get(u.String()); err == nil {
+				var body struct {
+					Healthy bool `json:"healthy"`
+				}
+				_ = json.NewDecoder(resp.Body).Decode(&body)
+				resp.Body.Close()
+				if !body.Healthy {
+					return check{"dogecoinvm", false, fmt.Sprintf("block %d, but the Metal node reports unhealthy (%s)", height, u)}
+				}
+			}
+		}
 	}
 	return check{"dogecoinvm", true, fmt.Sprintf("block %d", height)}
 }

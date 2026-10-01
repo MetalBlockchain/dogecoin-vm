@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -65,6 +66,8 @@ type VM struct {
 	// memory may be ahead of what is on disk and of lastAccepted. Nothing
 	// is built or verified until a restart reloads the chain from disk.
 	broken atomic.Bool
+	// brokenErr is why (for the health check).
+	brokenErr atomic.Value
 
 	config *btcd.Config
 
@@ -133,6 +136,26 @@ func parseGenesisBytes(data []byte) (*genesisBytes, error) {
 var consensusConfigKeys = []string{
 	"mainNet", "testNet", "regressionTest", "simNet", "sigNet", "sigNetChallenge",
 	"pegReserveAddress", "pegReserveBlocks", "addCheckpoints",
+}
+
+// consensusSettings are the parts of btcd's config every node must agree on.
+type consensusSettings struct {
+	MainNet, TestNet, RegressionTest, SimNet, SigNet bool
+	SigNetChallenge                                  string
+	PegReserveAddress                                string
+	PegReserveBlocks                                 int32
+	AddCheckpoints                                   []string
+}
+
+func consensusOf(c *btcd.Config) consensusSettings {
+	s := consensusSettings{
+		MainNet: c.MainNet, TestNet: c.TestNet, RegressionTest: c.RegressionTest, SimNet: c.SimNet, SigNet: c.SigNet,
+		SigNetChallenge: c.SigNetChallenge, PegReserveAddress: c.PegReserveAddress, PegReserveBlocks: c.PegReserveBlocks,
+	}
+	if len(c.AddCheckpoints) > 0 {
+		s.AddCheckpoints = append([]string{}, c.AddCheckpoints...)
+	}
+	return s
 }
 
 // refusedConfigKeys aren't consensus but have no place in a chain config: at
@@ -207,9 +230,16 @@ func (vm *VM) Initialize(
 		return fmt.Errorf("failed to parse chain config: %w", err)
 	}
 
+	consensus := consensusOf(&gb.Config)
 	config, _, err := btcd.LoadConfig(vm.ctx.NodeID.String(), &gb.Config)
 	if err != nil {
 		return fmt.Errorf("failed to parse config: %w", err)
+	}
+	// btcd also reads an INI file (configFile, or one in its home), which
+	// applyChainConfig never sees: the consensus settings it ends with must
+	// still be the genesis's.
+	if got := consensusOf(config); !reflect.DeepEqual(got, consensus) {
+		return fmt.Errorf("btcd's config file changes consensus settings (%+v, the genesis says %+v); remove them from it", got, consensus)
 	}
 
 	// Disable legacy networking
@@ -688,11 +718,22 @@ func (vm *VM) HealthCheck(ctx context.Context) (interface{}, error) {
 	if !vm.initialized {
 		return nil, errNotInitialized
 	}
+	if vm.broken.Load() {
+		why, _ := vm.brokenErr.Load().(error)
+		return map[string]interface{}{"broken": true}, fmt.Errorf("%w: %v", errBroken, why)
+	}
 
 	return map[string]interface{}{
 		"initialized":  vm.initialized,
 		"lastAccepted": vm.LastAcceptedID().String(),
 	}, nil
+}
+
+// brokenBy latches the VM (broken) after an accept failed part-way.
+func (vm *VM) brokenBy(err error) {
+	vm.brokenErr.Store(err)
+	vm.broken.Store(true)
+	vm.ctx.Log.Error("accepting a block failed part-way; this node builds and verifies nothing until it restarts", zap.Error(err))
 }
 
 // AppGossip handles incoming gossip messages

@@ -210,18 +210,28 @@ func (b *BlockAdapter) accept() error {
 	}
 	isMainChain, isOrphan, err := b.vm.btcdAdapter.ProcessBlockNoPoW(b.btcBlock)
 	if err != nil {
-		b.vm.broken.Store(true)
+		// A rule violation is found before btcd changes anything; any
+		// other failure (the database, say) may leave it half done.
+		var rule blockchain.RuleError
+		if !errors.As(err, &rule) {
+			b.vm.brokenBy(fmt.Errorf("connecting accepted block %s: %w", b.id, err))
+		}
 		return fmt.Errorf("failed to connect accepted block %s: %w", b.id, err)
 	}
 	if isOrphan || !isMainChain {
-		return fmt.Errorf("accepted block %s did not become the chain tip (orphan=%t, mainChain=%t)",
+		// btcd stored it, but not as the tip: what it has and what this VM
+		// has accepted no longer agree.
+		err := fmt.Errorf("accepted block %s did not become the chain tip (orphan=%t, mainChain=%t)",
 			b.id, isOrphan, isMainChain)
+		b.vm.brokenBy(err)
+		return err
 	}
 	// Accepted is final: write it to disk before saying so, so a crash or
 	// a kill can't take it back.
 	if err := b.vm.btcdAdapter.Persist(); err != nil {
-		b.vm.broken.Store(true)
-		return fmt.Errorf("failed to persist accepted block %s: %w", b.id, err)
+		err = fmt.Errorf("failed to persist accepted block %s: %w", b.id, err)
+		b.vm.brokenBy(err)
+		return err
 	}
 
 	delete(b.vm.verifiedBlocks, b.id)

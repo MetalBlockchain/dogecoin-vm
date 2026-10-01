@@ -5,6 +5,7 @@ package vm
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -49,9 +50,11 @@ func TestBuilderWaitEndsWithItsContext(t *testing.T) {
 func TestBrokenVMBuildsAndVerifiesNothing(t *testing.T) {
 	vm := setupVM(t)
 	blk := buildBlock(t, vm)
-	vm.broken.Store(true)
+	vm.brokenBy(errors.New("test"))
 	_, err := vm.BuildBlock(context.Background())
 	require.ErrorIs(t, err, errBroken)
 	require.ErrorIs(t, blk.Verify(context.Background()), errBroken)
 	require.ErrorIs(t, blk.Accept(context.Background()), errBroken)
+	_, err = vm.HealthCheck(context.Background())
+	require.ErrorIs(t, err, errBroken, "and the health check says so")
 }
