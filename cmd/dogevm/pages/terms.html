@@ -1,0 +1,59 @@
+{{define "head"}}
+  <script type="module" src="docs.js"></script>
+{{end}}
+{{define "main"}}
+  <main class="page">
+    <h1>DogecoinVM alpha terms of use</h1>
+    <p class="lede">DogecoinVM and its DOGE bridge are <strong>alpha software</strong>: new, experimental, and not yet externally audited. Please read this page before you use them. By using this site, the DogecoinVM chain or the bridge, you agree to these terms.</p>
+    <p class="meta">Last updated 1 October 2026</p>
+
+    <h2 id="what">What this is</h2>
+    <ul>
+      <li><strong>DogecoinVM</strong> is a separate blockchain, a Layer 1 on Metal Blockchain, that uses Dogecoin's address formats and transactions. It is not the Dogecoin network.</li>
+      <li><strong>The bridge</strong> moves DOGE between Dogecoin and DogecoinVM. DOGE you deposit is locked on Dogecoin in a multisig address, and the same amount, less a small fee, is issued to you on DogecoinVM. When you withdraw, DOGE on DogecoinVM goes back to the bridge, which pays DOGE on Dogecoin to the address you choose.</li>
+      <li><strong>The web wallet and the Mac app</strong> keep your key on your own device. We never see it.</li>
+    </ul>
+
+    <h2 id="risk">Alpha means real risk</h2>
+    <ul>
+      <li><strong>You could lose what you send.</strong> The software may have bugs that lose, freeze or delay funds. Only use amounts you can afford to lose.</li>
+      <li><strong>Limits apply.</strong> During the alpha, each deposit and the total on DogecoinVM are capped: at the time of writing, 100 DOGE per deposit and 4,200 DOGE in total. The current limits are always shown on the site. A deposit that doesn't fit isn't credited: see <a href="#held">held deposits</a>.</li>
+      <li><strong>The operator holds the bridge's keys during the alpha.</strong> The multisig keys that control the locked DOGE are held by the operator, Paul Grey, today on one server. You are trusting the operator to run the bridge honestly and keep those keys safe. If they were lost or stolen, the locked DOGE could be lost. Moving the keys to independent operators is on the <a href="/roadmap">roadmap</a>; it isn't done yet.</li>
+      <li><strong>No audit, no insurance.</strong> The bridge hasn't had an external security audit. Funds aren't insured or protected by any government scheme, and the operator isn't a bank.</li>
+      <li><strong>Pauses.</strong> The bridge may be paused at any time, for maintenance or security, without notice. Deposits made during a pause are credited after it resumes; withdrawals wait until then.</li>
+      <li><strong>Timing.</strong> Payments on DogecoinVM are usually final in under a second. Moving DOGE onto or off DogecoinVM waits for confirmations on Dogecoin, and can take longer when that network is busy or the bridge is paused.</li>
+    </ul>
+
+    <h2 id="keys">Your key, your responsibility</h2>
+    <ul>
+      <li>Your key is stored only in your browser or the app. <strong>Back it up.</strong> If you lose it, or your browser's data is cleared, nobody can recover your DOGE.</li>
+      <li>Check addresses before you send. A payment sent to the wrong address or the wrong network may be unrecoverable. Dogecoin and DogecoinVM addresses look the same: make sure you're on the network you mean.</li>
+    </ul>
+
+    <h2 id="fees">Fees</h2>
+    <p>Network fees on both chains, and the bridge's fee, are taken from the amount moved. They're shown before you confirm.</p>
+
+    <h2 id="held">Held deposits and refunds</h2>
+    <ul>
+      <li>A deposit that is too small, too large, sent without a destination, or that can't be credited for another reason is <strong>held</strong>. It can be refunded to the sender on Dogecoin, less network fees. A deposit too small to be worth the network fee may not be refunded.</li>
+      <li>Refunds are made by the operator on request, after checks. See <a href="#contact">contact</a>.</li>
+    </ul>
+
+    <h2 id="changes">Changes, and ending the alpha</h2>
+    <p>The limits, fees and these terms may change, and the alpha may end. If the service ends, the operator intends to give notice on this site and let you withdraw your DOGE first.</p>
+
+    <h2 id="conduct">What you agree not to do</h2>
+    <ul>
+      <li>Use the service where it is unlawful for you, or if you are subject to sanctions.</li>
+      <li>Use it for anything illegal, or try to attack, overload or exploit it. If you find a vulnerability, please <a href="https://github.com/MetalBlockchain/dogecoin-vm/security/advisories/new">report them privately</a> instead; we're grateful for it.</li>
+    </ul>
+
+    <h2 id="liability">No advice, no warranty, limited liability</h2>
+    <p>Nothing on this site is financial, investment, legal or tax advice. You're responsible for your own decisions, and for any taxes on your transactions.</p>
+    <p>The software and the service are provided <strong>as is</strong>, without warranties of any kind. To the fullest extent the law allows, the operator isn't liable for any loss of funds, data or profits, or for indirect losses, arising from your use of the service. Where the law doesn't allow this, liability is limited to the amount you deposited.</p>
+
+    <h2 id="contact">Open source and contact</h2>
+    <p>The software is open source: <a href="https://github.com/MetalBlockchain/dogecoin-vm">github.com/MetalBlockchain/dogecoin-vm</a>. Developed by Paul Grey @ <a href="https://metallicus.com">metallicus.com</a>.</p>
+    <p>Questions and refund requests: <a href="https://github.com/MetalBlockchain/dogecoin-vm/issues">open an issue on GitHub</a>, or contact Paul Grey via <a href="https://metallicus.com">metallicus.com</a>. Security issues: <a href="https://github.com/MetalBlockchain/dogecoin-vm/security/advisories/new">report them privately</a>.</p>
+  </main>
+{{end}}

@@ -189,6 +189,10 @@ async function loadInfo() {
   if (mainnet) {
     $('network-name').textContent = 'alpha';
     band.textContent = 'Alpha, with real DOGE. Keep amounts small: the bridge is new and has not been audited.';
+    const terms = document.createElement('a');
+    terms.href = '/terms';
+    terms.textContent = 'Read the alpha terms.';
+    band.append(' ', terms);
   } else {
     $('network-name').textContent = 'testnet';
     band.textContent = 'Testnet. These coins have no value, and the network may be reset at any time.';

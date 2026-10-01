@@ -43,6 +43,8 @@ var sitePages = []sitePage{
 		Description: "How DogecoinVM and its DOGE bridge work: deposits, withdrawals, fees and timings, trust and limits, wallets and the API."},
 	{Path: "/download", File: "download", Title: "DogecoinVM Wallet for Mac",
 		Description: "A native Mac wallet for Dogecoin and DogecoinVM: review before you sign, Touch ID for every payment, signed and notarized by Apple."},
+	{Path: "/terms", File: "terms", Title: "DogecoinVM alpha terms of use",
+		Description: "The terms for using DogecoinVM and its DOGE bridge during the alpha: the risks, the limits, held deposits and refunds."},
 }
 
 // renderPages builds every page, keyed by its path.
