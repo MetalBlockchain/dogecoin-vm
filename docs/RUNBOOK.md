@@ -179,15 +179,37 @@ back as a refund.
 
 ## Upgrading the bridge software
 
-`deploy/upgrade-bridge.sh` (as root) upgrades the coordinator and every
-separate signer together, since they must speak the same request format,
-and touches nothing else: the Metal node and Dogecoin Core keep running. It
-pauses the bridge with a public reason, stops the bridge and signers,
-installs the new binary, checks each signer's signing log (rebuilding a
-missing one from the chains with `signer-log adopt`: a signer won't start
-without one), fills in each signer's public key in `cosigners.json` from its
-`card.json` if missing, starts everything, and resumes. On any failure it
-puts the previous binary back and leaves the bridge paused.
+`deploy/upgrade-bridge.sh COMMIT` (as root) upgrades the coordinator and
+every separate signer together, since they must speak the same request
+format, and touches nothing else: the Metal node and Dogecoin Core keep
+running. It:
+
+1. builds the commit;
+2. pauses the bridge with a public reason (keeping a pause already there);
+3. backs up the binaries, every signing log and `cosigners.json`;
+4. stops the bridge and signers, installs the new binary, and checks each
+   signer's signing log;
+5. fills in each signer's public key in `cosigners.json` from its
+   `card.json` if missing, checking every key is in the signer set;
+6. copies `contributions.txt` to every signer;
+7. starts everything, and checks the peg is solvent.
+
+It leaves the bridge paused unless `RESUME=1` (and it did the pausing):
+read `/api/health`, then resume. On any failure it puts the previous
+binaries, logs and `cosigners.json` back and leaves the bridge paused.
+
+A signer with **no signing log** stops the upgrade: restore the log from a
+backup. The only exceptions are named explicitly:
+
+- `INIT_LOGS="dogevm-signer-N"` for a key that never signed;
+- `ADOPT_LOGS="dogevm-signer-N ..."` for a key that signed only before
+  separate signers existed, so every signature it made is on the chains.
+  It rebuilds the log from them.
+
+The three DogecoinVM signers set up in September 2026 signed only under the
+old combined bridge, so the first upgrade adopts them:
+
+    ADOPT_LOGS="dogevm-signer-1 dogevm-signer-2 dogevm-signer-3" deploy/upgrade-bridge.sh COMMIT
 
 **Never run `deploy/provision.sh` on the mainnet host.** It is the testnet
 provisioner: it rewrites the bridge to hold every key in one process and

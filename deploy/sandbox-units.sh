@@ -2,41 +2,64 @@
 # Sandboxes the bridge, web wallet and monitor with systemd drop-ins, as the
 # separate signers already are. They run as the same user as the Metal
 # node, so without this a bug in the public web server could reach the
-# node's database or the bridge's secrets. Run as root on the bridge's host:
+# node's database or the bridge's secrets. Run as root on the bridge's host,
+# with the bridge healthy:
 #
 #   deploy/sandbox-units.sh          # apply, restart, check
 #   deploy/sandbox-units.sh remove   # take the drop-ins away again
 #
 # Each service gets a read-only system, no home directories, no new
-# privileges, no capabilities, a private /tmp, only the network families it
-# uses, and write access only where it writes:
-#   bridge   the secrets directory (pause, lock, registry)
-#   web      the Bitcoin index and the finality samples
+# privileges, no capabilities, a private /tmp, a syscall filter, only the
+# network families it uses, and write access only where it writes:
+#   bridge   the secrets directory (pause, lock, the deposit registry)
+#   web      the deposit registry (it registers deposit addresses), its
+#            coin index and finality samples; not the chain configs
 #   monitor  nothing
 # The node's own data (database, chain data, plugins) is hidden from all
-# three. If a service doesn't come back up, or /api/health doesn't answer,
-# the drop-ins are removed and the services restarted as they were.
+# three, the coordinator's key from the web and monitor, and the Telegram
+# token from the bridge and web. If a service doesn't come back up, or
+# /api/health doesn't answer 200, the previous drop-ins (if any) go back.
 set -euo pipefail
 
 CHAIN=${CHAIN:-dogevm}
 STATE=${STATE:-/var/lib/metal-main}
 DROPIN=10-sandbox.conf
 UNITS=("$CHAIN-bridge-main" "$CHAIN-web-main" "$CHAIN-monitor-main")
+SECRETS=$STATE/secrets
 
 die() { echo "sandbox-units: $*" >&2; exit 1; }
 [[ $(id -u) == 0 ]] || die "run as root"
-
-remove() {
-  for u in "${UNITS[@]}"; do rm -f "/etc/systemd/system/$u.service.d/$DROPIN"; done
-  systemctl daemon-reload
-  systemctl restart "${UNITS[@]}"
-}
+path_of() { echo "/etc/systemd/system/$1.service.d/$DROPIN"; }
 
 if [[ ${1:-} == remove ]]; then
-  remove
+  for u in "${UNITS[@]}"; do rm -f "$(path_of "$u")"; done
+  systemctl daemon-reload
+  systemctl restart "${UNITS[@]}"
   echo "sandbox-units: removed"
   exit 0
 fi
+
+web_start=$(systemctl show -p ExecStart --value "$CHAIN-web-main")
+WEB=$(sed -nE 's/.* -listen ([^ ;]+).*/\1/p' <<<"$web_start")
+INDEX=$(sed -nE 's/.* -[a-z]+-index ([^ ;]+).*/\1/p' <<<"$web_start")
+[[ -n $WEB ]] || die "can't read the web server's -listen"
+curl -sf -o /dev/null --max-time 20 "http://$WEB/api/health" || die "the bridge isn't healthy now (http://$WEB/api/health); fix that first"
+
+BACKUP=$(mktemp -d)
+for u in "${UNITS[@]}"; do
+  [[ -f $(path_of "$u") ]] && cp -p "$(path_of "$u")" "$BACKUP/$u"
+done
+ok=0
+cleanup() {
+  [[ $ok == 1 ]] && return
+  echo "sandbox-units: putting the previous drop-ins back" >&2
+  for u in "${UNITS[@]}"; do
+    if [[ -f $BACKUP/$u ]]; then cp -p "$BACKUP/$u" "$(path_of "$u")"; else rm -f "$(path_of "$u")"; fi
+  done
+  systemctl daemon-reload
+  systemctl restart "${UNITS[@]}" || true
+}
+trap cleanup EXIT
 
 common() {
   cat <<EOF
@@ -68,35 +91,32 @@ UMask=0077
 InaccessiblePaths=-$STATE/node -$STATE/chaindata -$STATE/chainlogs -$STATE/plugins
 EOF
 }
-
 write() {
-  local unit=$1 extra=$2
-  mkdir -p "/etc/systemd/system/$unit.service.d"
-  { common; printf '%s\n' "$extra"; } >"/etc/systemd/system/$unit.service.d/$DROPIN"
+  mkdir -p "$(dirname "$(path_of "$1")")"
+  { common; printf '%s\n' "$2"; } >"$(path_of "$1")"
 }
-write "$CHAIN-bridge-main" "ReadWritePaths=$STATE/secrets"
-write "$CHAIN-web-main" "ReadWritePaths=-$STATE/btcindex $STATE
-ReadOnlyPaths=$STATE/secrets"
-write "$CHAIN-monitor-main" "ReadOnlyPaths=$STATE/secrets"
+write "$CHAIN-bridge-main" "ReadWritePaths=$SECRETS
+InaccessiblePaths=-$SECRETS/telegram-token"
+# The web server renames files in the secrets directory (the registry) and
+# beside its index (finality samples), so it can write those directories;
+# everything else stays read-only.
+write "$CHAIN-web-main" "ReadWritePaths=$SECRETS ${INDEX:+-$INDEX} ${INDEX:+$(dirname "$INDEX")}
+ReadOnlyPaths=-$STATE/chain-configs -$STATE/genesis.json -$STATE/chain.json
+InaccessiblePaths=-$SECRETS/separate-signers/coordinator -$SECRETS/telegram-token -$SECRETS/rotation-1"
+write "$CHAIN-monitor-main" "ReadOnlyPaths=$SECRETS
+InaccessiblePaths=-$SECRETS/separate-signers/coordinator"
 
 systemctl daemon-reload
 systemctl restart "${UNITS[@]}"
-sleep 10
+sleep 15
 for u in "${UNITS[@]}"; do
-  if ! systemctl is-active --quiet "$u"; then
-    echo "sandbox-units: $u didn't stay up under the sandbox; removing it" >&2
-    journalctl -u "$u" -n 20 --no-pager >&2 || true
-    remove
-    exit 1
-  fi
+  systemctl is-active --quiet "$u" || { journalctl -u "$u" -n 20 --no-pager >&2 || true; die "$u didn't stay up under the sandbox"; }
 done
-if ! curl -sf -o /dev/null --max-time 20 http://127.0.0.1:8081/api/health; then
-  # 503 is fine (a check failing); no answer at all is not.
-  if ! curl -s -o /dev/null --max-time 20 -w '%{http_code}' http://127.0.0.1:8081/api/health | grep -q '^[2-5]'; then
-    echo "sandbox-units: the web server doesn't answer under the sandbox; removing it" >&2
-    remove
-    exit 1
-  fi
-fi
+code=$(curl -s -o /dev/null --max-time 30 -w '%{http_code}' "http://$WEB/api/health" || true)
+[[ $code == 200 ]] || die "the web server answers $code under the sandbox"
+ok=1
+trap - EXIT
+rm -rf "$BACKUP"
 for u in "${UNITS[@]}"; do systemd-analyze security "$u" 2>/dev/null | tail -1; done
-echo "sandbox-units: done. Watch the next bridge pass in journalctl -u $CHAIN-bridge-main."
+echo "sandbox-units: done. Now register a new deposit address on the site, and watch the next bridge pass:"
+echo "  journalctl -fu $CHAIN-bridge-main"

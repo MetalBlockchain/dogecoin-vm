@@ -323,13 +323,24 @@ func cmdSignerLog(args []string) error {
 		if err != nil {
 			return err
 		}
+		// Written even when the chains show nothing to adopt: a signer won't
+		// start without its log.
+		if err := log.write(); err != nil {
+			return err
+		}
 		printJSON(map[string]any{"signingLog": *logPath, "adopted": adopted})
 		return nil
 	}
 	if step == "check" {
 		_, statErr := os.Lstat(*logPath)
-		printJSON(map[string]any{"signingLog": *logPath, "exists": statErr == nil, "quarantined": c.quarantined(), "unlogged": missing})
-		if len(missing) > 0 {
+		quarantined := c.quarantined()
+		printJSON(map[string]any{"signingLog": *logPath, "exists": statErr == nil, "quarantined": quarantined, "unlogged": missing})
+		switch {
+		case statErr != nil:
+			return fmt.Errorf("there is no signing log at %s", *logPath)
+		case quarantined != "":
+			return fmt.Errorf("this signer is quarantined: %s", quarantined)
+		case len(missing) > 0:
 			return fmt.Errorf("the log lacks %d transaction(s) the chains show this key signed", len(missing))
 		}
 		return nil
