@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stages separate signer services on this host from the live signer set, as
-# a rehearsal for Phase 2: one directory per key, a keyless coordinator, and
+# a rehearsal for Phase 3: one directory per key, a keyless coordinator, and
 # a service file for each signer. It starts nothing and doesn't touch the
 # running bridge. docs/SIGNERS.md ("Moving an existing deployment") and
 # docs/FIRST-ROUND-TRIP.md cover the switch itself.
