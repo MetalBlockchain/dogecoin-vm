@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Exercises deploy/upgrade-bridge.sh on a fake host: stub systemctl,
-# runuser, journalctl, curl, git and go, and a stub bridge binary that
-# pauses, resumes and checks signing logs. Run from the repo root:
+# Exercises deploy/upgrade-bridge.sh on a fake host: stub systemctl (which
+# keeps each unit's state), runuser, journalctl, curl, git and go, and a
+# stub dogevm binary that pauses, resumes, checks signing logs and reports
+# anchors. Each signer has its own directory, with its own signer set,
+# pause file and contribution list, as signer-setup join makes them. Run
+# from the repo root, with bash 4 or later:
 #
-#   deploy/test/upgrade-bridge-test.sh
+#   deploy/test/upgrade-bridge-test.sh      # BASH5=$(brew --prefix)/bin/bash on macOS
 set -uo pipefail
 
 SCRIPT=$(cd "$(dirname "$0")/.." && pwd)/upgrade-bridge.sh
@@ -12,22 +15,33 @@ ok() { echo "  ok: $*"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $*"; fail=$((fail + 1)); }
 expect() { if eval "$1"; then ok "$2"; else bad "$2"; fi; }
 
-# A stub bridge binary: VERSION is printed by "version"; pause/resume write
-# and remove paused.json next to -signers; signer-log checks/creates -log.
+# The stub binary. VERSION is printed by "version"; pause/resume write and
+# remove paused.json next to -signers (and log it); signer-log checks,
+# creates and adopts -log, and "anchors" prints the tips ($TIPS, or
+# $TIPS_<unit> for a signer whose nodes see another line) and, with -set,
+# records them in the log.
 stub_bridge() { # path version
   cat >"$1" <<EOF
 #!/usr/bin/env bash
 cmd=\$1; shift
 arg() { local want=\$1; shift; while [[ \$# -gt 0 ]]; do [[ \$1 == \$want ]] && { echo "\$2"; return; }; shift; done; }
+has() { local want=\$1; shift; for a in "\$@"; do [[ \$a == \$want ]] && return 0; done; return 1; }
+unit_of() { basename "\$(dirname "\$1")"; }
 case \$cmd in
   version) echo "$2" ;;
-  pause) set=\$(arg -signers "\$@"); echo '{"reason":"x"}' >"\$(dirname "\$set")/paused.json" ;;
-  resume) set=\$(arg -signers "\$@"); rm -f "\$(dirname "\$set")/paused.json" ;;
+  pause) set=\$(arg -signers "\$@"); echo '{"reason":"x"}' >"\$(dirname "\$set")/paused.json"; echo "pause \$(dirname "\$set")" >>"\$EVENTS" ;;
+  resume) set=\$(arg -signers "\$@"); rm -f "\$(dirname "\$set")/paused.json"; echo "resume \$(dirname "\$set")" >>"\$EVENTS" ;;
   signer-log)
-    step=\$1; shift; log=\$(arg -log "\$@")
+    step=\$1; shift; log=\$(arg -log "\$@"); set=\$(arg -signers "\$@")
+    tips=\${TIPS:-'{"dogecoin":"aa:1","dogecoinvm":"bb:1"}'}
+    if [[ -n \$set ]]; then u=\$(unit_of "\$set"); v=TIPS_\${u//-/_}; tips=\${!v:-\$tips}; fi
     case \$step in
       init|adopt) [[ -f \$log ]] && { echo "exists" >&2; exit 1; }; echo '{"actions":{}}' >"\$log" ;;
       check) [[ -f \$log ]] || { echo "no log" >&2; exit 1; }; grep -q QUARANTINE "\$log" && { echo "quarantined" >&2; exit 1; }; true ;;
+      anchors)
+        if [[ -z \$(arg -key-file "\$@") ]]; then echo "{\"tips\":\$tips}"; exit 0; fi
+        has -set "\$@" && echo "ANCHORS \$tips" >>"\$log"
+        echo "{\"anchors\":\$tips,\"tips\":\$tips}" ;;
     esac ;;
 esac
 EOF
@@ -37,36 +51,50 @@ EOF
 setup() { # makes a fresh fake host in $T
   T=$(mktemp -d)
   export HOME_DIR=$T/opt STATE=$T/state VARLIB=$T/varlib BACKUPS=$T/backups SIGNER_BIN=$T/signerbin/dogevm UPGRADE_TEST=1
-  export SET=$STATE/secrets/separate-signers/signers.json BRANCH=main
-  mkdir -p "$HOME_DIR/bin" "$HOME_DIR/src" "$(dirname "$SET")" "$BACKUPS" "$(dirname "$SIGNER_BIN")" "$T/bin" "$T/units"
+  export SET=$STATE/secrets/separate-signers/signers.json BRANCH=main EVENTS=$T/events BRIDGE_ENV=$STATE/secrets/bridge.env
+  mkdir -p "$HOME_DIR/bin" "$HOME_DIR/src" "$(dirname "$SET")" "$BACKUPS" "$(dirname "$SIGNER_BIN")" "$T/bin" "$T/units" "$T/active"
   stub_bridge "$HOME_DIR/bin/dogevm" old
   stub_bridge "$SIGNER_BIN" old
+  echo "DOGECOIN_NETWORK=mainnet" >"$BRIDGE_ENV"
   echo '{"required":2,"publicKeys":["02aa","02bb","02cc"]}' >"$SET"
   echo '[{"url":"http://127.0.0.1:9701"},{"url":"http://127.0.0.1:9702"},{"url":"http://127.0.0.1:9703"}]' >"$(dirname "$SET")/cosigners.json"
-  local n key
+  local n key dir
   for n in 1 2 3; do
     key=$(sed -n "${n}p" <<<$'02aa\n02bb\n02cc')
-    mkdir -p "$VARLIB/dogevm-signer-$n"
-    echo "BITCOIN_NETWORK=mainnet" >"$VARLIB/dogevm-signer-$n/signer.env"
-    echo "{\"publicKey\":\"$key\"}" >"$VARLIB/dogevm-signer-$n/card.json"
-    echo '{"actions":{}}' >"$VARLIB/dogevm-signer-$n/signing-log.json"
-    echo "/x/dogevm signer -signers $SET -key-file $VARLIB/dogevm-signer-$n/signer.key -listen 127.0.0.1:970$n -log $VARLIB/dogevm-signer-$n/signing-log.json -deposits $VARLIB/dogevm-signer-$n/deposits.json -max-daily 1" >"$T/units/dogevm-signer-$n"
+    dir=$VARLIB/dogevm-signer-$n
+    mkdir -p "$dir"
+    cp "$SET" "$dir/signers.json"
+    echo "DOGECOIN_NETWORK=mainnet" >"$dir/signer.env"
+    echo "{\"publicKey\":\"$key\"}" >"$dir/card.json"
+    echo '{"actions":{}}' >"$dir/signing-log.json"
+    echo "/x/dogevm signer -signers $dir/signers.json -key-file $dir/signer.key -listen 127.0.0.1:970$n -log $dir/signing-log.json -deposits $dir/deposits.json -max-daily 1" >"$T/units/dogevm-signer-$n"
+    touch "$T/active/dogevm-signer-$n"
   done
   echo "/x/dogevm serve -signers $SET -listen 127.0.0.1:8081" >"$T/units/dogevm-web-main"
-  echo "/x/dogevm bridge -signers $SET" >"$T/units/dogevm-bridge-main"
+  echo "/x/dogevm bridge -signers $SET -deposits $STATE/registry/deposits.json" >"$T/units/dogevm-bridge-main"
   echo "/x/dogevm monitor -signers $SET" >"$T/units/dogevm-monitor-main"
-  : >"$T/events"
+  touch "$T/active/dogevm-web-main" "$T/active/dogevm-bridge-main" "$T/active/dogevm-monitor-main"
+  : >"$EVENTS"
+  # systemctl keeps each unit's state in $T/active; FAIL_STOP and
+  # FAIL_START name a unit that won't stop or start.
   cat >"$T/bin/systemctl" <<EOF
 #!/usr/bin/env bash
-case \$1 in
+cmd=\$1; shift
+case \$cmd in
   list-unit-files) for n in 1 2 3; do echo "dogevm-signer-\$n.service enabled enabled"; done ;;
   show) unit=\${@: -1}; cat "$T/units/\${unit%.service}" ;;
-  stop|start) shift; for u in "\$@"; do echo "\$1 \$u" | sed "s/^/\$1 /" >/dev/null; echo "\${0##*/} \$u" >/dev/null; done
-     for u in "\$@"; do echo "\$u" >>"$T/events.\${FUNCNAME:-x}"; done
-     [[ \$1 == stop ]] && true ;;
-  is-active) unit=\${@: -1}; [[ \${FAIL_UNIT:-} == "\$unit" ]] && exit 3; exit 0 ;;
+  stop) for u in "\$@"; do
+      [[ \${FAIL_STOP:-} == "\$u" ]] && { echo "stop \$u failed" >>"\$EVENTS"; exit 1; }
+      rm -f "$T/active/\$u"; echo "stop \$u" >>"\$EVENTS"
+    done ;;
+  start) for u in "\$@"; do
+      [[ \${FAIL_START:-} == "\$u" ]] && { echo "start \$u failed" >>"\$EVENTS"; continue; }
+      touch "$T/active/\$u"; echo "start \$u" >>"\$EVENTS"
+      # LATE_WRITE: that signer's log changes once it runs again.
+      if [[ \${LATE_WRITE:-} == "\$u" ]]; then echo SIGNED-LATE >>"$VARLIB/\$u/signing-log.json"; fi
+    done ;;
+  is-active) unit=\${@: -1}; [[ -f "$T/active/\$unit" ]] ;;
 esac
-exit 0
 EOF
   cat >"$T/bin/runuser" <<'EOF'
 #!/usr/bin/env bash
@@ -81,7 +109,7 @@ exit 0
 EOF
   cat >"$T/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-if [[ -n ${HEALTH:-} ]]; then echo "$HEALTH"; else echo '{"checks":[{"name":"peg","ok":true}]}'; fi
+if [[ -n ${HEALTH:-} ]]; then echo "$HEALTH"; else echo '{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"dogecoinvm","ok":true}]}'; fi
 EOF
   cat >"$T/bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -102,15 +130,29 @@ EOF
 }
 run() { "${BASH5:-bash}" "$SCRIPT" abc123 >"$T/out" 2>&1; echo $?; }
 paused() { [[ -f $(dirname "$SET")/paused.json ]]; }
+signer_paused() { [[ -f $VARLIB/dogevm-signer-$1/paused.json ]]; }
+all_signers_paused() { signer_paused 1 && signer_paused 2 && signer_paused 3; }
 version() { "$HOME_DIR/bin/dogevm" version; }
+line_of() { grep -n -m1 -- "$1" "$EVENTS" | cut -d: -f1; }
+# Every signer paused, then stopped, before anything was backed up: the
+# backup's log copies are written after the last signer stopped.
+quiet_before_backup() {
+  local last_stop
+  last_stop=$(grep -n '^stop dogevm-signer-' "$EVENTS" | tail -1 | cut -d: -f1)
+  [[ -n $last_stop ]] && [[ $(line_of "pause $VARLIB/dogevm-signer-3") -lt $last_stop ]] &&
+    [[ $(line_of "stop dogevm-bridge-main") -lt $(line_of "pause $VARLIB/dogevm-signer-1") ]]
+}
 
-echo "1. success: new binary, logs checked, keys filled in, still paused"
+echo "1. success: new binary, signers paused and stopped before the backup, anchors agree, still paused"
 setup
 code=$(run)
 expect '[[ $code == 0 ]]' "exits 0 ($(tail -3 "$T/out" | tr '\n' ' '))"
 expect '[[ $(version) == new && $("$SIGNER_BIN" version) == new ]]' "both binaries upgraded"
-expect 'paused' "left paused"
+expect 'quiet_before_backup' "coordinator stopped, then every signer paused, then stopped"
+expect 'paused && all_signers_paused' "bridge and signers left paused"
 expect 'grep -q 02bb "$(dirname "$SET")/cosigners.json"' "public keys filled in"
+expect 'grep -q "anchors agree" "$T/out"' "anchors compared"
+expect 'grep -q "runuser -u dogevm-signer-2 .* resume -signers $VARLIB/dogevm-signer-2/signers.json" "$T/out"' "prints how to resume each signer"
 
 echo "2. a missing signing log stops it and everything goes back"
 setup
@@ -119,17 +161,17 @@ code=$(run)
 expect '[[ $code != 0 ]]' "fails"
 expect 'grep -q "has no signing log" "$T/out"' "says why"
 expect '[[ $(version) == old && $("$SIGNER_BIN" version) == old ]]' "old binaries back"
-expect 'paused' "still paused"
+expect 'paused && all_signers_paused' "still paused, signers too"
 expect '[[ ! -f $VARLIB/dogevm-signer-3/signing-log.json ]]' "no log invented"
 
-echo "3. INIT_LOGS names a signer that never signed"
+echo "3. INIT_LOGS names a signer that never signed; its anchors are set"
 setup
 rm "$VARLIB/dogevm-signer-3/signing-log.json"
 code=$(INIT_LOGS=dogevm-signer-3 run)
 expect '[[ $code == 0 ]]' "succeeds"
-expect '[[ -f $VARLIB/dogevm-signer-3/signing-log.json ]]' "an empty log made for it"
+expect 'grep -q ANCHORS "$VARLIB/dogevm-signer-3/signing-log.json"' "a log made for it, with its anchors"
 
-echo "4. an unhealthy peg after the upgrade rolls back, including a log it made"
+echo "4. an unhealthy peg after the upgrade rolls back; a log it made, unchanged since, goes"
 setup
 rm "$VARLIB/dogevm-signer-3/signing-log.json"
 code=$(INIT_LOGS=dogevm-signer-3 HEALTH='{"checks":[{"name":"peg","ok":false}]}' run)
@@ -137,36 +179,88 @@ expect '[[ $code != 0 ]]' "fails"
 expect '[[ $(version) == old ]]' "old binary back"
 expect '[[ ! -f $VARLIB/dogevm-signer-3/signing-log.json ]]' "the log it made is removed"
 expect '! grep -q publicKey "$(dirname "$SET")/cosigners.json"' "cosigners.json restored"
-expect 'paused' "still paused"
+expect 'paused && all_signers_paused' "still paused"
 
 echo "5. a pause already in place stays, even with RESUME=1"
 setup
 echo '{}' >"$(dirname "$SET")/paused.json"
 code=$(RESUME=1 run)
 expect '[[ $code == 0 ]]' "succeeds"
-expect 'paused' "still paused"
+expect 'paused && all_signers_paused' "still paused"
 
-echo "6. RESUME=1 resumes a bridge it paused itself"
+echo "6. RESUME=1 resumes the bridge and the signers it paused, when every check passes"
 setup
+echo '{}' >"$VARLIB/dogevm-signer-3/paused.json" # its operator's own pause
 code=$(RESUME=1 run)
-expect '[[ $code == 0 ]] && ! paused' "resumed"
+expect '[[ $code == 0 ]] && ! paused' "bridge resumed"
+expect '! signer_paused 1 && ! signer_paused 2' "the signers it paused resumed"
+expect 'signer_paused 3' "a signer its operator paused stays paused"
 
-echo "7. a quarantined signer log stops it"
+echo "7. RESUME=1 doesn't resume while a check other than the peg fails"
+setup
+code=$(RESUME=1 HEALTH='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"dogecoinvm","ok":false,"detail":"unhealthy"}]}' run)
+expect '[[ $code == 0 ]]' "the upgrade itself stands"
+expect 'paused && all_signers_paused' "nothing resumed"
+expect 'grep -q "not resuming: failing checks: dogecoinvm" "$T/out"' "says why"
+
+echo "8. a quarantined signer log stops it"
 setup
 echo QUARANTINE >>"$VARLIB/dogevm-signer-2/signing-log.json"
 code=$(run)
 expect '[[ $code != 0 && $(version) == old ]] && paused' "fails, old binary back, paused"
 
-echo "8. a cosigners.json key outside the signer set stops it"
+echo "9. a cosigners.json key outside the signer set stops it"
 setup
 echo '[{"url":"http://127.0.0.1:9701","publicKey":"02ff"}]' >"$(dirname "$SET")/cosigners.json"
 code=$(run)
 expect '[[ $code != 0 ]] && grep -q "not in the signer set" "$T/out"' "fails, says why"
 
-echo "9. a signer that won't start rolls back"
+echo "10. a signer that won't start rolls back"
 setup
-code=$(FAIL_UNIT=dogevm-signer-2 run)
-expect '[[ $code != 0 && $(version) == old ]] && paused' "fails, old binary back, paused"
+code=$(FAIL_START=dogevm-signer-2 run)
+expect '[[ $code != 0 && $(version) == old ]] && paused && all_signers_paused' "fails, old binary back, paused"
+
+echo "11. a signer that won't stop: nothing is installed or backed up"
+setup
+code=$(FAIL_STOP=dogevm-signer-2 run)
+expect '[[ $code != 0 && $(version) == old ]]' "fails, old binary kept"
+expect 'paused && all_signers_paused' "bridge and signers paused"
+expect '[[ -z $(ls "$BACKUPS"/*/coordinator 2>/dev/null) ]]' "no backup taken while a signer could sign"
+
+echo "12. a log that changes after the backup is never rolled back"
+setup
+code=$(LATE_WRITE=dogevm-signer-2 HEALTH='{"checks":[{"name":"peg","ok":false}]}' run)
+expect '[[ $code != 0 ]]' "fails"
+expect 'grep -q SIGNED-LATE "$VARLIB/dogevm-signer-2/signing-log.json"' "the newer log is kept"
+expect 'grep -q "kept as it is" "$T/out"' "and flagged"
+
+echo "13. a signer whose nodes see another anchor line stops it"
+setup
+code=$(TIPS_dogevm_signer_2='{"dogecoin":"ff:0","dogecoinvm":"bb:1"}' run)
+expect '[[ $code != 0 && $(version) == old ]]' "fails, old binary back"
+expect 'grep -q "anchors aren.t the coordinator.s tips" "$T/out"' "says why"
+
+echo "14. contribution lists: the coordinator's goes next to each signer's set; a failure puts theirs back"
+setup
+c=$(printf '%064d' 1):0
+echo "$c" >"$(dirname "$SET")/contributions.txt"
+echo "$(printf '%064d' 9):0" >"$VARLIB/dogevm-signer-1/contributions.txt"
+code=$(run)
+expect '[[ $code == 0 ]]' "succeeds"
+expect 'grep -qx "$c" "$VARLIB/dogevm-signer-1/contributions.txt" && grep -qx "$c" "$VARLIB/dogevm-signer-3/contributions.txt"' "every signer reads the coordinator's"
+setup
+echo "$c" >"$(dirname "$SET")/contributions.txt"
+echo "$(printf '%064d' 9):0" >"$VARLIB/dogevm-signer-1/contributions.txt"
+code=$(HEALTH='{"checks":[{"name":"peg","ok":false}]}' run)
+expect '[[ $code != 0 ]] && grep -q "$(printf "%064d" 9):0" "$VARLIB/dogevm-signer-1/contributions.txt"' "signer 1's own list back after a failure"
+expect '[[ ! -f $VARLIB/dogevm-signer-2/contributions.txt ]]' "and none where there was none"
+
+echo "15. a contribution list naming transactions, not outputs, is refused before anything changes"
+setup
+printf '%064d\n' 1 >"$(dirname "$SET")/contributions.txt"
+code=$(run)
+expect '[[ $code != 0 ]] && grep -q "TXID:VOUT" "$T/out"' "fails, says why"
+expect '! paused' "before pausing anything"
 
 echo
 echo "$pass passed, $fail failed"
