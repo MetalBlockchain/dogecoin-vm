@@ -58,6 +58,8 @@ type server struct {
 	heavy chan struct{}
 
 	registerLimit *rateLimit
+	txLimit       *rateLimit // transactions submitted per client
+	txTotal       *rateLimit // transactions submitted in all
 }
 
 // dogeSync is the part of Dogecoin Core's getblockchaininfo the page shows
@@ -450,6 +452,11 @@ func (srv *server) broadcast(r *http.Request) (any, error) {
 	if err := decodeBody(r, &body); err != nil {
 		return nil, err
 	}
+	// Anyone can submit transactions here: a few a second per client, and a
+	// ceiling for all, so spam has to come from many networks.
+	if !srv.allowTx(r) {
+		return nil, &apiError{http.StatusTooManyRequests, "too many transactions; try again in a minute"}
+	}
 	tx, err := decodeTx(body.Hex)
 	if err != nil {
 		return nil, badRequest("invalid transaction: %v", err)
@@ -637,10 +644,32 @@ func newRateLimit(n int, window time.Duration) *rateLimit {
 	return &rateLimit{n: n, window: window, events: map[string][]time.Time{}}
 }
 
+// allowTx counts a submitted transaction against its client's IPv4 address
+// or IPv6 /64, and against everyone's.
+func (srv *server) allowTx(r *http.Request) bool {
+	if srv.txLimit == nil {
+		return true
+	}
+	key := clientIP(r)
+	if ip := net.ParseIP(key); ip != nil && ip.To4() == nil {
+		key = ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+	}
+	return srv.txLimit.allow(key) && srv.txTotal.allow("")
+}
+
 func (l *rateLimit) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
+	// Forget clients quiet for a whole window, so many one-off clients
+	// can't grow the table without bound.
+	if len(l.events) > 10_000 {
+		for k, ts := range l.events {
+			if len(ts) == 0 || now.Sub(ts[len(ts)-1]) >= l.window {
+				delete(l.events, k)
+			}
+		}
+	}
 	recent := l.events[key][:0]
 	for _, t := range l.events[key] {
 		if now.Sub(t) < l.window {
@@ -725,6 +754,8 @@ func cmdServe(args []string) error {
 		vm:            b.vm.(*vmChain),
 		doge:          b.doge.(*dogeChain),
 		registerLimit: newRateLimit(30, time.Hour),
+		txLimit:       newRateLimit(30, time.Minute),
+		txTotal:       newRateLimit(600, time.Minute),
 		prevOuts:      map[wire.OutPoint]*wire.TxOut{},
 		heavy:         make(chan struct{}, 8),
 	}

@@ -162,6 +162,9 @@ func (srv *server) dogeBroadcast(r *http.Request) (any, error) {
 	if err := decodeBody(r, &body); err != nil {
 		return nil, err
 	}
+	if !srv.allowTx(r) {
+		return nil, &apiError{http.StatusTooManyRequests, "too many transactions; try again in a minute"}
+	}
 	tx, err := decodeTx(body.Hex)
 	if err != nil {
 		return nil, badRequest("invalid transaction: %v", err)
