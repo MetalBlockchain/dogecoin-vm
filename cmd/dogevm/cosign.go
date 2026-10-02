@@ -64,7 +64,7 @@ func refundAction(op wire.OutPoint, dest destination) action {
 // (for example TXID:0 and TXID:00) cannot create separate log entries.
 func (a action) key() (string, error) {
 	switch a.Kind {
-	case actionRelease, actionRefund, actionCancel:
+	case actionRelease, actionRefund, actionCancel, actionFence:
 		op, err := parseOutPoint(a.Deposit)
 		if err != nil {
 			return "", err
@@ -570,8 +570,15 @@ func (c *cosigner) handleSign(r *http.Request) (any, error) {
 	}
 	// Record before answering: if the log cannot be written, sign nothing.
 	var fee int64
-	if req.Action.Kind == actionCancel {
+	switch req.Action.Kind {
+	case actionCancel:
 		fee = c.b.vmFee
+	case actionFence:
+		base := c.b.vmFee
+		if req.Chain == chainDogecoin {
+			base = c.b.dogeFee
+		}
+		fee = fenceFee(base, len(tx.TxIn))
 	}
 	if err := c.log.record(key, req.Chain, tx, value, fee); err != nil {
 		return nil, fmt.Errorf("writing the signing log: %w", err)
@@ -625,6 +632,12 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 	}
 	if err := c.fence(s); err != nil {
 		return nil, nil, 0, err
+	}
+	// A rebuilt log signs a fence first (cutover.go).
+	if req.Action.Kind != actionFence {
+		if err := c.fenced(s, req.Chain); err != nil {
+			return nil, nil, 0, err
+		}
 	}
 	// Fees this signer signed for that can still confirm count against the
 	// surplus, whether or not anyone has sent them yet.
@@ -822,6 +835,26 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		}
 		for _, u := range inputs {
 			unspent[u.outPoint] = true
+		}
+
+	case actionFence:
+		// The cutover after a log was rebuilt: every coin the set holds on
+		// the chain, in one transaction (cutover.go).
+		if req.Chain != chainDogecoin && req.Chain != chainDogecoinVM {
+			return nil, nil, 0, fmt.Errorf("no chain %q", req.Chain)
+		}
+		var fee int64
+		if want, redeems, fee, err = c.checkFence(s, req.Chain); err != nil {
+			return nil, nil, 0, err
+		}
+		if req.Action.Deposit != want.TxIn[0].PreviousOutPoint.String() {
+			return nil, nil, 0, errors.New("a fence names the anchor it spends first")
+		}
+		if err := c.feeRoom(b.audit(s), fee, unseen); err != nil {
+			return nil, nil, 0, err
+		}
+		for _, in := range want.TxIn {
+			unspent[in.PreviousOutPoint] = true
 		}
 
 	case actionPayout, actionRefund:
@@ -1218,6 +1251,11 @@ type signingLog struct {
 	// anchor only once its own node shows the old one spent in a block
 	// (anchorMoved), never because its wallet stopped listing it.
 	Anchors map[string]string `json:"anchors,omitempty"`
+	// Unfenced lists the chains where this log's anchor was set rather
+	// than reached by its own signatures (adopt, anchors -set): it signs
+	// only a fence there until one has spent every older coin
+	// (cutover.go).
+	Unfenced map[string]bool `json:"unfenced,omitempty"`
 }
 
 type loggedAction struct {
@@ -1284,7 +1322,7 @@ func (l *signingLog) normalizeKeys() error {
 		// Every kind record writes must load again, or a signer that
 		// signed one could never restart.
 		switch kind {
-		case actionRelease, actionRefund, actionCancel:
+		case actionRelease, actionRefund, actionCancel, actionFence:
 			a.Deposit = value
 		case actionPayout:
 			a.PegOut = value

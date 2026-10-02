@@ -121,6 +121,10 @@ func adoptedKey(tx *wire.MsgTx) (string, bool) {
 		a = action{Kind: actionPayout, PegOut: id.String()}
 	} else if op, ok := parseRefund(tx); ok {
 		a = action{Kind: actionRefund, Deposit: op.String()}
+	} else if op, ok := parseCancel(tx); ok {
+		a = action{Kind: actionCancel, Deposit: op.String()}
+	} else if op, ok := parseFence(tx); ok {
+		a = action{Kind: actionFence, Deposit: op.String()}
 	} else {
 		return "", false
 	}
@@ -233,8 +237,15 @@ func (c *cosigner) fillAnchors(s *pegState) (map[string]string, error) {
 	if c.log.Anchors == nil {
 		c.log.Anchors = map[string]string{}
 	}
+	if len(set) > 0 && c.log.Unfenced == nil {
+		c.log.Unfenced = map[string]bool{}
+	}
 	for chain, tip := range set {
 		c.log.Anchors[chain] = tip
+		// Set, not reached by this signer's own signatures: whatever it
+		// signed before is unknown to the log, so a fence comes first
+		// (cutover.go).
+		c.log.Unfenced[chain] = true
 	}
 	return t, nil
 }

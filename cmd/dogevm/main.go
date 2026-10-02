@@ -56,6 +56,8 @@ Bridge (peg signers):
   dogevm refund -signers FILE -list           deposits that are held or not yet credited
   dogevm refund -signers FILE -deposit TXID:VOUT [-to DOGEADDR]
       return a held deposit, less the Dogecoin fee, to its sender (or -to)
+  dogevm fence -signers FILE -chain dogecoin|dogecoinvm
+      the cutover after signer logs were rebuilt: spend every coin there once (RUNBOOK)
   dogevm monitor -signers FILE [-webhook URL]  alert when a health check fails
   dogevm pause -signers FILE -reason TEXT     emergency stop: sign and pay nothing (a signer: -dir DIR)
   dogevm resume -signers FILE                 end a pause
@@ -134,6 +136,7 @@ func main() {
 		"bridge":          cmdBridge,
 		"audit":           cmdAudit,
 		"refund":          cmdRefund,
+		"fence":           cmdFence,
 		"monitor":         cmdMonitor,
 		"signer":          cmdSigner,
 		"signer-key":      cmdSignerKey,

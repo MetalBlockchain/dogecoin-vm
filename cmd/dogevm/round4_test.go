@@ -1,6 +1,8 @@
 package main
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
@@ -161,4 +163,263 @@ func TestSignerOfAWithheldReleaseMayCancel(t *testing.T) {
 	require.ErrorContains(err, "missing or spent", "the kept-back release can't confirm after the cancellation")
 	_, _, _, err = h.signers[0].check(h.refundRequest(op, d.value, back))
 	require.NoError(err, "A's release is dead: A refunds")
+}
+
+// rebuildLogs is the cutover after the signers' logs were lost (or never
+// kept, as on the live set): each signer starts a new log and adopts what
+// the chains show it signed, which sets its anchors and so marks both
+// chains as needing a fence.
+func (h *cosignHarness) rebuildLogs() {
+	h.t.Helper()
+	for _, c := range h.signers {
+		c.log = &signingLog{path: filepath.Join(h.t.TempDir(), "signing-log.json"), Actions: map[string]*loggedAction{}}
+		s, err := c.b.load()
+		require.NoError(h.t, err)
+		_, err = c.adopt(s)
+		require.NoError(h.t, err)
+		require.True(h.t, c.log.Unfenced[chainDogecoin] && c.log.Unfenced[chainDogecoinVM])
+	}
+}
+
+// keptPayout has signers 0 and 1 sign peg-out req's payout, and returns it
+// with its signatures, unsent: what a coordinator could keep back.
+func (h *cosignHarness) keptPayout(req *wire.MsgTx) (*wire.MsgTx, [][]byte, map[int][][]byte) {
+	h.t.Helper()
+	s, err := h.b.load()
+	require.NoError(h.t, err)
+	p, ok := findPegOut(s.pegOuts, req.TxHash())
+	require.True(h.t, ok)
+	var confirmed []utxo
+	for _, u := range s.lockedUTXOs {
+		if u.confirmations > 0 {
+			confirmed = append(confirmed, u)
+		}
+	}
+	inputs, err := s.payoutInputs(confirmed, p.value)
+	require.NoError(h.t, err)
+	tx, err := h.b.buildPayout(inputs, p.value, p.dest, encodePayment(p.txid), h.b.dogeFee)
+	require.NoError(h.t, err)
+	redeems := make([][]byte, len(inputs))
+	for i, u := range inputs {
+		redeems[i] = s.redeemFor[string(u.pkScript)]
+	}
+	sigs := h.signWith(&proposal{Chain: chainDogecoin, tx: tx, redeems: redeems,
+		Action: action{Kind: actionPayout, PegOut: p.txid.String()}}, 0, 1)
+	return tx, redeems, sigs
+}
+
+// oldSignature is tx signed by signers 0 and 1 as the live set's binary
+// signed before signers kept logs or followed an anchor line: any coins,
+// no checks. It is assembled, ready for a coordinator to send any time.
+func (h *cosignHarness) oldSignature(tx *wire.MsgTx, redeems [][]byte) *wire.MsgTx {
+	h.t.Helper()
+	sigs := map[int][][]byte{}
+	for _, i := range []int{0, 1} {
+		s, err := signInputs(tx, redeems, h.signers[i].key)
+		require.NoError(h.t, err)
+		sigs[h.b.signers.indexOf(h.signers[i].key.PubKey())] = s
+	}
+	require.NoError(h.t, h.b.signers.assemble(tx, redeems, sigs))
+	return tx
+}
+
+// TestFenceKillsKeptBackSignatures (round 4, T5): the live signers signed
+// without logs or an anchor line, so a payout and a release signed then
+// and kept back can spend any coins, off today's line. Logs rebuilt from
+// the chains can't show them. Until a fence has spent every coin on a
+// chain, no signer signs anything else there; once it is deep enough, the
+// kept-back transactions can never confirm, and the bridge carries on.
+// Without the fence they would: their coins are ones the line never spends.
+func TestFenceKillsKeptBackSignatures(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	alice, bob := h.user(1), h.user(2)
+	capital := h.contribute(10*doge, 50) // operating capital for the fences' fees
+	h.deposit(10*doge, &alice, 9)
+	for h.step() != "" {
+		h.vm.mine()
+	}
+	req := h.pegOut(5*doge, bob)
+	h.vm.mine()
+
+	// Kept back from the old days: bob's payout from the capital coin,
+	// and a credit of a second deposit from the coin bob paid into the
+	// reserve. Neither is on today's lines.
+	s, err := h.b.load()
+	require.NoError(err)
+	p, ok := findPegOut(s.pegOuts, req.TxHash())
+	require.True(ok)
+	capitalCoin := wire.OutPoint{Hash: capital.TxHash()}
+	require.NotEqual(capitalCoin, s.pegAnchor.outPoint)
+	payout := wire.NewMsgTx(1)
+	payout.AddTxIn(wire.NewTxIn(&capitalCoin, nil, nil))
+	payout.AddTxOut(wire.NewTxOut(p.value-h.b.dogeFee, bob.pkScript()))
+	payout.AddTxOut(wire.NewTxOut(10*doge-p.value, h.b.signers.pkScript()))
+	payout.AddTxOut(nullData(encodePayment(p.txid)))
+	payout = h.oldSignature(payout, [][]byte{h.b.signers.redeemScript})
+
+	dep2 := h.deposit(4*doge, &alice, 9)
+	reserveCoin := wire.OutPoint{Hash: req.TxHash()}
+	require.NotEqual(reserveCoin, s.reserveAnchor.outPoint)
+	release := wire.NewMsgTx(wire.TxVersion)
+	release.AddTxIn(wire.NewTxIn(&reserveCoin, nil, nil))
+	release.AddTxOut(wire.NewTxOut(4*doge-h.b.vmFee, alice.pkScript()))
+	release.AddTxOut(wire.NewTxOut(doge, h.b.signers.pkScript()))
+	release.AddTxOut(nullData(encodeRelease(wire.OutPoint{Hash: dep2.TxHash()})))
+	release = h.oldSignature(release, [][]byte{h.b.signers.redeemScript})
+
+	h.rebuildLogs()
+	_, err = h.b.step()
+	require.ErrorContains(err, "signs only a fence", "nothing but a fence until the cutover")
+
+	_, err = h.b.fence(chainDogecoin)
+	require.NoError(err)
+	_, err = h.b.fence(chainDogecoinVM)
+	require.NoError(err)
+	h.vm.mine()
+	h.doge.mine()
+	cs, err := h.signers[2].b.load()
+	require.NoError(err)
+	require.ErrorContains(h.signers[2].fenced(cs, chainDogecoin), "confirmations yet", "Dogecoin's fence must be deep first")
+	require.NoError(h.signers[2].fenced(cs, chainDogecoinVM), "DogecoinVM's is final in its block")
+	for range 6 {
+		h.doge.mine()
+	}
+
+	_, err = h.doge.send(payout)
+	require.ErrorContains(err, "missing or spent", "the kept-back payout's coin is spent")
+	_, err = h.vm.send(release)
+	require.ErrorContains(err, "missing or spent", "the kept-back release's coin is spent")
+
+	// The bridge carries on: the deposit is credited, the peg-out paid.
+	did := ""
+	for range 6 {
+		got, err := h.b.step()
+		require.NoError(err)
+		did += got
+		h.vm.mine()
+		h.doge.mine()
+	}
+	require.Contains(did, "paid")
+	for _, c := range h.signers { // each clears its mark when next asked
+		cs, err := c.b.load()
+		require.NoError(err)
+		require.NoError(c.fenced(cs, chainDogecoin))
+		require.NoError(c.fenced(cs, chainDogecoinVM))
+		require.Empty(c.log.Unfenced)
+	}
+	a := h.audit()
+	require.True(a.solvent(), "%+v", a)
+
+	// A log rebuilt again later adopts the fences (and any cancellation)
+	// it signed, by their tags, and the log loads again.
+	c := h.signers[0]
+	c.log = &signingLog{path: filepath.Join(t.TempDir(), "signing-log.json"), Actions: map[string]*loggedAction{}}
+	cs, err = c.b.load()
+	require.NoError(err)
+	adopted, err := c.adopt(cs)
+	require.NoError(err)
+	require.NotEmpty(adopted)
+	fences := 0
+	for key := range c.log.Actions {
+		if strings.HasPrefix(key, actionFence+":") {
+			fences++
+		}
+	}
+	require.Equal(2, fences, "both fences, one per chain")
+	_, err = openSigningLog(c.log.path)
+	require.NoError(err)
+}
+
+// TestFenceSpendsEveryCoinTheSignerSees (round 4, T5): a fence that leaves
+// out a coin the signer holds could leave a kept-back signature alive, so
+// the signer refuses it; and a fence is only for a log that needs one.
+func TestFenceSpendsEveryCoinTheSignerSees(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	alice := h.user(1)
+	h.contribute(10*doge, 50)
+	h.deposit(10*doge, &alice, 9)
+	for h.step() != "" {
+		h.vm.mine()
+	}
+	c := h.signers[2]
+	s, err := h.b.load()
+	require.NoError(err)
+	inputs, err := s.fenceInputs(chainDogecoin)
+	require.NoError(err)
+	require.Greater(len(inputs), 2)
+	request := func(in []utxo) signRequest {
+		tx, _, err := h.b.buildFence(chainDogecoin, in)
+		require.NoError(err)
+		return signRequest{Chain: chainDogecoin, Tx: encodeTx(tx), Action: action{Kind: actionFence, Deposit: in[0].outPoint.String()}}
+	}
+	_, _, _, err = c.check(request(inputs))
+	require.ErrorContains(err, "needs no fence", "a log that was never rebuilt signs no fence")
+
+	h.rebuildLogs()
+	_, _, _, err = c.check(request(inputs[:len(inputs)-1]))
+	require.ErrorContains(err, "not the transaction this signer would build")
+	_, _, _, err = c.check(request(inputs))
+	require.NoError(err)
+}
+
+// TestKeptBackPayoutSentBeforeTheFence (round 4, T5): if the coordinator
+// sends a kept-back payout after the logs were rebuilt and before the
+// fence, the signers that signed it see a signature their new log lacks and
+// quarantine themselves: the fence can't be signed, and nothing else is.
+func TestKeptBackPayoutSentBeforeTheFence(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	alice, bob := h.user(1), h.user(2)
+	h.contribute(10*doge, 50)
+	h.deposit(10*doge, &alice, 9)
+	for h.step() != "" {
+		h.vm.mine()
+	}
+	req := h.pegOut(5*doge, bob)
+	payout, redeems, sigs := h.keptPayout(req)
+	h.rebuildLogs()
+	require.NoError(h.b.signers.assemble(payout, redeems, sigs))
+	_, err := h.doge.send(payout)
+	require.NoError(err)
+	h.doge.mine()
+
+	_, err = h.b.fence(chainDogecoin)
+	require.ErrorContains(err, "quarantined")
+	require.NotEmpty(h.signers[0].quarantined())
+	require.NotEmpty(h.signers[1].quarantined())
+}
+
+// TestAFenceSomeoneElseMadeDoesntCount (round 4, T5): anyone can pay the
+// peg address with a fence's tag. Only a fence that spends the set's own
+// coins, from the rebuilt log's anchor on, ends the cutover.
+func TestAFenceSomeoneElseMadeDoesntCount(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	alice := h.user(1)
+	h.contribute(10*doge, 50)
+	h.deposit(10*doge, &alice, 9)
+	for h.step() != "" {
+		h.vm.mine()
+	}
+	h.rebuildLogs()
+	c := h.signers[2]
+	s, err := c.b.load()
+	require.NoError(err)
+	tip := s.pegAnchor.outPoint
+
+	// A stranger's payment to the peg tagged as a fence, naming the tip,
+	// deep in the chain, with nothing older left unspent but the set's own.
+	fake := wire.NewMsgTx(1)
+	fake.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+	fake.AddTxOut(wire.NewTxOut(doge, h.b.signers.pkScript()))
+	fake.AddTxOut(nullData(encodeFence(tip)))
+	h.doge.add(fake, 1)
+	for range 10 {
+		h.doge.mine()
+	}
+	s, err = c.b.load()
+	require.NoError(err)
+	require.ErrorContains(c.fenced(s, chainDogecoin), "no fence on dogecoin from this log's anchor")
 }

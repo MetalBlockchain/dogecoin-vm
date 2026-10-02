@@ -208,6 +208,11 @@ func TestSignerWithNoAnchorSignsNothing(t *testing.T) {
 	require.NoError(err)
 	require.Equal(want[chainDogecoinVM], reread.Anchors[chainDogecoinVM])
 	require.Equal(want[chainDogecoin], reread.Anchors[chainDogecoin])
+	// Set, not signed: a fence comes first (round 4, T5; cutover.go).
+	require.True(reread.Unfenced[chainDogecoinVM] && reread.Unfenced[chainDogecoin])
+	_, _, _, err = c.check(req)
+	require.ErrorContains(err, "signs only a fence")
+	c.log.Unfenced = nil // as once its fence has done its work
 	_, _, _, err = c.check(req)
 	require.NoError(err)
 }
