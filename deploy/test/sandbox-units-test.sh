@@ -31,10 +31,19 @@ case \$1 in
 esac
 exit 0
 EOF
+  # HEALTH_FILE holds the status code, or "503-pause" (paused, nothing
+  # else failing) or "503-vm" (paused, and the VM check failing too).
   cat >"$T/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-code=$(cat "$HEALTH_FILE")
-for a in "$@"; do [[ $a == -w ]] && { echo "$code"; exit 0; }; done
+h=$(cat "$HEALTH_FILE")
+code=${h%%-*}
+case $h in
+  503-pause) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"dogecoinvm","ok":true}]}' ;;
+  503-vm) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"dogecoinvm","ok":false}]}' ;;
+  503) body='not json' ;;
+  *) body='{"checks":[{"name":"pause","ok":true}]}' ;;
+esac
+for a in "$@"; do [[ $a == -w ]] && { printf '%s\n%s' "$body" "$code"; exit 0; }; done
 [[ $code == 200 ]]
 EOF
   printf '#!/usr/bin/env bash\nexit 0\n' >"$T/bin/sleep"
@@ -67,14 +76,35 @@ expect '[[ $code == 0 && ! -e $SYSTEMD_DIR/dogevm-web-main.service.d/10-sandbox.
 setup
 run >/dev/null
 code=$(AFTER=500 run remove)
-expect '[[ $code != 0 ]] && grep -q "answers 500" "$T/out"' "unhealthy after: fails, says so"
+expect '[[ $code != 0 ]] && grep -q "is bad 500" "$T/out"' "unhealthy after: fails, says so"
+setup
+echo 503-pause >"$HEALTH_FILE"
+code=$(AFTER=503-pause run remove)
+expect '[[ $code == 0 ]]' "paused before and after, nothing else failing: fine"
+setup
+code=$(AFTER=503-pause run remove)
+expect '[[ $code != 0 ]]' "200 before, paused after: fails"
+
+echo "4. a 503 counts as paused only when the pause is the only failing check (round 5, U10)"
+setup
+echo 503-pause >"$HEALTH_FILE"
+code=$(AFTER=503-vm run remove)
+expect '[[ $code != 0 ]] && grep -q "failing dogecoinvm, pause" "$T/out"' "paused before; paused and the VM failing after: fails, names it"
 setup
 echo 503 >"$HEALTH_FILE"
 code=$(AFTER=503 run remove)
-expect '[[ $code == 0 ]]' "503 before and after (paused): fine"
+expect '[[ $code != 0 ]] && grep -q "doesn.t parse" "$T/out"' "a 503 whose body doesn't parse: fails"
 setup
-code=$(AFTER=503 run remove)
-expect '[[ $code != 0 ]]' "200 before, 503 after: fails"
+echo 503-pause >"$HEALTH_FILE"
+code=$(AFTER=503-pause run)
+expect '[[ $code == 0 ]]' "apply while paused (only the pause failing): fine"
+setup
+echo 503-vm >"$HEALTH_FILE"
+code=$(run)
+expect '[[ $code != 0 ]] && [[ ! -e $SYSTEMD_DIR/dogevm-web-main.service.d ]]' "apply with the VM failing behind the pause: refuses, writes nothing"
+setup
+code=$(AFTER=503-vm run)
+expect '[[ $code != 0 ]] && [[ ! -e $SYSTEMD_DIR/dogevm-web-main.service.d/10-sandbox.conf ]]' "apply that breaks the VM check: fails and puts things back"
 
 echo
 echo "$pass passed, $fail failed"

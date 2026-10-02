@@ -45,12 +45,38 @@ REGISTRY=$(sed -nE 's/.* -deposits ([^ ;]+).*/\1/p' <<<"$web_start")
 FINALITY=$(sed -nE 's/.* -finality ([^ ;]+).*/\1/p' <<<"$web_start")
 [[ -n $WEB ]] || die "can't read the web server's -listen"
 [[ -n ${SANDBOX_TEST:-} ]] && systemd-analyze() { :; }
-code_now() { curl -s -o /dev/null --max-time 30 -w '%{http_code}' "http://$WEB/api/health" || true; }
+# health_now: "ok" (200), "paused" (503 with the pause the only failing
+# check, in a response that parses), or "bad CODE: why". A 503 hides which
+# check failed, so the body is read: a pause is expected around this
+# script, a broken VM or node check behind the same code is not.
+health_now() {
+  local body code
+  body=$(curl -s --max-time 30 -w $'\n%{http_code}' "http://$WEB/api/health" || true)
+  code=${body##*$'\n'}
+  body=${body%$'\n'*}
+  [[ $code == 200 ]] && { echo ok; return; }
+  if [[ $code == 503 ]]; then
+    python3 - "$body" <<'PY' && return
+import json, sys
+try:
+    checks = json.loads(sys.argv[1])["checks"]
+    failing = sorted(c["name"] for c in checks if not c["ok"])
+except Exception as e:
+    print(f"bad 503: the health response doesn't parse ({e})")
+    sys.exit(0)
+if failing == ["pause"]:
+    print("paused")
+else:
+    print("bad 503: failing " + ", ".join(failing or ["(none named)"]))
+PY
+  fi
+  echo "bad $code"
+}
 
 if [[ ${1:-} == remove ]]; then
-  # The bridge must answer afterwards as it did before (200, or the 503 of
-  # a known pause or failing check), or the removal is a failure.
-  before=$(code_now)
+  # The bridge must answer afterwards healthy, or paused with nothing else
+  # failing, or the removal is a failure.
+  before=$(health_now)
   for u in "${UNITS[@]}"; do rm -f "$(path_of "$u")"; done
   systemctl daemon-reload
   systemctl restart "${UNITS[@]}"
@@ -58,10 +84,10 @@ if [[ ${1:-} == remove ]]; then
   for u in "${UNITS[@]}"; do
     systemctl is-active --quiet "$u" || die "$u didn't come back up without the sandbox: journalctl -u $u"
   done
-  after=$(code_now)
-  [[ $after == 200 || ( $after == 503 && $before == 503 ) ]] ||
-    die "removed, but /api/health answers $after (it answered $before before): journalctl -u $CHAIN-web-main"
-  echo "sandbox-units: removed; /api/health answers $after"
+  after=$(health_now)
+  [[ $after == ok || ( $after == paused && $before == paused ) ]] ||
+    die "removed, but /api/health is $after (it was $before before): journalctl -u $CHAIN-web-main"
+  echo "sandbox-units: removed; /api/health is $after"
   exit 0
 fi
 
@@ -75,7 +101,8 @@ for dir in "$(dirname "$REGISTRY")" "$(dirname "$FINALITY")"; do
   esac
 done
 case $INDEX in "$SECRETS" | "$SECRETS"/*) die "the coin index $INDEX is inside the secrets directory; move it out first" ;; esac
-curl -sf -o /dev/null --max-time 20 "http://$WEB/api/health" || die "the bridge isn't healthy now (http://$WEB/api/health); fix that first"
+before=$(health_now)
+[[ $before == ok || $before == paused ]] || die "the bridge isn't healthy now ($before; http://$WEB/api/health); fix that first"
 
 BACKUP=$(mktemp -d)
 for u in "${UNITS[@]}"; do
@@ -144,8 +171,8 @@ sleep 15
 for u in "${UNITS[@]}"; do
   systemctl is-active --quiet "$u" || { journalctl -u "$u" -n 20 --no-pager >&2 || true; die "$u didn't stay up under the sandbox"; }
 done
-code=$(curl -s -o /dev/null --max-time 30 -w '%{http_code}' "http://$WEB/api/health" || true)
-[[ $code == 200 ]] || die "the web server answers $code under the sandbox"
+after=$(health_now)
+[[ $after == ok || ( $after == paused && $before == paused ) ]] || die "under the sandbox /api/health is $after (it was $before before)"
 ok=1
 trap - EXIT
 rm -rf "$BACKUP"
