@@ -426,6 +426,9 @@ type cosigner struct {
 	registered       []time.Time
 
 	mu sync.Mutex // one proposal at a time
+	// fenceFee is the fee of the fence check last approved, for its log
+	// entry (under mu).
+	fenceFee int64
 	// mine records which chain transactions carry this signer's signature
 	// (fence.go).
 	mine map[chainhash.Hash]bool
@@ -538,14 +541,24 @@ func (c *cosigner) handleStatus(*http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An unproven log starts its cutover on the first request, this one
+	// included, so the coordinator can learn what to fence.
+	if c.quarantined() == "" {
+		if _, err := c.advanceCutover(s); err != nil {
+			return nil, err
+		}
+	}
 	a := c.b.audit(s)
 	return map[string]any{
-		"quarantined": c.quarantined(),
-		"publicKey":   hex.EncodeToString(c.key.PubKey().SerializeCompressed()),
-		"solvent":     a.solvent(),
-		"locked":      formatDoge(a.Locked),
-		"circulating": formatDoge(a.Circulating),
-		"signedToday": formatDoge(c.log.volumeSince(time.Now().Add(-24 * time.Hour))),
+		"history":      c.log.History,
+		"cutoverEpoch": c.log.CutoverEpoch,
+		"cutover":      c.cutoverLeft(s),
+		"quarantined":  c.quarantined(),
+		"publicKey":    hex.EncodeToString(c.key.PubKey().SerializeCompressed()),
+		"solvent":      a.solvent(),
+		"locked":       formatDoge(a.Locked),
+		"circulating":  formatDoge(a.Circulating),
+		"signedToday":  formatDoge(c.log.volumeSince(time.Now().Add(-24 * time.Hour))),
 	}, nil
 }
 
@@ -574,11 +587,7 @@ func (c *cosigner) handleSign(r *http.Request) (any, error) {
 	case actionCancel:
 		fee = c.b.vmFee
 	case actionFence:
-		base := c.b.vmFee
-		if req.Chain == chainDogecoin {
-			base = c.b.dogeFee
-		}
-		fee = fenceFee(base, len(tx.TxIn))
+		fee = c.fenceFee // what check found it pays (a replacement pays more)
 	}
 	if err := c.log.record(key, req.Chain, tx, value, fee); err != nil {
 		return nil, fmt.Errorf("writing the signing log: %w", err)
@@ -596,7 +605,9 @@ func (c *cosigner) handleSign(r *http.Request) (any, error) {
 // the DOGE the action moves.
 func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) {
 	b := c.b
-	if p := b.paused(); p != nil {
+	// A fence pays no one (cutover.go): it is signed even while paused, so
+	// an upgrade can finish its cutover before anything else resumes.
+	if p := b.paused(); p != nil && req.Action.Kind != actionFence {
 		return nil, nil, 0, fmt.Errorf("this signer is paused: %s", p.Reason)
 	}
 	tx, err := decodeTx(req.Tx)
@@ -633,17 +644,14 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 	if err := c.fence(s); err != nil {
 		return nil, nil, 0, err
 	}
-	// A rebuilt log signs fences first, on both chains, before anything
-	// else on either (cutover.go): an action has a transaction on each
-	// chain (a release on DogecoinVM, a refund on Dogecoin), so a new one
-	// on a fenced chain could confirm beside an old one kept back on the
-	// other.
-	if req.Action.Kind != actionFence {
-		for _, chain := range []string{chainDogecoin, chainDogecoinVM} {
-			if err := c.fenced(s, chain); err != nil {
-				return nil, nil, 0, err
-			}
+	// An unproven log signs fences first, on both chains, before anything
+	// else on either (cutover.go).
+	if req.Action.Kind == actionFence {
+		if _, err := c.advanceCutover(s); err != nil {
+			return nil, nil, 0, err
 		}
+	} else if err := c.cutoverGate(s); err != nil {
+		return nil, nil, 0, err
 	}
 	// Fees this signer signed for that can still confirm count against the
 	// surplus, whether or not anyone has sent them yet.
@@ -844,8 +852,8 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		}
 
 	case actionFence:
-		// The cutover after a log was rebuilt: every coin the set holds on
-		// the chain, in one transaction (cutover.go).
+		// A cutover: the set's coins on the chain back to itself
+		// (cutover.go).
 		if req.Chain != chainDogecoin && req.Chain != chainDogecoinVM {
 			return nil, nil, 0, fmt.Errorf("no chain %q", req.Chain)
 		}
@@ -854,11 +862,12 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 			return nil, nil, 0, err
 		}
 		if req.Action.Deposit != want.TxIn[0].PreviousOutPoint.String() {
-			return nil, nil, 0, errors.New("a fence names the anchor it spends first")
+			return nil, nil, 0, errors.New("a fence names the coin it spends first")
 		}
 		if err := c.feeRoom(b.audit(s), fee, unseen); err != nil {
 			return nil, nil, 0, err
 		}
+		c.fenceFee = fee
 		for _, in := range want.TxIn {
 			unspent[in.PreviousOutPoint] = true
 		}
@@ -1023,8 +1032,13 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 	if req.Chain == chainDogecoinVM {
 		line = s.reserveLine
 	}
-	if err := c.log.anchorMoved(req.Chain, tx, inChain, line); err != nil {
-		return nil, nil, 0, err
+	// A fence in a cutover starts from the lineage's tip whatever the log's
+	// anchor was (an adopted or broken one): it spends every coin that
+	// anchor could lead to, and the cutover's end sets the anchor.
+	if _, cutover := c.log.Cutover[req.Chain]; !(req.Action.Kind == actionFence && cutover) {
+		if err := c.log.anchorMoved(req.Chain, tx, inChain, line); err != nil {
+			return nil, nil, 0, err
+		}
 	}
 	if c.maxDaily > 0 && !c.log.has(key) &&
 		c.log.volumeSince(time.Now().Add(-24*time.Hour))+value > c.maxDaily {
@@ -1257,12 +1271,31 @@ type signingLog struct {
 	// anchor only once its own node shows the old one spent in a block
 	// (anchorMoved), never because its wallet stopped listing it.
 	Anchors map[string]string `json:"anchors,omitempty"`
-	// Unfenced lists the chains where this log's anchor was set rather
-	// than reached by its own signatures (adopt, anchors -set): it signs
-	// only a fence there until one has spent every older coin
-	// (cutover.go).
-	Unfenced map[string]bool `json:"unfenced,omitempty"`
+	// History is what this log proves about the key's past signatures:
+	// "new" (signer-log init, signer-key, signer-setup: a key that never
+	// signed), "fenced" (it has been through a cutover, so every signature
+	// from before the log was kept is dead), or "" (unproven: a log from
+	// software before the cutover rule, or rebuilt by adopt). An unproven
+	// log signs nothing but fences until a cutover is done (cutover.go).
+	History string `json:"history,omitempty"`
+	// Cutover is, per chain, the coins recorded when the current cutover
+	// began (cutover.go): absent when there is none. A chain's entry goes
+	// once every coin on it is cleared.
+	Cutover map[string][]string `json:"cutover,omitempty"`
+	// CutoverEpoch counts the cutovers this log has started; it never
+	// goes down. CutoverStarted is when the current one began (unix s).
+	CutoverEpoch   int   `json:"cutoverEpoch,omitempty"`
+	CutoverStarted int64 `json:"cutoverStarted,omitempty"`
+	// CutoverWaived is, per chain, coins an operator waived (signer-log
+	// cutover -waive), kept for the record.
+	CutoverWaived map[string][]string `json:"cutoverWaived,omitempty"`
 }
+
+// History values (signingLog.History).
+const (
+	historyNew    = "new"
+	historyFenced = "fenced"
+)
 
 type loggedAction struct {
 	Value int64      `json:"value"` // koinu the action moves
@@ -1278,9 +1311,11 @@ type loggedTx struct {
 	Txid   string   `json:"txid"`
 	Signed []string `json:"signed,omitempty"`
 	Inputs []string `json:"inputs"`
-	// Chain and Fee are set for a transaction whose fee comes out of the
-	// peg's surplus (a cancellation): until it is in a block, or can't be,
-	// its fee stays reserved (unseenFees).
+	// Chain is the chain it was signed for (older entries name it only
+	// with a fee; a cutover looks those up in each chain's history). Fee
+	// is set for a transaction whose fee comes out of the peg's surplus (a
+	// cancellation, a fence): until it is in a block, or can't be, its fee
+	// stays reserved (unseenFees).
 	Chain string `json:"chain,omitempty"`
 	Fee   int64  `json:"fee,omitempty"`
 }
@@ -1527,9 +1562,9 @@ func (l *signingLog) record(key, chain string, tx *wire.MsgTx, value, fee int64)
 		a = &loggedAction{Value: value, First: time.Now().Unix()}
 		l.Actions[key] = a
 	}
-	entry := loggedTx{Txid: tx.TxHash().String()}
+	entry := loggedTx{Txid: tx.TxHash().String(), Chain: chain}
 	if fee > 0 {
-		entry.Chain, entry.Fee = chain, fee
+		entry.Fee = fee
 	}
 	for _, in := range tx.TxIn {
 		entry.Inputs = append(entry.Inputs, in.PreviousOutPoint.String())
@@ -1546,7 +1581,8 @@ func createSigningLog(path string) (*signingLog, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	l := &signingLog{path: path, Actions: map[string]*loggedAction{}}
+	// A new key has signed nothing, so it needs no cutover.
+	l := &signingLog{path: path, Actions: map[string]*loggedAction{}, History: historyNew}
 	return l, l.write()
 }
 

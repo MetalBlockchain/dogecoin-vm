@@ -141,10 +141,7 @@ func adoptedKey(tx *wire.MsgTx) (string, bool) {
 func (c *cosigner) adopt(s *pegState) ([]string, error) {
 	missing := c.unlogged(s)
 	if len(missing) == 0 {
-		if _, err := c.fillAnchors(s, false); err != nil {
-			return nil, err
-		}
-		return nil, c.log.write()
+		return nil, c.adoptCutover(s)
 	}
 	byID := map[string]chainTx{}
 	for _, t := range append(append([]chainTx{}, s.vmTxs...), s.dogeTxs...) {
@@ -175,13 +172,19 @@ func (c *cosigner) adopt(s *pegState) ([]string, error) {
 		}
 		a.Txs = append(a.Txs, entry)
 	}
-	// The anchors too: a log rebuilt from the chains starts where the
-	// lines are now, not empty (anchorMoved refuses an empty one once a
-	// line has moved).
-	if _, err := c.fillAnchors(s, false); err != nil {
-		return nil, err
+	return missing, c.adoptCutover(s)
+}
+
+// adoptCutover finishes an adopted log: its anchors start where the lines
+// are now, and, in the same write, it starts a cutover. A log rebuilt from
+// the chains knows nothing of signatures kept back, so it signs only
+// fences until they are dead (cutover.go).
+func (c *cosigner) adoptCutover(s *pegState) error {
+	if _, err := c.fillAnchors(s); err != nil {
+		return err
 	}
-	return missing, c.log.write()
+	c.log.History = ""
+	return c.startCutover(s)
 }
 
 // tips is the tip of each chain's anchor line in s (lineage.go), by chain;
@@ -208,16 +211,13 @@ func tips(s *pegState) (map[string]string, error) {
 // tip; it changes nothing on a failure. Run by adopt and by signer-log
 // anchors -set: every signer of a set must end up with the same anchors
 // (deploy/upgrade-bridge.sh compares them), or one could follow a line of
-// its own. An anchor set rather than reached by the signer's own
-// signatures needs a cutover fence first (cutover.go).
-//
-// With refence, an anchor that no longer leads to the tip (the line ended
-// at a spend that paid nothing back, or a reorganisation took the coin) is
-// set to the tip too, and so needs a fence: the fence spends every coin
-// the set holds, the old anchor included if it is still unspent, so
-// whatever this signer signed from it can't confirm. That, not moving the
-// anchor alone, is the recovery (RUNBOOK.md, "Anchor lineage").
-func (c *cosigner) fillAnchors(s *pegState, refence bool) (map[string]string, error) {
+// its own. An anchor that no longer leads to the tip (the line ended at a
+// spend that paid nothing back, or a reorganisation took the coin) is
+// recovered by a cutover (signer-log cutover), not by moving the anchor:
+// its fences spend every coin the set holds, the old anchor included, so
+// whatever this signer signed from it can't confirm (RUNBOOK.md, "Anchor
+// lineage").
+func (c *cosigner) fillAnchors(s *pegState) (map[string]string, error) {
 	t, err := tips(s)
 	if err != nil {
 		return nil, err
@@ -235,28 +235,18 @@ func (c *cosigner) fillAnchors(s *pegState, refence bool) (map[string]string, er
 		probe := wire.NewMsgTx(1)
 		probe.AddTxIn(wire.NewTxIn(&op, nil, nil))
 		if c.log.Anchors[chain] != "" {
-			err := c.log.anchorMoved(chain, probe, nil, line)
-			if err == nil {
-				continue
+			if err := c.log.anchorMoved(chain, probe, nil, line); err != nil {
+				return nil, fmt.Errorf("%s: the log's anchor doesn't lead to the line's tip %v: %w (recover with signer-log cutover; RUNBOOK.md, \"Anchor lineage\")", chain, op, err)
 			}
-			if !refence {
-				return nil, fmt.Errorf("%s: the log's anchor doesn't lead to the line's tip %v: %w (RUNBOOK.md, \"Anchor lineage\")", chain, op, err)
-			}
+			continue
 		}
 		set[chain] = tip
 	}
 	if c.log.Anchors == nil {
 		c.log.Anchors = map[string]string{}
 	}
-	if len(set) > 0 && c.log.Unfenced == nil {
-		c.log.Unfenced = map[string]bool{}
-	}
 	for chain, tip := range set {
 		c.log.Anchors[chain] = tip
-		// Set, not reached by this signer's own signatures: whatever it
-		// signed before is unknown to the log, so a fence comes first
-		// (cutover.go).
-		c.log.Unfenced[chain] = true
 	}
 	return t, nil
 }
@@ -398,8 +388,9 @@ func syncDir(dir string) error {
 // transaction the key signed: that key's log was lost, and must be restored
 // from a backup instead.
 func cmdSignerLog(args []string) error {
-	const usage = "usage: dogevm signer-log check|init|adopt|anchors -signers FILE -key-file FILE [-log FILE]"
-	if len(args) == 0 || (args[0] != "init" && args[0] != "check" && args[0] != "adopt" && args[0] != "anchors") {
+	const usage = "usage: dogevm signer-log check|init|adopt|anchors|cutover|status -signers FILE -key-file FILE [-log FILE]"
+	steps := map[string]bool{"init": true, "check": true, "adopt": true, "anchors": true, "cutover": true, "status": true}
+	if len(args) == 0 || !steps[args[0]] {
 		return errors.New(usage)
 	}
 	step := args[0]
@@ -410,7 +401,8 @@ func cmdSignerLog(args []string) error {
 	depositsPath := fs.String("deposits", "", "this signer's deposit address registry (default: deposits.json next to -signers)")
 	logPath := fs.String("log", "", "signing log (default: signing-log.json next to -key-file)")
 	setAnchors := fs.Bool("set", false, "anchors: set the log's empty anchors to the lines' tips")
-	refence := fs.Bool("refence", false, "anchors -set: also set an anchor that no longer leads to the tip, which then needs a cutover fence (RUNBOOK.md)")
+	waive := fs.String("waive", "", "cutover: clear this one recorded coin (TXID:VOUT) instead of starting a cutover; needs -chain (RUNBOOK.md, \"Cutover\")")
+	waiveChain := fs.String("chain", "", "cutover -waive: dogecoin or dogecoinvm")
 	s.register(fs)
 	b := bridgeFlags(fs)
 	if err := fs.Parse(args[1:]); err != nil {
@@ -427,8 +419,8 @@ func cmdSignerLog(args []string) error {
 	if err := s.resolve(); err != nil {
 		return err
 	}
-	if *refence && !(step == "anchors" && *setAnchors) {
-		return errors.New("-refence goes with anchors -set")
+	if (*waive != "" || *waiveChain != "") && step != "cutover" {
+		return errors.New("-waive and -chain go with signer-log cutover")
 	}
 	if step == "anchors" && *keyFile == "" {
 		// The coordinator's view: the lines' tips alone, to compare with
@@ -441,7 +433,7 @@ func cmdSignerLog(args []string) error {
 	if *logPath == "" {
 		*logPath = filepath.Join(filepath.Dir(*keyFile), "signing-log.json")
 	}
-	if step == "init" || step == "adopt" || step == "anchors" && *setAnchors {
+	if step == "init" || step == "adopt" || step == "cutover" || step == "anchors" && *setAnchors {
 		// These write the log: the signer must be stopped, or one of its
 		// signatures could be written over (lockSigningLog). Taken before
 		// the log is read.
@@ -492,7 +484,7 @@ func cmdSignerLog(args []string) error {
 		}
 		var t map[string]string
 		if *setAnchors {
-			if t, err = c.fillAnchors(state, *refence); err != nil {
+			if t, err = c.fillAnchors(state); err != nil {
 				return err
 			}
 			if err := log.write(); err != nil {
@@ -502,7 +494,43 @@ func cmdSignerLog(args []string) error {
 			return err
 		}
 		printJSON(map[string]any{"signingLog": *logPath, "anchors": log.Anchors, "tips": t,
-			"walked": walkedTips(log, state), "needsFence": log.Unfenced})
+			"walked": walkedTips(log, state), "history": log.History, "cutoverLeft": c.cutoverLeft(state)})
+		return nil
+	}
+	if step == "cutover" || step == "status" {
+		if _, err := os.Lstat(*logPath); err != nil {
+			return fmt.Errorf("there is no signing log at %s", *logPath)
+		}
+		switch {
+		case step == "cutover" && *waive != "":
+			op, err := parseOutPoint(*waive)
+			if err != nil {
+				return err
+			}
+			if *waiveChain != chainDogecoin && *waiveChain != chainDogecoinVM {
+				return fmt.Errorf("-chain must be %s or %s", chainDogecoin, chainDogecoinVM)
+			}
+			var mp mempooler
+			if *waiveChain == chainDogecoin {
+				mp, _ = b.doge.(mempooler)
+			} else {
+				mp, _ = b.vm.(mempooler)
+			}
+			if err := c.waiveCoin(state, *waiveChain, op, mp); err != nil {
+				return err
+			}
+		case step == "cutover":
+			if err := c.startCutover(state); err != nil {
+				return err
+			}
+		}
+		t, err := tips(state)
+		if err != nil {
+			return err
+		}
+		printJSON(map[string]any{"signingLog": *logPath, "history": log.History, "cutoverEpoch": log.CutoverEpoch,
+			"cutoverLeft": c.cutoverLeft(state), "cutoverPending": c.cutoverPending(state),
+			"anchors": log.Anchors, "lineageTips": t})
 		return nil
 	}
 	missing := c.unlogged(state)

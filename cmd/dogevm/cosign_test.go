@@ -60,11 +60,12 @@ func setAnchors(t *testing.T, c *cosigner) {
 	t.Helper()
 	state, err := c.b.load()
 	require.NoError(t, err)
-	_, err = c.fillAnchors(state, false)
+	_, err = c.fillAnchors(state)
 	require.NoError(t, err)
-	// The harness's set starts already cut over: its signers never signed
-	// without a log (the fence tests in round4_test.go start unfenced).
-	c.log.Unfenced = nil
+	// The harness's keys are new (History "new"): they never signed
+	// without a log, so they need no cutover (round4_test.go and
+	// round5_test.go rebuild logs that do).
+	require.Equal(t, historyNew, c.log.History)
 	require.NoError(t, c.log.write())
 }
 

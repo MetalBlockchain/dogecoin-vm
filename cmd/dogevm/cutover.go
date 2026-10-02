@@ -1,132 +1,522 @@
 package main
 
-// The cutover fence. A signer whose log was rebuilt (adopt), or whose
-// anchors were set rather than reached by its own signatures (signer-log
-// anchors -set), knows nothing of signatures it may have made before: the
-// live DogecoinVM signers signed for months without logs. Any of those the
-// coordinator kept back could still be sent, and spend coins its anchor
-// line knows nothing about. Matching anchors don't stop that; spending
-// every coin those signatures could spend does.
+// Cutover and fences (docs/RUNBOOK.md, "Cutover"). A signature already
+// given stays valid for as long as every coin its transaction spends is
+// unspent. A log rebuilt from the chains (adopt) holds only what reached
+// them, not a signature someone kept back; a log from software before this
+// rule may hold signatures that spend any coin of the set (the live
+// DogecoinVM signers signed for months without logs). Matching anchors
+// today don't kill such a signature: it could be mined later beside a
+// second one for the same withdrawal, signed from another coin.
 //
-// So on each chain such a log signs nothing but a fence first: one
-// transaction spending the line's tip first and then every other confirmed
-// coin the set holds there (on Dogecoin the peg address and every personal
-// deposit address; on DogecoinVM the reserve), all of it back to the set's
-// own script less a fee, its one output the line's next coin. A signer
-// signs it only if it spends exactly the coins the signer's own view holds:
-// a coin the coordinator left out could carry a kept-back signature. Once a
-// fence is in a block deep enough (rootDepth on Dogecoin, so no
-// reorganisation in the threat model undoes it), and no coin from an
-// older block is left unspent, every signature made before it is dead: its
-// inputs are spent. Only then (cutoverDone) does the signer sign anything
-// else there.
+// So such a signer goes through a cutover. Its log records, per chain,
+// every coin a signature given before could spend (cutoverCoins): every
+// output to the set's scripts in any transaction its wallet lists,
+// confirmed, unconfirmed, or conflicting with one in a block, plus every
+// input of every transaction in its log, less those already spent deep. It
+// signs nothing but fences, on either chain, until every recorded coin is
+// cleared: spent by a transaction rootDepth deep (DogecoinVM: in a block,
+// final), or its funding transaction conflicted by one that deep, or waived
+// by an operator (signer-log cutover -waive). Clearing every coin one by one
+// is what makes a multi-batch cutover safe: a later batch's spend must be
+// deep too, not just the first fence's.
 //
-// Deposits are unaffected: what is owed is read from the deposits'
-// transactions, not from their coins still being where they were paid (as
-// with a held deposit a payout pooled). The fee comes from the surplus.
-// docs/RUNBOOK.md, "Cutover fence".
+// A fence is a transaction of the set's coins to itself: the lineage's tip
+// first, then every confirmed recorded coin with no confirmed spend, oldest
+// first, all to one output at the set's own script (the peg address on
+// Dogecoin, the reserve on DogecoinVM), tagged DVMZ with its first input.
+// It pays no one, so it is signed even while paused. Its fee is the
+// surplus's, so a signer signs one only inside a cutover, only if it spends
+// a recorded coin with no confirmed spend, only while no other fence of
+// this cutover is unconfirmed (a stuck Dogecoin one may be replaced, same
+// inputs, one fence fee more, after -fence-bump-after) and, stricter than
+// that, only while none is in a block short of its depth (it may finish
+// the work by waiting). Then the signer's anchor is the lineage's tip on
+// each chain and it signs as usual.
+//
+// adopt starts a cutover; so does a signer whose log is unproven (History
+// "") on its first status or sign request; `signer-log cutover` starts a
+// new one by hand. The coordinator proposes fences with
+// `dogevm bridge ... -fence CHAIN`. Deposits are unaffected: what is owed is
+// read from the deposits' transactions, not from their coins still being
+// where they were paid (as with a held deposit a payout pooled).
 
 import (
 	"errors"
-	"flag"
 	"fmt"
-	"path/filepath"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
-const actionFence = "fence" // spend every coin of a chain once, after a log was rebuilt
+const actionFence = "fence" // spend the set's coins on a chain to itself, in a cutover
 
 var tagFence = []byte("DVMZ")
 
 func encodeFence(anchor wire.OutPoint) []byte { return encodeOutPointTag(tagFence, anchor) }
 
-// parseFence reads the anchor a fence names (its first input).
+// parseFence reads the outpoint a fence names (its first input).
 func parseFence(tx *wire.MsgTx) (wire.OutPoint, bool) { return parseOutPointTag(tx, tagFence) }
 
-// maxFenceInputs keeps a fence a standard transaction (100 kB); a set
-// holding more coins fences in several rounds (cutoverDone waits for all).
-const maxFenceInputs = 250
+// maxFenceInputs bounds one fence, so it stays a standard transaction; a
+// set holding more needs several, one after another.
+func maxFenceInputs(chain string) int {
+	if chain == chainDogecoin {
+		return 100
+	}
+	return 400
+}
+
+// maxFenceBumps is how many times a stuck Dogecoin fence may be replaced,
+// each paying one more fence fee.
+const maxFenceBumps = 4
 
 // fenceFee is a fence's fee: base (the chain's per-transaction fee) for
 // each started 10 kB of its estimated size, at least once. Both chains
-// relay at 0.001 DOGE per kB, so it pays at least ten times that.
+// relay at 0.001 DOGE per kB, so it pays at least ten times that; on
+// DogecoinVM it is never less than -vm-fee.
 func fenceFee(base int64, inputs int) int64 {
 	size := int64(10 + 300*inputs + 80)
 	return base * max(1, (size+9_999)/10_000)
 }
 
-// fenceInputs is what a fence on chain spends, as s reads it: the line's
-// tip, then every other confirmed coin the set holds there, by outpoint,
-// at most maxFenceInputs. It fails while a transaction of the set is
-// pending there: a fence would conflict with it.
-func (s *pegState) fenceInputs(chain string) ([]utxo, error) {
+// cutoverChains are the chains a cutover covers, in order.
+var cutoverChains = []string{chainDogecoin, chainDogecoinVM}
+
+// chainView is one chain as a cutover reads it.
+type chainView struct {
+	txs        []chainTx // wallet history, confirmed or not
+	conflicted []chainTx // conflicting with a transaction in a block; confirmations: minus its depth
+	depth      int64     // confirmations that make a spend final
+	isCoin     func(*wire.TxOut) bool
+	// spentAt is the confirmations of the confirmed transaction spending an
+	// output; conflictDepth the depth of what a conflicted transaction
+	// conflicts with.
+	spentAt       map[wire.OutPoint]int64
+	conflictDepth map[chainhash.Hash]int64
+	funding       map[chainhash.Hash]chainTx
+}
+
+func (s *pegState) view(chain string) *chainView {
+	v := &chainView{txs: s.dogeTxs, conflicted: s.dogeConflicted, depth: 1,
+		isCoin: func(out *wire.TxOut) bool { return s.redeemFor[string(out.PkScript)] != nil }}
+	if chain == chainDogecoinVM {
+		script := []byte(nil)
+		if s.reserveLine != nil {
+			script = s.reserveLine.script
+		}
+		v.txs, v.conflicted = s.vmTxs, nil
+		v.isCoin = func(out *wire.TxOut) bool { return script != nil && string(out.PkScript) == string(script) }
+	} else if s.pegLine != nil {
+		v.depth = max(s.pegLine.rootDepth, 1)
+	}
+	v.spentAt = map[wire.OutPoint]int64{}
+	v.conflictDepth = map[chainhash.Hash]int64{}
+	v.funding = map[chainhash.Hash]chainTx{}
+	for _, t := range v.txs {
+		v.funding[t.tx.TxHash()] = t
+		if t.confirmations <= 0 {
+			continue
+		}
+		for _, in := range t.tx.TxIn {
+			v.spentAt[in.PreviousOutPoint] = max(v.spentAt[in.PreviousOutPoint], t.confirmations)
+		}
+	}
+	for _, t := range v.conflicted {
+		hash := t.tx.TxHash()
+		v.funding[hash] = t
+		v.conflictDepth[hash] = max(v.conflictDepth[hash], -t.confirmations)
+	}
+	return v
+}
+
+// cleared reports whether op can no longer be spent by a signature given
+// before: spent deep enough, or its funding transaction conflicted by one
+// deep enough.
+func (v *chainView) cleared(op wire.OutPoint) bool {
+	return v.spentAt[op] >= v.depth || v.conflictDepth[op.Hash] >= v.depth
+}
+
+// cutoverCoins is what a cutover records on each chain (see the top of the
+// file): every set coin the wallet's history (confirmed, unconfirmed or
+// conflicted) shows, and every input of every transaction in l, that isn't
+// already cleared. A logged input in neither chain's history is an error:
+// rescan or register its address first.
+func cutoverCoins(s *pegState, l *signingLog) (map[string][]string, error) {
+	views := map[string]*chainView{}
+	coins := map[string]map[wire.OutPoint]bool{}
+	for _, chain := range cutoverChains {
+		v := s.view(chain)
+		views[chain] = v
+		coins[chain] = map[wire.OutPoint]bool{}
+		for _, t := range append(append([]chainTx{}, v.txs...), v.conflicted...) {
+			hash := t.tx.TxHash()
+			for i, out := range t.tx.TxOut {
+				op := wire.OutPoint{Hash: hash, Index: uint32(i)}
+				if v.isCoin(out) && !v.cleared(op) {
+					coins[chain][op] = true
+				}
+			}
+		}
+	}
+	for key, a := range l.Actions {
+		for _, t := range a.Txs {
+			for _, raw := range t.Inputs {
+				op, err := parseOutPoint(raw)
+				if err != nil {
+					return nil, fmt.Errorf("the log's %s: %w", key, err)
+				}
+				chain := t.Chain
+				if chain == "" {
+					for _, c := range cutoverChains {
+						if _, ok := views[c].funding[op.Hash]; ok {
+							chain = c
+							break
+						}
+					}
+				}
+				v := views[chain]
+				if v == nil {
+					return nil, fmt.Errorf("the log's %s spent %v, whose transaction is in neither chain's history: rescan, or register its deposit address, before a cutover", key, op)
+				}
+				if _, ok := v.funding[op.Hash]; !ok {
+					return nil, fmt.Errorf("the log's %s spent %v, whose transaction isn't in %s's history: rescan, or register its deposit address, before a cutover", key, op, chain)
+				}
+				if !v.cleared(op) {
+					coins[chain][op] = true
+				}
+			}
+		}
+	}
+	out := map[string][]string{}
+	for chain, set := range coins {
+		list := make([]string, 0, len(set))
+		for op := range set {
+			list = append(list, op.String())
+		}
+		sort.Strings(list)
+		out[chain] = list
+	}
+	return out, nil
+}
+
+// startCutover starts a new cutover: a new epoch, recording every coin a
+// signature given before could spend, together with any still recorded.
+func (c *cosigner) startCutover(s *pegState) error {
+	if c.b.signers.indexOf(c.key.PubKey()) < 0 {
+		return errors.New("this key is not in the signer set")
+	}
+	coins, err := cutoverCoins(s, c.log)
+	if err != nil {
+		return err
+	}
+	if c.log.Cutover == nil {
+		c.log.Cutover = map[string][]string{}
+	}
+	for _, chain := range cutoverChains {
+		set := map[string]bool{}
+		for _, op := range append(c.log.Cutover[chain], coins[chain]...) {
+			set[op] = true
+		}
+		list := make([]string, 0, len(set))
+		for op := range set {
+			list = append(list, op)
+		}
+		sort.Strings(list)
+		c.log.Cutover[chain] = list
+	}
+	c.log.CutoverEpoch++
+	c.log.CutoverStarted = time.Now().Unix()
+	c.b.logf("cutover %d started: %d coin(s) on %s and %d on %s to clear", c.log.CutoverEpoch,
+		len(c.log.Cutover[chainDogecoin]), chainDogecoin, len(c.log.Cutover[chainDogecoinVM]), chainDogecoinVM)
+	return c.log.write()
+}
+
+// unproven reports whether the log can't show that every signature its key
+// gave is dead or logged: it signs only fences until a cutover is done.
+func (l *signingLog) unproven() bool { return l.History == "" || len(l.Cutover) > 0 }
+
+// cutoverLeft is, per chain in the cutover, the recorded coins not yet
+// cleared in s.
+func (c *cosigner) cutoverLeft(s *pegState) map[string][]string {
+	out := map[string][]string{}
+	for chain, coins := range c.log.Cutover {
+		v := s.view(chain)
+		left := []string{}
+		for _, raw := range coins {
+			if op, err := parseOutPoint(raw); err != nil || !v.cleared(op) {
+				left = append(left, raw)
+			}
+		}
+		out[chain] = left
+	}
+	return out
+}
+
+// cutoverPending is, per chain in the cutover, the recorded coins no
+// confirmed transaction spends at all: what a fence still has to spend.
+func (c *cosigner) cutoverPending(s *pegState) map[string][]string {
+	out := map[string][]string{}
+	for chain, coins := range c.log.Cutover {
+		v := s.view(chain)
+		pending := []string{}
+		for _, raw := range coins {
+			op, err := parseOutPoint(raw)
+			if err != nil || v.spentAt[op] == 0 && !v.cleared(op) {
+				pending = append(pending, raw)
+			}
+		}
+		out[chain] = pending
+	}
+	return out
+}
+
+// advanceCutover starts a cutover for an unproven log that has none yet,
+// and ends each chain's part of one whose coins are all cleared; when none
+// is left, the log is fenced and its anchors are the lineages' tips. It
+// reports whether the log changed.
+func (c *cosigner) advanceCutover(s *pegState) (bool, error) {
+	if c.log.History == "" && len(c.log.Cutover) == 0 {
+		if c.b.signers.indexOf(c.key.PubKey()) < 0 {
+			return false, nil
+		}
+		if err := c.startCutover(s); err != nil {
+			return false, err
+		}
+	}
+	if len(c.log.Cutover) == 0 {
+		return false, nil
+	}
+	left := c.cutoverLeft(s)
+	changed := false
+	for chain, coins := range left {
+		if len(coins) == 0 {
+			delete(c.log.Cutover, chain)
+			changed = true
+			c.b.logf("cutover %d on %s done: every recorded coin is cleared", c.log.CutoverEpoch, chain)
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	if len(c.log.Cutover) == 0 {
+		c.log.Cutover = nil
+		c.log.History = historyFenced
+		t, err := tips(s)
+		if err != nil {
+			return true, err
+		}
+		if c.log.Anchors == nil {
+			c.log.Anchors = map[string]string{}
+		}
+		for chain, tip := range t {
+			c.log.Anchors[chain] = tip
+		}
+		c.b.logf("cutover %d done on both chains: anchors %v", c.log.CutoverEpoch, c.log.Anchors)
+	}
+	return true, c.log.write()
+}
+
+// cutoverGate refuses anything but a fence while the log is unproven, on
+// either chain: an action has a transaction on each chain (a release on
+// DogecoinVM, a refund on Dogecoin), so a new one on a cleared chain could
+// confirm beside an old one kept back on the other.
+func (c *cosigner) cutoverGate(s *pegState) error {
+	if _, err := c.advanceCutover(s); err != nil {
+		return err
+	}
+	if !c.log.unproven() {
+		return nil
+	}
+	left := map[string]int{}
+	for chain, coins := range c.cutoverLeft(s) {
+		left[chain] = len(coins)
+	}
+	return fmt.Errorf("this signer is in a cutover (coins left per chain: %v): it signs only fences, on either chain, until every coin its set held is cleared (RUNBOOK.md, \"Cutover\")", left)
+}
+
+// isFenceOf reports whether t is a fence of this cutover: tagged as one,
+// spending a recorded coin (only the signers can spend those).
+func isFenceOf(t chainTx, recorded map[wire.OutPoint]bool) bool {
+	if _, ok := parseFence(t.tx); !ok {
+		return false
+	}
+	for _, in := range t.tx.TxIn {
+		if recorded[in.PreviousOutPoint] {
+			return true
+		}
+	}
+	return false
+}
+
+// fenceState is a chain's fences of a cutover recording recorded: one
+// unconfirmed (pending), and whether one is in a block short of depth.
+func fenceState(s *pegState, chain string, recorded map[wire.OutPoint]bool) (pending *chainTx, shallow bool) {
+	v := s.view(chain)
+	for i := range v.txs {
+		t := v.txs[i]
+		if !isFenceOf(t, recorded) {
+			continue
+		}
+		switch {
+		case t.confirmations == 0:
+			// The latest replacement: the one paying most.
+			if pending == nil || fenceFeeOf(s, chain, t.tx) > fenceFeeOf(s, chain, pending.tx) {
+				pending = &t
+			}
+		case t.confirmations < v.depth:
+			shallow = true
+		}
+	}
+	return pending, shallow
+}
+
+// fenceFeeOf is what a fence pays: its inputs, as s knows them, less its
+// outputs; -1 if an input is unknown.
+func fenceFeeOf(s *pegState, chain string, tx *wire.MsgTx) int64 {
+	var in int64
+	for _, txIn := range tx.TxIn {
+		v, ok := coinValue(s, chain, txIn.PreviousOutPoint)
+		if !ok {
+			return -1
+		}
+		in += v
+	}
+	for _, out := range tx.TxOut {
+		in -= out.Value
+	}
+	return in
+}
+
+// coinValue is the value of output op on chain, from the history in s.
+func coinValue(s *pegState, chain string, op wire.OutPoint) (int64, bool) {
+	t, ok := s.view(chain).funding[op.Hash]
+	if !ok || int(op.Index) >= len(t.tx.TxOut) {
+		return 0, false
+	}
+	return t.tx.TxOut[op.Index].Value, true
+}
+
+// recordedSet is coins as a set.
+func recordedSet(coins []string) map[wire.OutPoint]bool {
+	set := map[wire.OutPoint]bool{}
+	for _, raw := range coins {
+		if op, err := parseOutPoint(raw); err == nil {
+			set[op] = true
+		}
+	}
+	return set
+}
+
+// fenceInputs is what a new fence on chain spends for a cutover recording
+// recorded: the lineage's tip first (when the lineage has one), then every
+// confirmed recorded coin no transaction spends, oldest first, at most
+// maxFenceInputs. It fails if that spends no recorded coin a confirmed
+// transaction doesn't already spend (nothing to do), or while a
+// transaction of the set other than a fence is pending there (a fence
+// would conflict with it).
+func (s *pegState) fenceInputs(chain string, recorded map[wire.OutPoint]bool) ([]utxo, error) {
 	var anchor *utxo
-	var coins []utxo
+	var free []utxo
 	switch chain {
 	case chainDogecoin:
-		if len(s.unconfirmed) > 0 {
-			return nil, errors.New("a Dogecoin transaction of the peg is pending; fence once it is in a block")
+		for _, t := range s.unconfirmed {
+			if _, fence := parseFence(t.tx); !fence {
+				return nil, errors.New("a Dogecoin transaction of the peg is pending; fence once it is in a block")
+			}
 		}
 		anchor = s.pegAnchor
 		for _, u := range s.lockedUTXOs {
 			if u.confirmations > 0 {
-				coins = append(coins, u)
+				free = append(free, u)
 			}
 		}
 	case chainDogecoinVM:
-		if s.vmPending {
-			return nil, errors.New("a DogecoinVM transaction of the reserve is pending; fence once it is in a block")
+		for _, t := range s.vmUnconfirmed {
+			if _, fence := parseFence(t.tx); !fence {
+				return nil, errors.New("a DogecoinVM transaction of the reserve is pending; fence once it is in a block")
+			}
 		}
 		anchor = s.reserveAnchor
-		coins = s.reserveUTXOs
+		free = s.reserveUTXOs
 	default:
 		return nil, fmt.Errorf("unknown chain %q", chain)
 	}
-	if anchor == nil || !containsOutPoint(coins, anchor.outPoint) {
-		return nil, fmt.Errorf("no free %s anchor to start a fence from", chain)
+	if anchor != nil && !containsOutPoint(free, anchor.outPoint) {
+		anchor = nil // spent in the mempool: by a fence, which a replacement re-spends
 	}
 	var rest []utxo
-	for _, u := range coins {
-		if u.outPoint != anchor.outPoint {
-			rest = append(rest, u)
+	useful := false
+	for _, u := range free {
+		if !recorded[u.outPoint] || anchor != nil && u.outPoint == anchor.outPoint {
+			continue
 		}
+		rest = append(rest, u)
+		useful = true
 	}
-	sort.Slice(rest, func(i, j int) bool { return outPointLess(rest[i].outPoint, rest[j].outPoint) })
-	inputs := append([]utxo{*anchor}, rest...)
-	if len(inputs) > maxFenceInputs {
-		inputs = inputs[:maxFenceInputs]
+	if anchor != nil && recorded[anchor.outPoint] {
+		useful = true
+	}
+	if !useful {
+		return nil, fmt.Errorf("no recorded coin on %s is left for a fence to spend", chain)
+	}
+	sort.Slice(rest, func(i, j int) bool {
+		if rest[i].confirmations != rest[j].confirmations {
+			return rest[i].confirmations > rest[j].confirmations
+		}
+		return outPointLess(rest[i].outPoint, rest[j].outPoint)
+	})
+	var inputs []utxo
+	if anchor != nil {
+		inputs = append(inputs, *anchor)
+	}
+	inputs = append(inputs, rest...)
+	if n := maxFenceInputs(chain); len(inputs) > n {
+		inputs = inputs[:n] // the rest in the next fence
 	}
 	return inputs, nil
 }
 
-// buildFence is the unsigned fence spending inputs (the anchor first) back
-// to the set's script, less fee, tagged with the anchor. Signers rebuild it
-// from their own view, so it depends only on its arguments.
-func (b *bridge) buildFence(chain string, inputs []utxo) (*wire.MsgTx, int64, error) {
-	if len(inputs) == 0 {
-		return nil, 0, errors.New("a fence spends at least the anchor")
-	}
-	base, version := b.vmFee, int32(wire.TxVersion)
+// fenceBase is the fee a fence fee is a multiple of on chain.
+func (b *bridge) fenceBase(chain string) int64 {
 	if chain == chainDogecoin {
-		base, version = b.dogeFee, 1 // Dogecoin Core 1.14 relays version 1 and 2
+		return b.dogeFee
 	}
-	fee := fenceFee(base, len(inputs))
+	return b.vmFee
+}
+
+// buildFence is the unsigned fence spending inputs (in order) back to the
+// set's script, less fee, tagged with its first input. On Dogecoin it
+// signals replaceability (BIP125), so a stuck one can be replaced. Signers
+// rebuild it from their own view, so it depends only on its arguments.
+func (b *bridge) buildFence(chain string, inputs []utxo, fee int64) (*wire.MsgTx, error) {
+	if len(inputs) == 0 {
+		return nil, errors.New("nothing to fence")
+	}
+	version := int32(wire.TxVersion)
+	if chain == chainDogecoin {
+		version = 1 // Dogecoin Core 1.14 relays version 1 and 2
+	}
 	var total int64
 	tx := wire.NewMsgTx(version)
 	for _, u := range inputs {
-		tx.AddTxIn(wire.NewTxIn(&u.outPoint, nil, nil))
+		in := wire.NewTxIn(&u.outPoint, nil, nil)
+		if chain == chainDogecoin {
+			in.Sequence = wire.MaxTxInSequenceNum - 2
+		}
+		tx.AddTxIn(in)
 		total += u.value
 	}
 	if total-fee < pegDust {
-		return nil, 0, fmt.Errorf("the %s coins hold %s DOGE: not enough for the fence's %s DOGE fee and the next anchor",
+		return nil, fmt.Errorf("the %s coins hold %s DOGE: not enough for the fence's %s DOGE fee and the next anchor",
 			chain, formatDoge(total), formatDoge(fee))
 	}
 	tx.AddTxOut(wire.NewTxOut(total-fee, b.signers.pkScript()))
 	tx.AddTxOut(nullData(encodeFence(inputs[0].outPoint)))
-	return tx, fee, nil
+	return tx, nil
 }
 
 // fenceRedeems is the redeem script of each input of a fence.
@@ -148,17 +538,114 @@ func (b *bridge) fenceRedeems(s *pegState, chain string, inputs []utxo) ([][]byt
 	return redeems, register, nil
 }
 
-// fence proposes and sends a fence on chain.
-func (b *bridge) fence(chain string) (chainhash.Hash, error) {
+// nextFence is the fence a cutover recording recorded calls for on chain
+// now, as s reads it: a replacement of a stuck one (Dogecoin, after
+// bumpAfter), or a new one. It returns the transaction, its inputs and its
+// fee.
+func (b *bridge) nextFence(s *pegState, chain string, recorded map[wire.OutPoint]bool, bumpAfter time.Duration) (*wire.MsgTx, []utxo, int64, error) {
+	pending, shallow := fenceState(s, chain, recorded)
+	base := b.fenceBase(chain)
+	if pending != nil {
+		if chain != chainDogecoin {
+			return nil, nil, 0, fmt.Errorf("a fence on %s is waiting for a block; wait for it", chain)
+		}
+		if bumpAfter <= 0 {
+			return nil, nil, 0, errors.New("a fence on dogecoin is unconfirmed, and replacements are off (-fence-bump-after 0)")
+		}
+		if waited := time.Since(time.Unix(pending.time, 0)); waited < bumpAfter {
+			return nil, nil, 0, fmt.Errorf("a fence on dogecoin has waited %v of the %v before it may be replaced", waited.Round(time.Second), bumpAfter)
+		}
+		var inputs []utxo
+		for _, in := range pending.tx.TxIn {
+			c, ok := s.pendingCoins[in.PreviousOutPoint]
+			if !ok {
+				return nil, nil, 0, fmt.Errorf("the pending fence spends %v, which isn't a confirmed peg coin in this view", in.PreviousOutPoint)
+			}
+			inputs = append(inputs, c)
+		}
+		step := fenceFee(base, len(inputs))
+		fee := fenceFeeOf(s, chain, pending.tx) + step
+		if fee > (1+maxFenceBumps)*step {
+			return nil, nil, 0, fmt.Errorf("the pending fence was replaced %d times already: wait for it", maxFenceBumps)
+		}
+		tx, err := b.buildFence(chain, inputs, fee)
+		return tx, inputs, fee, err
+	}
+	if shallow {
+		return nil, nil, 0, fmt.Errorf("a fence on %s is in a block and not yet deep enough: wait for it, rather than pay for another", chain)
+	}
+	inputs, err := s.fenceInputs(chain, recorded)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	fee := fenceFee(base, len(inputs))
+	tx, err := b.buildFence(chain, inputs, fee)
+	return tx, inputs, fee, err
+}
+
+// signersCutover asks the remote signers for the coins their cutovers
+// still record on chain, and returns the list at least Required of them
+// share: a fence built from any other list is refused by too many.
+func (b *bridge) signersCutover(chain string) (map[wire.OutPoint]bool, error) {
+	counts := map[string]int{}
+	lists := map[string][]string{}
+	var failures []string
+	for _, r := range b.cosigners {
+		var st struct {
+			Cutover map[string][]string `json:"cutover"`
+		}
+		if err := r.status(&st); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", r.URL, err))
+			continue
+		}
+		coins, in := st.Cutover[chain]
+		if !in {
+			continue
+		}
+		sort.Strings(coins)
+		key := strings.Join(coins, ",")
+		counts[key]++
+		lists[key] = coins
+	}
+	best, most := "", 0
+	for key, n := range counts {
+		if n > most || n == most && key < best {
+			best, most = key, n
+		}
+	}
+	if most == 0 {
+		if len(failures) > 0 {
+			return nil, fmt.Errorf("no signer reports a cutover on %s (%s)", chain, strings.Join(failures, "; "))
+		}
+		return nil, fmt.Errorf("no signer is in a cutover on %s: no fence is needed there", chain)
+	}
+	if most < b.signers.Required {
+		return nil, fmt.Errorf("only %d signer(s) record the same coins on %s, %d needed: compare their signer-log status", most, chain, b.signers.Required)
+	}
+	return recordedSet(lists[best]), nil
+}
+
+// proposeFence proposes and sends the next fence on chain (or the
+// replacement of a stuck one), and returns its txid.
+func (b *bridge) proposeFence(chain string) (chainhash.Hash, error) {
+	if chain != chainDogecoin && chain != chainDogecoinVM {
+		return chainhash.Hash{}, fmt.Errorf("-fence takes %s or %s", chainDogecoin, chainDogecoinVM)
+	}
+	recorded, err := b.signersCutover(chain)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+	return b.sendFence(chain, recorded)
+}
+
+// sendFence proposes and sends the fence a cutover recording recorded
+// calls for on chain now.
+func (b *bridge) sendFence(chain string, recorded map[wire.OutPoint]bool) (chainhash.Hash, error) {
 	s, err := b.load()
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
-	inputs, err := s.fenceInputs(chain)
-	if err != nil {
-		return chainhash.Hash{}, err
-	}
-	tx, _, err := b.buildFence(chain, inputs)
+	tx, inputs, _, err := b.nextFence(s, chain, recorded, b.fenceBumpAfter)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
@@ -177,24 +664,16 @@ func (b *bridge) fence(chain string) (chainhash.Hash, error) {
 	return b.vm.send(tx)
 }
 
-// checkFence is a signer's check of a fence proposal on chain: its log
-// still needs one there, and tx spends the tip and every other coin its own
-// view holds, as buildFence would. It returns the transaction it would
-// build, its redeem scripts, and its fee.
+// checkFence is a signer's check of a fence proposal on chain: its log is
+// in a cutover there, and the proposal is the fence its own view calls for
+// (nextFence). It returns that transaction, its redeem scripts, and its
+// fee.
 func (c *cosigner) checkFence(s *pegState, chain string) (*wire.MsgTx, [][]byte, int64, error) {
-	if !c.log.Unfenced[chain] {
-		return nil, nil, 0, fmt.Errorf("this signer's log needs no fence on %s", chain)
+	coins, in := c.log.Cutover[chain]
+	if !in {
+		return nil, nil, 0, fmt.Errorf("this signer is in no cutover on %s: it signs no fence there", chain)
 	}
-	if from, err := parseOutPoint(c.log.Anchors[chain]); err == nil {
-		if _, deepening, _ := cutoverState(s, chain, from); deepening {
-			return nil, nil, 0, fmt.Errorf("a fence on %s is in a block and not yet deep enough: wait for it, rather than pay for another", chain)
-		}
-	}
-	inputs, err := s.fenceInputs(chain)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	want, fee, err := c.b.buildFence(chain, inputs)
+	want, inputs, fee, err := c.b.nextFence(s, chain, recordedSet(coins), c.b.fenceBumpAfter)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -205,140 +684,47 @@ func (c *cosigner) checkFence(s *pegState, chain string) (*wire.MsgTx, [][]byte,
 	return want, redeems, fee, nil
 }
 
-// cutoverDone reports whether a fence on chain has done its work for a log
-// rebuilt with anchor from as its anchor there, as s reads it: a fence (a
-// confirmed transaction tagged as one that spends coins of the set, so the
-// signers made it), at least depth deep, starting from from or a later
-// coin on the line (so it was signed after the log was rebuilt, not an
-// older fence), with no coin the set held there in an older block left
-// unspent. Every signature made before the log was rebuilt spent coins
-// from older blocks, all of them now spent in blocks, so none can confirm.
-func cutoverDone(s *pegState, chain string, from wire.OutPoint) (bool, string) {
-	done, _, why := cutoverState(s, chain, from)
-	return done, why
-}
-
-// cutoverState is cutoverDone, and also whether a fence from from on is in
-// a block but not yet depth deep (deepening): then the cutover only needs
-// time, and another fence would only spend more of the surplus.
-func cutoverState(s *pegState, chain string, from wire.OutPoint) (done, deepening bool, why string) {
-	txs, depth, line := s.dogeTxs, int64(1), s.pegLine
-	isCoin := func(out *wire.TxOut) bool { return s.redeemFor[string(out.PkScript)] != nil }
-	if chain == chainDogecoinVM {
-		txs, line = s.vmTxs, s.reserveLine
-		script := s.reserveLine.script
-		isCoin = func(out *wire.TxOut) bool { return string(out.PkScript) == string(script) }
-	} else if s.pegLine != nil {
-		depth = s.pegLine.rootDepth
+// waiveCoin clears one recorded coin by hand: only one whose funding
+// transaction is unconfirmed (not in a block, not conflicting with one),
+// not in this node's mempool, in a cutover begun at least a day ago. A
+// coin that was confirmed and taken out by a reorganisation normally comes
+// back within minutes; this is for one that never will.
+func (c *cosigner) waiveCoin(s *pegState, chain string, op wire.OutPoint, mempool mempooler) error {
+	coins, in := c.log.Cutover[chain]
+	if !in || !recordedSet(coins)[op] {
+		return fmt.Errorf("%v is not a recorded coin of this signer's cutover on %s", op, chain)
 	}
-	coins := map[wire.OutPoint]bool{}
-	for _, t := range txs {
-		hash := t.tx.TxHash()
-		for i, out := range t.tx.TxOut {
-			if isCoin(out) {
-				coins[wire.OutPoint{Hash: hash, Index: uint32(i)}] = true
-			}
-		}
+	if started := time.Unix(c.log.CutoverStarted, 0); time.Since(started) < 24*time.Hour {
+		return fmt.Errorf("the cutover began %v ago: a coin may be waived only a day after", time.Since(started).Round(time.Minute))
 	}
-	// after reports whether op is from, or a later coin on its line.
-	after := func(op wire.OutPoint) bool {
-		cur := from
-		for range len(coins) + 2 {
-			if cur == op {
-				return true
-			}
-			next, more, err := line.next(cur)
-			if err != nil || !more {
-				return false
-			}
-			cur = next
-		}
-		return false
+	v := s.view(chain)
+	t, ok := v.funding[op.Hash]
+	switch {
+	case ok && t.confirmations > 0:
+		return fmt.Errorf("%v's transaction is in a block: a fence spends it", op)
+	case ok && t.confirmations < 0:
+		return fmt.Errorf("%v's transaction conflicts with one in a block: it clears once that is %d deep", op, v.depth)
 	}
-	spent := confirmedSpends(txs)
-	why = fmt.Sprintf("no fence on %s from this log's anchor with %d confirmations yet", chain, depth)
-fences:
-	for _, f := range txs {
-		anchor, ok := parseFence(f.tx)
-		if !ok || f.confirmations <= 0 || len(f.tx.TxIn) == 0 || f.tx.TxIn[0].PreviousOutPoint != anchor ||
-			!coins[anchor] || !after(anchor) {
-			continue
-		}
-		if f.confirmations < depth {
-			deepening = true
-			continue
-		}
-		for _, t := range txs {
-			if t.confirmations <= f.confirmations {
-				continue
-			}
-			hash := t.tx.TxHash()
-			for i, out := range t.tx.TxOut {
-				op := wire.OutPoint{Hash: hash, Index: uint32(i)}
-				if isCoin(out) && spent[op] == nil {
-					why = fmt.Sprintf("%v, from before the fence, is still unspent on %s: fence again", op, chain)
-					continue fences
-				}
-			}
-		}
-		return true, false, ""
+	if mempool == nil {
+		return fmt.Errorf("this signer's %s node can't say whether its mempool holds %v", chain, op.Hash)
 	}
-	return false, deepening, why
-}
-
-// fenced reports whether this signer may sign anything but a fence on
-// chain. A log that needed one stops needing it, once and for good, when
-// the chain shows a fence from its anchor has done its work (cutoverDone).
-func (c *cosigner) fenced(s *pegState, chain string) error {
-	if !c.log.Unfenced[chain] {
-		return nil
-	}
-	from, err := parseOutPoint(c.log.Anchors[chain])
+	inPool, err := mempool.inMempool(op.Hash)
 	if err != nil {
-		return fmt.Errorf("this signer's log needs a fence on %s but has no anchor there: %w", chain, err)
+		return err
 	}
-	done, why := cutoverDone(s, chain, from)
-	if !done {
-		return fmt.Errorf("this signer's log was rebuilt or its anchors set: it signs only a fence on %s until one has spent every older coin there (%s; RUNBOOK.md, \"Cutover fence\")", chain, why)
+	if inPool {
+		return fmt.Errorf("%v's transaction is in the mempool: it may still confirm", op)
 	}
-	delete(c.log.Unfenced, chain)
+	var kept []string
+	for _, raw := range coins {
+		if raw != op.String() {
+			kept = append(kept, raw)
+		}
+	}
+	c.log.Cutover[chain] = kept
+	if c.log.CutoverWaived == nil {
+		c.log.CutoverWaived = map[string][]string{}
+	}
+	c.log.CutoverWaived[chain] = append(c.log.CutoverWaived[chain], op.String())
 	return c.log.write()
-}
-
-// cmdFence is the operator's cutover step: dogevm fence -chain CHAIN.
-func cmdFence(args []string) error {
-	var s settings
-	fs := flag.NewFlagSet("fence", flag.ExitOnError)
-	signersPath := fs.String("signers", "", "peg signer set file")
-	depositsPath := fs.String("deposits", "", "deposit address registry (default: deposits.json next to -signers)")
-	chain := fs.String("chain", "", "dogecoin or dogecoinvm")
-	s.register(fs)
-	b := bridgeFlags(fs)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if err := s.resolve(); err != nil {
-		return err
-	}
-	if err := required(map[string]string{"signers": *signersPath, "chain": *chain}); err != nil {
-		return err
-	}
-	if *chain != chainDogecoin && *chain != chainDogecoinVM {
-		return fmt.Errorf("-chain must be %s or %s", chainDogecoin, chainDogecoinVM)
-	}
-	signers, err := readSignerSet(*signersPath)
-	if err != nil {
-		return err
-	}
-	if err := b.connect(&s, signers); err != nil {
-		return err
-	}
-	b.registry = registryFor(*depositsPath, *signersPath)
-	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
-	txid, err := b.fence(*chain)
-	if err != nil {
-		return err
-	}
-	printJSON(map[string]string{"chain": *chain, "fenceTxid": txid.String()})
-	return nil
 }

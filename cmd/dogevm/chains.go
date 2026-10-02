@@ -42,6 +42,19 @@ type chain interface {
 	send(tx *wire.MsgTx) (chainhash.Hash, error)
 }
 
+// conflictLister is a chain whose wallet can list the transactions that
+// conflict with one in a block (chainTx.confirmations is minus that one's
+// depth).
+type conflictLister interface {
+	conflictedFor(addresses []btcutil.Address) ([]chainTx, error)
+}
+
+// mempooler is a chain whose node can say whether its mempool holds a
+// transaction.
+type mempooler interface {
+	inMempool(txid chainhash.Hash) (bool, error)
+}
+
 // confirmer is a chain that can say whether a transaction is in a block.
 type confirmer interface {
 	confirmed(txid chainhash.Hash) (bool, error)
@@ -342,6 +355,61 @@ func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
 	return txs, nil
 }
 
+// conflictedFor returns the wallet's transactions that pay to or spend from
+// any of addresses and conflict with a transaction in a block: txsFor
+// leaves them out, as they can't confirm unless a reorganisation undoes
+// that block. Each one's confirmations is minus the depth of the block
+// transaction it conflicts with. A cutover (cutover.go) counts their
+// outputs too: a signature given before it may spend one, and it is dead
+// only once that conflict is deep.
+func (c *dogeChain) conflictedFor(addresses []btcutil.Address) ([]chainTx, error) {
+	scripts := scriptSet(addresses)
+	_, entries, err := c.history()
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0)
+	for txid, e := range entries {
+		if e.conflicted {
+			ids = append(ids, txid)
+		}
+	}
+	sort.Strings(ids)
+	var txs []chainTx
+	for _, txid := range ids {
+		tx, err := c.walletTx(txid)
+		if err != nil {
+			return nil, err
+		}
+		ok, err := touches(tx, scripts, c)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			e := entries[txid]
+			txs = append(txs, chainTx{tx: tx, confirmations: -max(e.conflictDepth, 1), time: e.time})
+		}
+	}
+	return txs, nil
+}
+
+// inMempool reports whether the node's mempool holds txid.
+func inMempool(rpc *rpcClient, txid chainhash.Hash) (bool, error) {
+	var ids []string
+	if err := rpc.call(&ids, "getrawmempool", false); err != nil {
+		return false, err
+	}
+	for _, id := range ids {
+		if id == txid.String() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (c *dogeChain) inMempool(txid chainhash.Hash) (bool, error) { return inMempool(c.rpc, txid) }
+func (c *vmChain) inMempool(txid chainhash.Hash) (bool, error)   { return inMempool(c.rpc, txid) }
+
 // walletTx is wallet transaction txid, read from the node once.
 func (c *dogeChain) walletTx(txid string) (*wire.MsgTx, error) {
 	c.mu.Lock()
@@ -387,7 +455,11 @@ type walletHistory struct {
 type historyEntry struct {
 	height     int64 // the block holding it; 0 if none
 	conflicted bool  // conflicts with a transaction in a block
-	time       int64
+	// conflictDepth is, for a conflicted transaction, the confirmations of
+	// the block transaction it conflicts with (Dogecoin Core lists it with
+	// that many negative confirmations).
+	conflictDepth int64
+	time          int64
 }
 
 // history brings the wallet history up to date and returns the tip's height
@@ -462,6 +534,9 @@ func (c *dogeChain) readHistory(full bool) (int64, error) {
 	}
 	for _, e := range since.Transactions {
 		h := historyEntry{conflicted: e.Confirmations < 0, time: e.Time}
+		if h.conflicted {
+			h.conflictDepth = -e.Confirmations
+		}
 		if e.Confirmations > 0 {
 			h.height = header.Height - e.Confirmations + 1
 		}

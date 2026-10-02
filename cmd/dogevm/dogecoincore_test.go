@@ -551,27 +551,80 @@ func TestFenceOnDogecoinCore(t *testing.T) {
 	n.mine(6)
 	s, err := h.b.load()
 	require.NoError(err)
-	from := s.pegAnchor.outPoint
-	inputs, err := s.fenceInputs(chainDogecoin)
+	coins, err := cutoverCoins(s, &signingLog{Actions: map[string]*loggedAction{}})
 	require.NoError(err)
-	require.Len(inputs, 3, "the anchor, the contribution and the deposit")
+	recorded := recordedSet(coins[chainDogecoin])
+	require.Len(recorded, 3, "the anchor, the contribution and the deposit")
+	inputs, err := s.fenceInputs(chainDogecoin, recorded)
+	require.NoError(err)
+	require.Len(inputs, 3)
 
-	txid, err := h.b.fence(chainDogecoin)
+	txid, err := h.b.sendFence(chainDogecoin, recorded)
 	require.NoError(err)
 	require.True(n.inMempool(txid), "Dogecoin Core relayed the fence")
 	n.mine(1)
 	s, err = h.b.load()
 	require.NoError(err)
-	done, why := cutoverDone(s, chainDogecoin, from)
-	require.False(done, "not deep yet")
-	require.Contains(why, "confirmations yet")
+	v := s.view(chainDogecoin)
+	for op := range recorded {
+		require.False(v.cleared(op), "not deep yet")
+	}
+	_, err = h.b.sendFence(chainDogecoin, recorded)
+	require.ErrorContains(err, "not yet deep enough", "no second fence while one deepens")
 	n.mine(int(s.pegLine.rootDepth))
 	s, err = h.b.load()
 	require.NoError(err)
-	done, why = cutoverDone(s, chainDogecoin, from)
-	require.True(done, why)
+	v = s.view(chainDogecoin)
+	for op := range recorded {
+		require.True(v.cleared(op), "%v cleared", op)
+	}
 	require.Equal(wire.OutPoint{Hash: txid}, s.pegAnchor.outPoint, "the fence's one output is the next anchor")
 	a := h.audit()
 	require.True(a.solvent(), "%+v", a)
 	require.NotEmpty(h.step(), "the deposit is still credited after its coin was fenced")
+}
+
+// TestStuckFenceIsReplacedOnDogecoinCore (round 5, U5): a fence Dogecoin
+// Core dropped from its mempool, or one too cheap to mine, is replaced
+// after -fence-bump-after by one spending the same coins and paying one
+// fence fee more; Core takes the replacement (BIP125), and at most
+// maxFenceBumps are paid.
+func TestStuckFenceIsReplacedOnDogecoinCore(t *testing.T) {
+	require := require.New(t)
+	n := startDogecoin(t)
+	h := n.bridgeHarness()
+	h.b.fenceBumpAfter = time.Nanosecond
+	s, err := h.b.load()
+	require.NoError(err)
+	coins, err := cutoverCoins(s, &signingLog{Actions: map[string]*loggedAction{}})
+	require.NoError(err)
+	recorded := recordedSet(coins[chainDogecoin])
+	first, err := h.b.sendFence(chainDogecoin, recorded)
+	require.NoError(err)
+	require.True(n.inMempool(first))
+	time.Sleep(1100 * time.Millisecond) // wallet times are in seconds
+
+	second, err := h.b.sendFence(chainDogecoin, recorded)
+	require.NoError(err)
+	require.NotEqual(first, second)
+	require.True(n.inMempool(second), "Core took the replacement")
+	require.False(n.inMempool(first), "and dropped the first")
+	s, err = h.b.load()
+	require.NoError(err)
+	t2, ok := s.unconfirmed[second]
+	require.True(ok)
+	step := fenceFee(h.b.dogeFee, len(t2.tx.TxIn))
+	require.Equal(2*step, fenceFeeOf(s, chainDogecoin, t2.tx), "one fence fee more")
+	for range maxFenceBumps - 1 {
+		time.Sleep(1100 * time.Millisecond)
+		_, err = h.b.sendFence(chainDogecoin, recorded)
+		require.NoError(err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	_, err = h.b.sendFence(chainDogecoin, recorded)
+	require.ErrorContains(err, "replaced 4 times already")
+	n.mine(1)
+	s, err = h.b.load()
+	require.NoError(err)
+	require.Empty(s.unconfirmed, "one fence confirmed, the others gone")
 }

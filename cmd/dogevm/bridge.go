@@ -54,9 +54,13 @@ type bridge struct {
 	dogeFee              int64 // deducted from each peg-out to pay the Dogecoin fee
 	// bumpAfter is how long a payout or refund may wait unconfirmed before
 	// the bridge replaces it with one paying another -doge-fee (bumpStuck).
-	bumpAfter  time.Duration
-	minDeposit int64
-	minPegOut  int64
+	bumpAfter time.Duration
+	// fenceBumpAfter is how long a cutover's fence may wait unconfirmed on
+	// Dogecoin before one paying another fence fee may replace it
+	// (cutover.go).
+	fenceBumpAfter time.Duration
+	minDeposit     int64
+	minPegOut      int64
 	// maxDeposit and maxCirculating cap what the bridge will credit, so a
 	// bug or a compromised signer can only lose so much. Deposits above
 	// maxDeposit are never credited; a deposit that would take circulating
@@ -150,6 +154,10 @@ type pegState struct {
 	// vmTxs and dogeTxs are the transactions read from each chain, for a
 	// signer's check of its log against them (fence.go).
 	vmTxs, dogeTxs []chainTx
+	// dogeConflicted are the Dogecoin wallet's transactions that conflict
+	// with one in a block (confirmations: minus that one's depth), for a
+	// cutover (cutover.go); nil if the node can't list them.
+	dogeConflicted []chainTx
 }
 
 // audit is the peg's solvency check.
@@ -367,6 +375,11 @@ func (b *bridge) load() (*pegState, error) {
 		return nil, fmt.Errorf("reading Dogecoin peg addresses: %w", err)
 	}
 	s.dogeTxs = dogeTxs
+	if cl, ok := b.doge.(conflictLister); ok {
+		if s.dogeConflicted, err = cl.conflictedFor(dogeAddrs); err != nil {
+			return nil, fmt.Errorf("reading Dogecoin peg addresses: %w", err)
+		}
+	}
 	pegOuts := map[wire.OutPoint]bool{}
 	for _, t := range dogeTxs {
 		hash := t.tx.TxHash()
