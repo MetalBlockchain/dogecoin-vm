@@ -213,6 +213,10 @@ func (s *Server) ProcessBlockNoPoW(block *btcutil.Block) (bool, bool, error) {
 	return s.chain.ProcessBlock(block, blockchain.BFNoPoWCheck)
 }
 
+// Database is the block database. The VM's tests close it under a
+// running chain, to see what a storage failure while accepting does.
+func (s *Server) Database() database.DB { return s.db }
+
 // Close flushes the UTXO cache and closes the block database. It must be
 // called after Stop, once nothing else is using the chain. btcd normally
 // flushes from the sync manager's shutdown path, which never runs here
