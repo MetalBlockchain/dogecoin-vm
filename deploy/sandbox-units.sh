@@ -34,8 +34,9 @@ UNITS=("$CHAIN-bridge-main" "$CHAIN-web-main" "$CHAIN-monitor-main")
 SECRETS=$STATE/secrets
 
 die() { echo "sandbox-units: $*" >&2; exit 1; }
-[[ $(id -u) == 0 ]] || die "run as root"
-path_of() { echo "/etc/systemd/system/$1.service.d/$DROPIN"; }
+[[ $(id -u) == 0 || -n ${SANDBOX_TEST:-} ]] || die "run as root"
+SYSTEMD_DIR=${SYSTEMD_DIR:-/etc/systemd/system}
+path_of() { echo "$SYSTEMD_DIR/$1.service.d/$DROPIN"; }
 
 web_start=$(systemctl show -p ExecStart --value "$CHAIN-web-main")
 WEB=$(sed -nE 's/.* -listen ([^ ;]+).*/\1/p' <<<"$web_start")
@@ -43,9 +44,13 @@ INDEX=$(sed -nE 's/.* -[a-z]+-index ([^ ;]+).*/\1/p' <<<"$web_start")
 REGISTRY=$(sed -nE 's/.* -deposits ([^ ;]+).*/\1/p' <<<"$web_start")
 FINALITY=$(sed -nE 's/.* -finality ([^ ;]+).*/\1/p' <<<"$web_start")
 [[ -n $WEB ]] || die "can't read the web server's -listen"
+[[ -n ${SANDBOX_TEST:-} ]] && systemd-analyze() { :; }
 code_now() { curl -s -o /dev/null --max-time 30 -w '%{http_code}' "http://$WEB/api/health" || true; }
 
 if [[ ${1:-} == remove ]]; then
+  # The bridge must answer afterwards as it did before (200, or the 503 of
+  # a known pause or failing check), or the removal is a failure.
+  before=$(code_now)
   for u in "${UNITS[@]}"; do rm -f "$(path_of "$u")"; done
   systemctl daemon-reload
   systemctl restart "${UNITS[@]}"
@@ -53,7 +58,10 @@ if [[ ${1:-} == remove ]]; then
   for u in "${UNITS[@]}"; do
     systemctl is-active --quiet "$u" || die "$u didn't come back up without the sandbox: journalctl -u $u"
   done
-  echo "sandbox-units: removed; /api/health answers $(code_now)"
+  after=$(code_now)
+  [[ $after == 200 || ( $after == 503 && $before == 503 ) ]] ||
+    die "removed, but /api/health answers $after (it answered $before before): journalctl -u $CHAIN-web-main"
+  echo "sandbox-units: removed; /api/health answers $after"
   exit 0
 fi
 

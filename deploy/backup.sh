@@ -74,6 +74,7 @@ cmd_run() {
   # Files, copied with their paths.
   local files=(
     "$SECRETS"
+    "$STATE/web/deposits.json"
     "$STATE/chain.json" "$STATE/genesis.json" "$STATE/chain-configs"
     "$STATE/node/staking"
     "$DOGE_DIR/dogecoin.conf"

@@ -1,18 +1,28 @@
 #!/usr/bin/env bash
-# Moves what the public web server writes out of the secrets directory and
-# out of the state directory's top level, into a directory of its own, so
-# deploy/sandbox-units.sh can let the web server write there and nowhere
+# Gives the files the public web server writes a directory of its own, so
+# its sandbox (deploy/sandbox-units.sh) can let it write there and nowhere
 # else (not the pause file, the signer set, cosigners.json or the
-# contribution list beside them). Run as root on the bridge's host, once,
-# before sandbox-units.sh:
+# contribution list in the secrets directory, nor anything else in the
+# state directory). Run as root on the bridge's host, once, before
+# sandbox-units.sh:
 #
 #   deploy/move-web-state.sh
 #
-# It stops the bridge, web wallet and monitor; moves the deposit registry
-# ($SECRETS/deposits.json) and the finality samples (finality.json beside
-# the coin index) into $STATE/web; points the units' -deposits (and the web
-# server's -finality) there; and starts them again, checking /api/health.
-# On a failure the files and units go back.
+#   registry  the web server's -deposits            ->  $WEBSTATE/deposits.json
+#   index     its -doge-index, if in secrets or
+#             directly in the state directory        ->  $WEBSTATE/<same name>
+#   finality  its -finality, or finality.json beside
+#             the index                              ->  $WEBSTATE/finality.json
+#
+# It stops the bridge, web wallet and monitor and checks they are down (the
+# signers keep running and keep their own registries); moves the files,
+# refusing to overwrite anything already at a destination; points the
+# units' -deposits, -doge-index and the web server's -finality at the new
+# places; starts them again and checks /api/health answers as it did
+# before. On any failure it stops them again, checks they are down, moves
+# back exactly what it moved (newest first) and puts the units back. If a
+# unit won't stop, it moves nothing (back), and says so. Running it again
+# changes nothing.
 set -euo pipefail
 
 CHAIN=${CHAIN:-dogevm}
@@ -24,57 +34,111 @@ UNITDIR=${UNITDIR:-/etc/systemd/system}
 
 die() { echo "move-web-state: $*" >&2; exit 1; }
 [[ $(id -u) == 0 || -n ${MOVE_TEST:-} ]] || die "run as root"
-start_of() { systemctl show -p ExecStart --value "$1"; }
-flag_of() { sed -nE "s/.* $2 ([^ ;]+).*/\1/p" <<<"$(start_of "$1")"; }
+unit_file() { echo "$UNITDIR/$1.service"; }
+flag_of() { sed -nE "s/^ExecStart=.* $2 ([^ ;]+).*/\1/p" "$(unit_file "$1")"; }
 
 OLD_REG=$(flag_of "$CHAIN-web-main" -deposits)
 [[ -n $OLD_REG ]] || die "the web server has no -deposits"
 for u in "$CHAIN-bridge-main" "$CHAIN-monitor-main"; do
   reg=$(flag_of "$u" -deposits)
-  [[ -z $reg || $reg == "$OLD_REG" ]] || die "$u's -deposits ($reg) isn't the web server's ($OLD_REG)"
+  # Without -deposits a unit reads the registry next to its -signers,
+  # another file: it must name the web server's.
+  [[ $reg == "$OLD_REG" ]] || die "$u's -deposits (${reg:-none: the default next to -signers}) isn't the web server's ($OLD_REG); fix the units first"
 done
-INDEX=$(flag_of "$CHAIN-web-main" -doge-index)
+OLD_IDX=$(flag_of "$CHAIN-web-main" -doge-index)
 OLD_FIN=$(flag_of "$CHAIN-web-main" -finality)
-[[ -n $OLD_FIN || -z $INDEX ]] || OLD_FIN=$(dirname "$INDEX")/finality.json
+[[ -n $OLD_FIN || -z $OLD_IDX ]] || OLD_FIN=$(dirname "$OLD_IDX")/finality.json
 NEW_REG=$WEBSTATE/deposits.json
 NEW_FIN=$WEBSTATE/finality.json
-if [[ $OLD_REG == "$NEW_REG" && ( -z $OLD_FIN || $OLD_FIN == "$NEW_FIN" ) ]]; then
-  echo "move-web-state: already in $WEBSTATE"
+NEW_IDX=$OLD_IDX
+if [[ -n $OLD_IDX ]]; then
+  case $(dirname "$OLD_IDX") in
+    "$SECRETS" | "$SECRETS"/* | "$STATE") NEW_IDX=$WEBSTATE/$(basename "$OLD_IDX") ;;
+  esac
+fi
+if [[ $OLD_REG == "$NEW_REG" && ( -z $OLD_FIN || $OLD_FIN == "$NEW_FIN" ) && $OLD_IDX == "$NEW_IDX" ]]; then
+  echo "move-web-state: already done ($WEBSTATE)"
   exit 0
 fi
 WEB=$(flag_of "$CHAIN-web-main" -listen)
+[[ -n $WEB ]] || die "can't read the web server's -listen"
 health() { curl -s -o /dev/null --max-time 30 -w '%{http_code}' "http://$WEB/api/health" || true; }
 BEFORE=$(health)
 [[ $BEFORE == 200 || $BEFORE == 503 ]] || die "the web server answers $BEFORE now; fix that first"
 
+# stopped stops the units and checks every one is down: nothing may write
+# the registry or the index while they move.
+stopped() {
+  systemctl stop "${UNITS[@]}" || return 1
+  local u
+  for u in "${UNITS[@]}"; do
+    systemctl is-active --quiet "$u" && return 1
+  done
+  return 0
+}
+
 BACKUP=$(mktemp -d)
-for u in "${UNITS[@]}"; do cp -p "$UNITDIR/$u.service" "$BACKUP/"; done
+for u in "${UNITS[@]}"; do cp -p "$(unit_file "$u")" "$BACKUP/$u.service"; done
+moved=() # "from|to", in the order moved
 ok=0
 cleanup() {
   [[ $ok == 1 ]] && return
   echo "move-web-state: failed; putting the files and units back" >&2
-  systemctl stop "${UNITS[@]}" || true
-  [[ -f $NEW_REG && ! -f $OLD_REG ]] && mv "$NEW_REG" "$OLD_REG"
-  [[ -n $OLD_FIN && -f $NEW_FIN && ! -f $OLD_FIN ]] && mv "$NEW_FIN" "$OLD_FIN"
-  for u in "${UNITS[@]}"; do cp -p "$BACKUP/$u.service" "$UNITDIR/"; done
+  if ! stopped; then
+    echo "move-web-state: a unit won't stop, so nothing is moved back; moved so far: ${moved[*]:-nothing}; units are as edited" >&2
+    return
+  fi
+  local i from to
+  for ((i = ${#moved[@]} - 1; i >= 0; i--)); do
+    IFS='|' read -r from to <<<"${moved[$i]}"
+    if [[ -e $from ]]; then
+      echo "move-web-state: $from exists again; leaving $to where it is" >&2
+    else
+      mv "$to" "$from"
+    fi
+  done
+  for u in "${UNITS[@]}"; do cp -p "$BACKUP/$u.service" "$(unit_file "$u")"; done
   systemctl daemon-reload
   systemctl start "${UNITS[@]}" || true
 }
 trap cleanup EXIT
 
-systemctl stop "${UNITS[@]}"
+stopped || die "a unit didn't stop; nothing moved"
 install -d -m 700 "$WEBSTATE"
 [[ -n ${MOVE_TEST:-} ]] || chown "$CHAIN:$CHAIN" "$WEBSTATE"
-[[ -f $OLD_REG ]] && mv "$OLD_REG" "$NEW_REG"
-[[ -n $OLD_FIN && -f $OLD_FIN ]] && mv "$OLD_FIN" "$NEW_FIN"
+move() { # from, to
+  [[ $1 == "$2" || ! -e $1 ]] && return 0
+  [[ -e $2 ]] && die "$2 already exists; not overwriting it"
+  mv "$1" "$2"
+  moved+=("$1|$2")
+}
+move "$OLD_REG" "$NEW_REG"
+[[ -n $OLD_IDX ]] && move "$OLD_IDX" "$NEW_IDX"
+[[ -n $OLD_FIN ]] && move "$OLD_FIN" "$NEW_FIN"
 for u in "${UNITS[@]}"; do
-  sed -i -e "s# -deposits $OLD_REG# -deposits $NEW_REG#" "$UNITDIR/$u.service"
+  python3 - "$(unit_file "$u")" "-deposits $OLD_REG" "-deposits $NEW_REG" "-doge-index $OLD_IDX" "-doge-index $NEW_IDX" <<'PY'
+import re, sys
+path, pairs = sys.argv[1], sys.argv[2:]
+text = open(path).read()
+for old, new in zip(pairs[0::2], pairs[1::2]):
+    text = re.sub(re.escape(old) + r"(?=\s|$)", new, text)
+with open(path, "w") as f:
+    f.write(text)
+PY
 done
-if grep -q -- " -finality " "$UNITDIR/$CHAIN-web-main.service"; then
-  sed -i -e "s# -finality [^ ]*# -finality $NEW_FIN#" "$UNITDIR/$CHAIN-web-main.service"
-else
-  sed -i -e "/^ExecStart=/ s#\$# -finality $NEW_FIN#" "$UNITDIR/$CHAIN-web-main.service"
-fi
+python3 - "$(unit_file "$CHAIN-web-main")" "$NEW_FIN" <<'PY'
+import re, sys
+path, fin = sys.argv[1], sys.argv[2]
+lines = open(path).read().split("\n")
+for i, line in enumerate(lines):
+    if line.startswith("ExecStart="):
+        if re.search(r" -finality \S+", line):
+            lines[i] = re.sub(r" -finality \S+", " -finality " + fin, line)
+        else:
+            lines[i] = line + " -finality " + fin
+with open(path, "w") as f:
+    f.write("\n".join(lines))
+PY
 systemctl daemon-reload
 systemctl start "${UNITS[@]}"
 sleep 15
@@ -86,4 +150,4 @@ code=$(health)
 ok=1
 trap - EXIT
 rm -rf "$BACKUP"
-echo "move-web-state: the registry and finality samples are in $WEBSTATE; now deploy/sandbox-units.sh"
+echo "move-web-state: done. The registry is $NEW_REG, the finality samples $NEW_FIN${OLD_IDX:+, the index $NEW_IDX}; now deploy/sandbox-units.sh"
