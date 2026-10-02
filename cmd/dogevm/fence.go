@@ -250,6 +250,40 @@ func (c *cosigner) fillAnchors(s *pegState) (map[string]string, error) {
 	return t, nil
 }
 
+// walkedTips is, per chain, where the log's anchor leads following the
+// line forward along confirmed spends (lineage.next, never a restart): the
+// coin this signer would accept as the anchor now. It is the line's tip
+// for a signer that agrees with the others; deploy/upgrade-bridge.sh
+// compares it with the coordinator's tips. An anchor that leads nowhere
+// shows as "error: ...".
+func walkedTips(l *signingLog, s *pegState) map[string]string {
+	out := map[string]string{}
+	for chain, line := range map[string]*lineage{chainDogecoin: s.pegLine, chainDogecoinVM: s.reserveLine} {
+		last := l.Anchors[chain]
+		if last == "" || line == nil {
+			continue
+		}
+		cur, err := parseOutPoint(last)
+		if err != nil {
+			out[chain] = "error: " + err.Error()
+			continue
+		}
+		for range len(line.coins) + 2 {
+			next, more, err := line.next(cur)
+			if err != nil {
+				out[chain] = "error: " + err.Error()
+				break
+			}
+			if !more {
+				out[chain] = cur.String()
+				break
+			}
+			cur = next
+		}
+	}
+	return out
+}
+
 // txids is every transaction in the log, by its unsigned txid.
 func (l *signingLog) txids() map[string]bool {
 	ids := map[string]bool{}
@@ -452,7 +486,8 @@ func cmdSignerLog(args []string) error {
 		} else if t, err = tips(state); err != nil {
 			return err
 		}
-		printJSON(map[string]any{"signingLog": *logPath, "anchors": log.Anchors, "tips": t})
+		printJSON(map[string]any{"signingLog": *logPath, "anchors": log.Anchors, "tips": t,
+			"walked": walkedTips(log, state), "needsFence": log.Unfenced})
 		return nil
 	}
 	missing := c.unlogged(state)

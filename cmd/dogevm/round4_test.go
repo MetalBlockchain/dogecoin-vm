@@ -423,3 +423,22 @@ func TestAFenceSomeoneElseMadeDoesntCount(t *testing.T) {
 	require.NoError(err)
 	require.ErrorContains(c.fenced(s, chainDogecoin), "no fence on dogecoin from this log's anchor")
 }
+
+// TestWalkedTips (round 4, T7): signer-log anchors reports where each
+// anchor leads along confirmed spends, which the upgrade compares with
+// the coordinator's tips: an anchor a confirmed step behind leads to the
+// tip; one whose line ended leads nowhere.
+func TestWalkedTips(t *testing.T) {
+	require := require.New(t)
+	peg, other := []byte{0xa9, 0x14, 0xaa}, []byte{0x51}
+	at := func(tx *wire.MsgTx, i uint32) wire.OutPoint { return wire.OutPoint{Hash: tx.TxHash(), Index: i} }
+	seed := lineTx(nil, 1, peg)
+	p1 := lineTx(&wire.OutPoint{Hash: seed.TxHash()}, 0, other, peg)
+	s := &pegState{pegLine: newLineage([]chainTx{{tx: seed, confirmations: 20}, {tx: p1, confirmations: 10}}, peg, 6)}
+	log := &signingLog{Anchors: map[string]string{chainDogecoin: at(seed, 0).String()}}
+	require.Equal(at(p1, 1).String(), walkedTips(log, s)[chainDogecoin])
+
+	dead := lineTx(&wire.OutPoint{Hash: p1.TxHash(), Index: 1}, 0, other)
+	s.pegLine = newLineage([]chainTx{{tx: seed, confirmations: 20}, {tx: p1, confirmations: 10}, {tx: dead, confirmations: 5}}, peg, 6)
+	require.Contains(walkedTips(log, s)[chainDogecoin], "error: the line ended")
+}

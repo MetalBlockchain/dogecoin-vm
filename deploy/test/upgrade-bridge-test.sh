@@ -18,8 +18,11 @@ expect() { if eval "$1"; then ok "$2"; else bad "$2"; fi; }
 # The stub binary. VERSION is printed by "version"; pause/resume write and
 # remove paused.json next to -signers (and log it); signer-log checks,
 # creates and adopts -log, and "anchors" prints the tips ($TIPS, or
-# $TIPS_<unit> for a signer whose nodes see another line) and, with -set,
-# records them in the log.
+# $TIPS_<unit> for a signer whose nodes see another line), the log's
+# anchors ($ANCHORS_<unit>, default the tips), where they lead
+# ($WALKED_<unit>, default the tips) and, with NEEDS_FENCE, that the log
+# needs a cutover fence; with -set it records them in the log. "fence"
+# logs the chain it fences.
 stub_bridge() { # path version
   cat >"$1" <<EOF
 #!/usr/bin/env bash
@@ -41,8 +44,15 @@ case \$cmd in
       anchors)
         if [[ -z \$(arg -key-file "\$@") ]]; then echo "{\"tips\":\$tips}"; exit 0; fi
         has -set "\$@" && echo "ANCHORS \$tips" >>"\$log"
-        echo "{\"anchors\":\$tips,\"tips\":\$tips}" ;;
+        anchors=\$tips; walked=\$tips; fence=null
+        if [[ -n \$set ]]; then
+          v=ANCHORS_\${u//-/_}; anchors=\${!v:-\$anchors}
+          v=WALKED_\${u//-/_}; walked=\${!v:-\$walked}
+        fi
+        [[ -n \${NEEDS_FENCE:-} ]] && fence='{"dogecoin":true,"dogecoinvm":true}'
+        echo "{\"anchors\":\$anchors,\"tips\":\$tips,\"walked\":\$walked,\"needsFence\":\$fence}" ;;
     esac ;;
+  fence) echo "fence \$(arg -chain "\$@")" >>"\$EVENTS"; echo '{"fenceTxid":"ff"}' ;;
 esac
 EOF
   chmod +x "$1"
@@ -151,7 +161,7 @@ expect '[[ $(version) == new && $("$SIGNER_BIN" version) == new ]]' "both binari
 expect 'quiet_before_backup' "coordinator stopped, then every signer paused, then stopped"
 expect 'paused && all_signers_paused' "bridge and signers left paused"
 expect 'grep -q 02bb "$(dirname "$SET")/cosigners.json"' "public keys filled in"
-expect 'grep -q "anchors agree" "$T/out"' "anchors compared"
+expect 'grep -q "anchors lead to the coordinator.s tips" "$T/out"' "anchors compared"
 expect 'grep -q "runuser -u dogevm-signer-2 .* resume -signers $VARLIB/dogevm-signer-2/signers.json" "$T/out"' "prints how to resume each signer"
 
 echo "2. a missing signing log stops it and everything goes back"
@@ -261,6 +271,29 @@ printf '%064d\n' 1 >"$(dirname "$SET")/contributions.txt"
 code=$(run)
 expect '[[ $code != 0 ]] && grep -q "TXID:VOUT" "$T/out"' "fails, says why"
 expect '! paused' "before pausing anything"
+
+echo "16. an anchor a confirmed step behind the tip is fine; one that leads elsewhere stops it (round 4, T7)"
+setup
+code=$(ANCHORS_dogevm_signer_2='{"dogecoin":"a0:1","dogecoinvm":"bb:1"}' run)
+expect '[[ $code == 0 ]]' "behind but leading to the tip: succeeds"
+setup
+code=$(ANCHORS_dogevm_signer_2='{"dogecoin":"a0:1","dogecoinvm":"bb:1"}' WALKED_dogevm_signer_2='{"dogecoin":"error: the line ended","dogecoinvm":"bb:1"}' run)
+expect '[[ $code != 0 && $(version) == old ]]' "leading elsewhere: fails, old binary back"
+expect 'grep -q "anchor leads to error" "$T/out"' "says where it leads"
+
+echo "17. logs that need a cutover fence: RESUME=1 resumes the signers, sends both fences, keeps the bridge paused (round 4, T5)"
+setup
+code=$(NEEDS_FENCE=1 RESUME=1 run)
+expect '[[ $code == 0 ]]' "succeeds"
+expect '! signer_paused 1 && ! signer_paused 2 && ! signer_paused 3' "signers resumed (they sign only fences)"
+expect 'paused' "the bridge stays paused"
+expect 'grep -qx "fence dogecoin" "$EVENTS" && grep -qx "fence dogecoinvm" "$EVENTS"' "a fence on each chain"
+expect 'grep -q "Cutover fence" "$T/out"' "says what to wait for"
+setup
+code=$(NEEDS_FENCE=1 run)
+expect '[[ $code == 0 ]] && paused && all_signers_paused' "without RESUME: everything stays paused"
+expect '! grep -q "^fence" "$EVENTS"' "no fence sent"
+expect 'grep -q "fence -signers .* -chain dogecoinvm" "$T/out"' "prints the fence commands"
 
 echo
 echo "$pass passed, $fail failed"

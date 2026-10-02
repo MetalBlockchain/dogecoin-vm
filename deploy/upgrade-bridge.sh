@@ -28,10 +28,12 @@
 #      signers existed, so all its signatures are on the chains) gets one
 #      rebuilt from the chains;
 #   7. set each signer's empty anchors to the tips of the anchor lines, as
-#      its own nodes see them, and check every signer's anchors are the
-#      tips the coordinator sees: a signer on a line of its own could sign
-#      a second payout beside one the others signed (RUNBOOK.md, "Anchor
-#      lineage");
+#      its own nodes see them, and check every signer's anchors lead, along
+#      confirmed spends, to the tips the coordinator sees: a signer on a
+#      line of its own could sign a second payout beside one the others
+#      signed (RUNBOOK.md, "Anchor lineage"). A log whose anchors were set
+#      rather than signed signs only a cutover fence until one is done
+#      (RUNBOOK.md, "Cutover fence");
 #   8. fill each signer's public key into cosigners.json from its own card
 #      where missing, and check every key there is in the signer set;
 #   9. start the signers (still paused), then the bridge, web wallet and
@@ -39,7 +41,9 @@
 #
 # It never resumes unless RESUME=1, the bridge wasn't already paused
 # before the upgrade, and every health check but the pause passes; then it
-# resumes the bridge and each signer it paused. Otherwise read the checks,
+# resumes the bridge and each signer it paused. If a log needs a cutover
+# fence, it resumes only the signers, sends the fences, and leaves the
+# bridge paused until the Dogecoin fence is deep enough. Otherwise read the checks,
 # then resume the bridge and each signer (the commands are printed).
 #
 # On any failure after step 2, the previous binaries, cosigners.json and
@@ -253,8 +257,11 @@ for unit in "${SIGNERS[@]}"; do
 done
 
 log "anchors"
-# Every signer's anchors must be the tips of the lines the coordinator
-# sees: set the empty ones from each signer's own nodes, then compare.
+# Every signer's anchors must lead to the tips of the lines the coordinator
+# sees: set the empty ones from each signer's own nodes, then compare. A
+# log whose anchors were set (adopted, or new) needs a cutover fence on
+# each chain before it signs anything else (RUNBOOK.md, "Cutover fence").
+NEEDS_FENCE=0
 tips=$(as_coordinator "$HOME_DIR/bin/$CHAIN" signer-log anchors -signers "$SET" ${COORD_DEPOSITS:+-deposits "$COORD_DEPOSITS"})
 echo "coordinator: $tips"
 for unit in "${SIGNERS[@]}"; do
@@ -265,14 +272,20 @@ import json, sys
 unit, coord, signer = sys.argv[1], json.loads(sys.argv[2])["tips"], json.loads(sys.argv[3])
 if not coord:
     sys.exit(f"{unit}: the coordinator sees no anchor line yet")
-anchors = signer.get("anchors") or {}
+walked = signer.get("walked") or {}
 for chain, tip in coord.items():
     if signer.get("tips", {}).get(chain) != tip:
         sys.exit(f"{unit}: its nodes see the {chain} tip at {signer.get('tips', {}).get(chain)}, the coordinator's at {tip}")
-    if anchors.get(chain) != tip:
-        print(f"{unit}: its {chain} anchor {anchors.get(chain)} is behind the tip {tip} (it follows the line to it)")
-print(f"{unit}: anchors agree")
+    # Where the log's anchor leads along confirmed spends, not the anchor
+    # itself: an anchor a confirmed step behind the tip is normal.
+    if walked.get(chain) != tip:
+        sys.exit(f"{unit}: its {chain} anchor leads to {walked.get(chain)}, not the coordinator's tip {tip}")
+fence = sorted(c for c, need in (signer.get("needsFence") or {}).items() if need)
+print(f"{unit}: anchors lead to the coordinator's tips" + (f"; needs a fence on {', '.join(fence)}" if fence else ""))
 PY
+  if python3 -c 'import json,sys; sys.exit(0 if any((json.loads(sys.argv[1]).get("needsFence") or {}).values()) else 1)' "$got"; then
+    NEEDS_FENCE=1
+  fi
   LOG_MADE[$unit]=$(hash_of "${SLOG[$unit]}") # as this run left it
 done
 
@@ -360,7 +373,28 @@ resume_cmds() {
     echo "  runuser -u $unit -- $SIGNER_BIN resume -signers ${SSET[$unit]}"
   done
 }
-if [[ $RESUME == 1 && $WAS_PAUSED == 0 && -z $failing ]]; then
+fence_cmds() {
+  for chain in dogecoin dogecoinvm; do
+    echo "  runuser -u $CHAIN -- bash -c 'set -a; . $BRIDGE_ENV; set +a; exec $HOME_DIR/bin/$CHAIN fence -signers $SET -chain $chain'"
+  done
+}
+if [[ $RESUME == 1 && $WAS_PAUSED == 0 && -z $failing && $NEEDS_FENCE == 1 ]]; then
+  # A rebuilt log signs only a fence until the cutover is done, so the
+  # signers can resume; the bridge stays paused until the fences are deep.
+  log "resuming the signers and sending the cutover fences"
+  for unit in "${SIGNERS[@]}"; do
+    [[ ${PAUSED_BY_US[$unit]} == 1 ]] && as_signer "$unit" "$SIGNER_BIN" resume -signers "${SSET[$unit]}" >/dev/null
+  done
+  for chain in dogecoin dogecoinvm; do
+    as_coordinator "$HOME_DIR/bin/$CHAIN" fence -signers "$SET" -chain "$chain" || echo "upgrade-bridge: the $chain fence failed; read it, then send it again:"
+  done
+  echo
+  echo "upgrade-bridge: done; the bridge stays paused. Once the Dogecoin fence has its confirmations"
+  echo "(RUNBOOK.md, \"Cutover fence\"), resume it:"
+  echo "  runuser -u $CHAIN -- $HOME_DIR/bin/$CHAIN resume -signers $SET"
+  echo "A fence that failed is sent again with:"
+  fence_cmds
+elif [[ $RESUME == 1 && $WAS_PAUSED == 0 && -z $failing ]]; then
   log "resuming"
   for unit in "${SIGNERS[@]}"; do
     [[ ${PAUSED_BY_US[$unit]} == 1 ]] && as_signer "$unit" "$SIGNER_BIN" resume -signers "${SSET[$unit]}" >/dev/null
@@ -371,7 +405,15 @@ else
   [[ $RESUME == 1 && -n $failing ]] && echo "upgrade-bridge: not resuming: failing checks: $failing"
   echo "upgrade-bridge: done; the bridge and its signers are still paused. Read the checks:"
   echo "  curl -s http://$WEB/api/health"
-  echo "then resume the signers and the bridge:"
-  resume_cmds
+  if [[ $NEEDS_FENCE == 1 ]]; then
+    echo "then resume the signers, send the cutover fences, and resume the bridge only once the"
+    echo "Dogecoin fence has its confirmations (RUNBOOK.md, \"Cutover fence\"):"
+    resume_cmds | tail -n +2
+    fence_cmds
+    resume_cmds | head -1
+  else
+    echo "then resume the signers and the bridge:"
+    resume_cmds
+  fi
 fi
 echo "Backups (old binaries, logs, cosigners.json, contribution lists) are in $WORK."
