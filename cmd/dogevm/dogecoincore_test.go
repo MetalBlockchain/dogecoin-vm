@@ -401,3 +401,177 @@ func TestRefundAfterCancelOnDogecoinCore(t *testing.T) {
 	require.True(a.solvent(), "%+v", a)
 	require.Zero(a.UnclaimedOnDoge)
 }
+
+// TestRepeatedBumpsAndEvictionOnDogecoinCore (round 4, T16): a stuck payout
+// is replaced again and again, one -doge-fee more each time; the node
+// drops its mempool between two replacements (a restart) and the bridge
+// puts the highest back; the bumps stop at the cap; and when a block comes
+// exactly one of them confirms, paying the peg-out once.
+func TestRepeatedBumpsAndEvictionOnDogecoinCore(t *testing.T) {
+	require := require.New(t)
+	n := startDogecoin(t)
+	h := n.bridgeHarness()
+	alice := h.user(1)
+	depositAddr, err := registerDeposit(h.b, alice)
+	require.NoError(err)
+	n.pay(depositAddr.EncodeAddress(), 50, "")
+	n.mine(6)
+	require.NotEmpty(h.step())
+	h.vm.mine()
+	var bobAddr string
+	require.NoError(n.rpc.call(&bobAddr, "getnewaddress"))
+	decoded, err := btcutil.DecodeAddress(bobAddr, h.b.dogeParams)
+	require.NoError(err)
+	bob, err := destinationOf(decoded)
+	require.NoError(err)
+	req := h.pegOut(20*doge, bob)
+	require.Contains(h.step(), "paid")
+	data := encodePayment(req.TxHash())
+
+	// highest is the payout the bridge sees with the highest fee, and its fee.
+	highest := func() (chainhash.Hash, int64) {
+		s, err := h.b.load()
+		require.NoError(err)
+		r, fee, ok := s.unconfirmedFor(data)
+		require.True(ok)
+		return r.tx.TxHash(), fee
+	}
+	bump := func() string {
+		h.b.bumpAfter = time.Second
+		time.Sleep(1100 * time.Millisecond)
+		did, err := h.b.step()
+		require.NoError(err)
+		h.b.bumpAfter = 0
+		return did
+	}
+	first, fee := highest()
+	require.Equal(h.b.dogeFee, fee)
+	require.Contains(bump(), "replaced "+first.String())
+	second, fee := highest()
+	require.Equal(2*h.b.dogeFee, fee, "one -doge-fee more")
+	require.True(n.inMempool(second) && !n.inMempool(first))
+
+	// The node restarts with an empty mempool; the bridge hands back what
+	// it has, and the highest replacement is what the node keeps.
+	n.restart()
+	n.waitReady()
+	h.b.resent = nil
+	_, err = h.b.step()
+	require.NoError(err)
+	require.Eventually(func() bool { return n.inMempool(second) }, 30*time.Second, 500*time.Millisecond,
+		"the highest replacement is back")
+	require.False(n.inMempool(first))
+
+	require.Contains(bump(), "replaced "+second.String())
+	third, fee := highest()
+	require.Equal(3*h.b.dogeFee, fee)
+	require.Contains(bump(), "replaced "+third.String())
+	fourth, fee := highest()
+	require.Equal(maxBumpFees*h.b.dogeFee, fee)
+	require.Empty(bump(), "at the cap: no more replacements")
+	require.True(n.inMempool(fourth))
+
+	n.mine(1)
+	s, err := h.b.load()
+	require.NoError(err)
+	require.Empty(s.unconfirmed, "one of them confirmed; the rest can't")
+	paid, ok := s.paid[req.TxHash()]
+	require.True(ok)
+	require.Equal(fourth, paid)
+	var received float64
+	require.NoError(n.rpc.call(&received, "getreceivedbyaddress", bobAddr, 1))
+	require.InDelta(float64(20*doge-maxBumpFees*h.b.dogeFee)/float64(doge), received, 1e-8, "paid once, less the last fee")
+	a := h.audit()
+	require.True(a.solvent(), "%+v", a)
+	require.Zero(a.PendingPegOuts)
+}
+
+// TestRefundBumpOnDogecoinCore (round 4, T16): a stuck refund is replaced
+// like a payout, and refunds the deposit once.
+func TestRefundBumpOnDogecoinCore(t *testing.T) {
+	require := require.New(t)
+	n := startDogecoin(t)
+	h := n.bridgeHarness()
+	peg, err := h.b.signers.address(h.b.dogeParams)
+	require.NoError(err)
+	txid := n.pay(peg.EncodeAddress(), 30, "") // no destination: held, refunded without a cancellation
+	n.mine(6)
+	hash, err := chainhash.NewHashFromStr(txid)
+	require.NoError(err)
+	s, err := h.b.load()
+	require.NoError(err)
+	var op wire.OutPoint
+	for _, d := range s.held {
+		if d.outPoint.Hash == *hash && d.value == 30*doge {
+			op = d.outPoint
+		}
+	}
+	require.Equal(*hash, op.Hash)
+	var backAddr string
+	require.NoError(n.rpc.call(&backAddr, "getnewaddress"))
+	decoded, err := btcutil.DecodeAddress(backAddr, h.b.dogeParams)
+	require.NoError(err)
+	back, err := destinationOf(decoded)
+	require.NoError(err)
+	first, err := h.b.refund(op, back, false)
+	require.NoError(err)
+	require.True(n.inMempool(first))
+
+	h.b.bumpAfter = time.Second
+	time.Sleep(1100 * time.Millisecond)
+	did, err := h.b.step()
+	require.NoError(err)
+	require.Contains(did, "replaced "+first.String())
+	h.b.bumpAfter = 0
+	require.False(n.inMempool(first))
+	n.mine(1)
+	var received float64
+	require.NoError(n.rpc.call(&received, "getreceivedbyaddress", backAddr, 1))
+	require.InDelta(float64(30*doge-2*h.b.dogeFee)/float64(doge), received, 1e-8, "refunded once, less the second fee")
+	a := h.audit()
+	require.True(a.solvent(), "%+v", a)
+	require.Zero(a.UnclaimedOnDoge)
+}
+
+// TestFenceOnDogecoinCore (round 4, T5): a fence spending the peg's anchor
+// and every other coin of the set (the peg address and a personal deposit
+// address) is a transaction Dogecoin Core relays and mines; once it is
+// deep, a log rebuilt at the old anchor sees the cutover done.
+func TestFenceOnDogecoinCore(t *testing.T) {
+	require := require.New(t)
+	n := startDogecoin(t)
+	h := n.bridgeHarness()
+	alice := h.user(1)
+	depositAddr, err := registerDeposit(h.b, alice)
+	require.NoError(err)
+	n.pay(depositAddr.EncodeAddress(), 50, "")
+	peg, err := h.b.signers.address(h.b.dogeParams)
+	require.NoError(err)
+	n.pay(peg.EncodeAddress(), 5, hex.EncodeToString(tagContrib))
+	n.mine(6)
+	s, err := h.b.load()
+	require.NoError(err)
+	from := s.pegAnchor.outPoint
+	inputs, err := s.fenceInputs(chainDogecoin)
+	require.NoError(err)
+	require.Len(inputs, 3, "the anchor, the contribution and the deposit")
+
+	txid, err := h.b.fence(chainDogecoin)
+	require.NoError(err)
+	require.True(n.inMempool(txid), "Dogecoin Core relayed the fence")
+	n.mine(1)
+	s, err = h.b.load()
+	require.NoError(err)
+	done, why := cutoverDone(s, chainDogecoin, from)
+	require.False(done, "not deep yet")
+	require.Contains(why, "confirmations yet")
+	n.mine(int(s.pegLine.rootDepth))
+	s, err = h.b.load()
+	require.NoError(err)
+	done, why = cutoverDone(s, chainDogecoin, from)
+	require.True(done, why)
+	require.Equal(wire.OutPoint{Hash: txid}, s.pegAnchor.outPoint, "the fence's one output is the next anchor")
+	a := h.audit()
+	require.True(a.solvent(), "%+v", a)
+	require.NotEmpty(h.step(), "the deposit is still credited after its coin was fenced")
+}
