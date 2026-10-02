@@ -633,10 +633,16 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 	if err := c.fence(s); err != nil {
 		return nil, nil, 0, err
 	}
-	// A rebuilt log signs a fence first (cutover.go).
+	// A rebuilt log signs fences first, on both chains, before anything
+	// else on either (cutover.go): an action has a transaction on each
+	// chain (a release on DogecoinVM, a refund on Dogecoin), so a new one
+	// on a fenced chain could confirm beside an old one kept back on the
+	// other.
 	if req.Action.Kind != actionFence {
-		if err := c.fenced(s, req.Chain); err != nil {
-			return nil, nil, 0, err
+		for _, chain := range []string{chainDogecoin, chainDogecoinVM} {
+			if err := c.fenced(s, chain); err != nil {
+				return nil, nil, 0, err
+			}
 		}
 	}
 	// Fees this signer signed for that can still confirm count against the

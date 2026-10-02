@@ -470,3 +470,52 @@ func TestRefenceRecoversABrokenAnchor(t *testing.T) {
 	require.Equal(at(later, 0).String(), c.log.Anchors[chainDogecoin])
 	require.True(c.log.Unfenced[chainDogecoin], "a fence first")
 }
+
+// TestFenceGateCoversBothChains: while a rebuilt log is unfenced on either
+// chain, it signs nothing but fences on both. A release on a fenced
+// DogecoinVM could otherwise confirm beside a refund or payout of the same
+// deposit, signed before and kept back, on a still unfenced Dogecoin.
+func TestFenceGateCoversBothChains(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	alice := h.user(1)
+	h.contribute(10*doge, 50)
+	h.deposit(10*doge, &alice, 9)
+	for h.step() != "" {
+		h.vm.mine()
+	}
+	dep := h.deposit(4*doge, &alice, 9)
+	h.rebuildLogs()
+	_, err := h.b.fence(chainDogecoinVM) // only DogecoinVM
+	require.NoError(err)
+	h.vm.mine()
+
+	c := h.signers[2]
+	s, err := c.b.load()
+	require.NoError(err)
+	require.NoError(c.fenced(s, chainDogecoinVM), "DogecoinVM's cutover is done")
+	d, ok := findDeposit(s.deposits, wire.OutPoint{Hash: dep.TxHash()})
+	require.True(ok)
+	inputs, total, err := s.releaseInputs(d.value)
+	require.NoError(err)
+	tx := h.b.buildRelease(inputs, total, d)
+	req := signRequest{Chain: chainDogecoinVM, Tx: encodeTx(tx), Register: []string{encodeDest(alice)},
+		Action: action{Kind: actionRelease, Deposit: d.outPoint.String()}}
+	_, _, _, err = c.check(req)
+	require.ErrorContains(err, "signs only a fence on dogecoin", "a DogecoinVM release waits for Dogecoin's fence")
+}
+
+// TestTagsAreDistinct: every OP_RETURN tag the bridge writes or reads is
+// different, so no transaction reads as another kind.
+func TestTagsAreDistinct(t *testing.T) {
+	tags := map[string][]byte{"deposit": tagDeposit, "release": tagRelease, "pegOut": tagPegOut, "payment": tagPayment,
+		"refund": tagRefund, "contrib": tagContrib, "cancel": tagCancel, "fence": tagFence}
+	seen := map[string]string{}
+	for name, tag := range tags {
+		require.Len(t, tag, 4, name)
+		if other, dup := seen[string(tag)]; dup {
+			t.Fatalf("%s and %s share the tag %q", name, other, tag)
+		}
+		seen[string(tag)] = name
+	}
+}
