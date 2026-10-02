@@ -381,6 +381,16 @@ func cmdSignerLog(args []string) error {
 	if *logPath == "" {
 		*logPath = filepath.Join(filepath.Dir(*keyFile), "signing-log.json")
 	}
+	if step == "init" || step == "adopt" || step == "anchors" && *setAnchors {
+		// These write the log: the signer must be stopped, or one of its
+		// signatures could be written over (lockSigningLog). Taken before
+		// the log is read.
+		lock, err := lockSigningLog(*logPath)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+	}
 	log := &signingLog{path: *logPath, Actions: map[string]*loggedAction{}}
 	if step == "init" {
 		if _, err := os.Lstat(*logPath); err == nil {

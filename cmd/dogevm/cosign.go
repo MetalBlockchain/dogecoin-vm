@@ -1631,6 +1631,13 @@ func cmdSigner(args []string) error {
 	if *logPath == "" {
 		*logPath = filepath.Join(filepath.Dir(*keyFile), "signing-log.json")
 	}
+	// Held for as long as the signer runs: no signer-log command can write
+	// the log under it, and a second signer on the same log won't start.
+	logLock, err := lockSigningLog(*logPath)
+	if err != nil {
+		return err
+	}
+	defer logLock.Close()
 	log, err := openSigningLog(*logPath)
 	if err != nil {
 		return err

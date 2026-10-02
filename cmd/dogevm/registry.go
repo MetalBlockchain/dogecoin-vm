@@ -61,7 +61,6 @@ func (r *depositRegistry) read() ([]destination, error) {
 	return dests, nil
 }
 
-// add records d, reporting whether it was new.
 // has reports whether d is registered.
 func (r *depositRegistry) has(d destination) (bool, error) {
 	dests, err := r.list()
@@ -90,6 +89,7 @@ func (r *depositRegistry) lock() (func(), error) {
 	return func() { _ = unlockFile(f); f.Close() }, nil
 }
 
+// add records d, reporting whether it was new.
 func (r *depositRegistry) add(d destination) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -129,9 +129,19 @@ func (r *depositRegistry) add(d destination) (bool, error) {
 		os.Remove(tmp.Name())
 		return false, err
 	}
+	// Durable before it is visible: the file's bytes, then the rename.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return false, err
+	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
 		return false, err
 	}
-	return true, os.Rename(tmp.Name(), r.path)
+	if err := os.Rename(tmp.Name(), r.path); err != nil {
+		os.Remove(tmp.Name())
+		return false, err
+	}
+	return true, syncDir(filepath.Dir(r.path))
 }
