@@ -27,24 +27,25 @@
 #      log, and only one in ADOPT_LOGS (it signed only before separate
 #      signers existed, so all its signatures are on the chains) gets one
 #      rebuilt from the chains;
-#   7. set each signer's empty anchors to the tips of the anchor lines, as
-#      its own nodes see them, and check every signer's anchors lead, along
-#      confirmed spends, to the tips the coordinator sees: a signer on a
-#      line of its own could sign a second payout beside one the others
-#      signed (RUNBOOK.md, "Anchor lineage"). A log whose anchors were set
-#      rather than signed signs only a cutover fence until one is done
-#      (RUNBOOK.md, "Cutover fence");
+#   7. start a cutover for every current-set signer whose log is unproven
+#      (adopted, or from software before the cutover rule, whatever its
+#      anchors), and check its nodes see the coordinator's tips; for a
+#      proven log, set its empty anchors and check they lead, along
+#      confirmed spends, to those tips (RUNBOOK.md, "Cutover", "Anchor
+#      lineage");
 #   8. fill each signer's public key into cosigners.json from its own card
 #      where missing, and check every key there is in the signer set;
 #   9. start the signers (still paused), then the bridge, web wallet and
 #      monitor, and check the peg's audit is solvent.
 #
-# It never resumes unless RESUME=1, the bridge wasn't already paused
-# before the upgrade, and every health check but the pause passes; then it
-# resumes the bridge and each signer it paused. If a log needs a cutover
-# fence, it resumes only the signers, sends the fences, and leaves the
-# bridge paused until the Dogecoin fence is deep enough. Otherwise read the checks,
-# then resume the bridge and each signer (the commands are printed).
+# If a signer is in a cutover, it sends fences on both chains (signers
+# sign them while paused, and nothing else), with the bridge unit's own
+# flags, and with FENCE_WAIT=MINUTES keeps going until every cutover is
+# done. It never resumes while a cutover is unfinished, nor unless
+# RESUME=1, the bridge wasn't already paused before the upgrade, and every
+# health check but the pause passes; then it resumes the bridge and each
+# signer it paused. Otherwise read the checks, then resume the bridge and
+# each signer (the commands are printed).
 #
 # On any failure after step 2, the previous binaries, cosigners.json and
 # contribution lists go back, everything is started again, and the bridge
@@ -256,18 +257,45 @@ for unit in "${SIGNERS[@]}"; do
   done
 done
 
-log "anchors"
-# Every signer's anchors must lead to the tips of the lines the coordinator
-# sees: set the empty ones from each signer's own nodes, then compare. A
-# log whose anchors were set (adopted, or new) needs a cutover fence on
-# each chain before it signs anything else (RUNBOOK.md, "Cutover fence").
+log "cutover and anchors"
+# Every current-set signer whose log is unproven (adopted, or written by
+# software before the cutover rule, whatever its anchors) starts a cutover
+# on both chains: it signs only fences until every coin a signature kept
+# back could spend is spent deep (RUNBOOK.md, "Cutover"). Its nodes must
+# see the coordinator's tips. A proven log (new, or fenced) keeps its
+# anchors, which must lead to those tips.
 NEEDS_FENCE=0
 tips=$(as_coordinator "$HOME_DIR/bin/$CHAIN" signer-log anchors -signers "$SET" ${COORD_DEPOSITS:+-deposits "$COORD_DEPOSITS"})
 echo "coordinator: $tips"
+signer_log() { # unit step [args]: signer-log as that signer, with its own files
+  local unit=$1 step=$2
+  shift 2
+  as_signer "$unit" "$SIGNER_BIN" signer-log "$step" -signers "${SSET[$unit]}" -key-file "${SKEY[$unit]}" -log "${SLOG[$unit]}" \
+    ${SDEPOSITS[$unit]:+-deposits "${SDEPOSITS[$unit]}"} "$@"
+}
+in_cutover() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if any(d.get("cutoverLeft") or {}) or not d.get("history") else 1)' "$1"; }
 for unit in "${SIGNERS[@]}"; do
-  deposits=${SDEPOSITS[$unit]}
-  got=$(as_signer "$unit" "$SIGNER_BIN" signer-log anchors -set -signers "${SSET[$unit]}" -key-file "${SKEY[$unit]}" -log "${SLOG[$unit]}" ${deposits:+-deposits "$deposits"})
-  python3 - "$unit" "$tips" "$got" <<'PY' || die "$unit's anchors aren't the coordinator's tips; stopped (RUNBOOK.md, \"Anchor lineage\")"
+  st=$(signer_log "$unit" status)
+  if python3 -c 'import json,sys; sys.exit(0 if not json.loads(sys.argv[1]).get("history") and not json.loads(sys.argv[1]).get("cutoverLeft") else 1)' "$st"; then
+    echo "$unit: unproven log: starting a cutover"
+    st=$(signer_log "$unit" cutover)
+  fi
+  if in_cutover "$st"; then
+    NEEDS_FENCE=1
+    python3 - "$unit" "$tips" "$st" <<'PY' || die "$unit's nodes don't see the coordinator's tips; stopped (RUNBOOK.md, \"Anchor lineage\")"
+import json, sys
+unit, coord, st = sys.argv[1], json.loads(sys.argv[2])["tips"], json.loads(sys.argv[3])
+if not coord:
+    sys.exit(f"{unit}: the coordinator sees no anchor line yet")
+for chain, tip in coord.items():
+    if (st.get("lineageTips") or {}).get(chain) != tip:
+        sys.exit(f"{unit}: its nodes see the {chain} tip at {(st.get('lineageTips') or {}).get(chain)}, the coordinator's at {tip}")
+left = {c: len(v) for c, v in (st.get("cutoverLeft") or {}).items()}
+print(f"{unit}: in cutover {st.get('cutoverEpoch')}; coins left per chain: {left}")
+PY
+  else
+    got=$(signer_log "$unit" anchors -set)
+    python3 - "$unit" "$tips" "$got" <<'PY' || die "$unit's anchors aren't the coordinator's tips; stopped (RUNBOOK.md, \"Anchor lineage\")"
 import json, sys
 unit, coord, signer = sys.argv[1], json.loads(sys.argv[2])["tips"], json.loads(sys.argv[3])
 if not coord:
@@ -280,11 +308,8 @@ for chain, tip in coord.items():
     # itself: an anchor a confirmed step behind the tip is normal.
     if walked.get(chain) != tip:
         sys.exit(f"{unit}: its {chain} anchor leads to {walked.get(chain)}, not the coordinator's tip {tip}")
-fence = sorted(c for c, need in (signer.get("needsFence") or {}).items() if need)
-print(f"{unit}: anchors lead to the coordinator's tips" + (f"; needs a fence on {', '.join(fence)}" if fence else ""))
+print(f"{unit}: anchors lead to the coordinator's tips")
 PY
-  if python3 -c 'import json,sys; sys.exit(0 if any((json.loads(sys.argv[1]).get("needsFence") or {}).values()) else 1)' "$got"; then
-    NEEDS_FENCE=1
   fi
   LOG_MADE[$unit]=$(hash_of "${SLOG[$unit]}") # as this run left it
 done
@@ -373,28 +398,71 @@ resume_cmds() {
     echo "  runuser -u $unit -- $SIGNER_BIN resume -signers ${SSET[$unit]}"
   done
 }
+# The coordinator's fence runs with exactly the bridge unit's own command
+# line (its registry, cosigners, coordinator key and policy flags, which
+# bridge.env alone doesn't give), plus -fence (round 5, U9).
+BRIDGE_ARGV=$(start_of "$CHAIN-bridge-main")
+if [[ $BRIDGE_ARGV == *"argv[]="* ]]; then
+  BRIDGE_ARGV=${BRIDGE_ARGV#*argv[]=}
+  BRIDGE_ARGV=${BRIDGE_ARGV%% ;*}
+fi
+read -r -a BRIDGE_ARGS <<<"$BRIDGE_ARGV"
+[[ ${BRIDGE_ARGS[1]:-} == bridge ]] || die "can't read $CHAIN-bridge-main's command line: $BRIDGE_ARGV"
+send_fence() { # chain
+  as_coordinator "$HOME_DIR/bin/$CHAIN" "${BRIDGE_ARGS[@]:1}" -fence "$1"
+}
 fence_cmds() {
   for chain in dogecoin dogecoinvm; do
-    echo "  runuser -u $CHAIN -- bash -c 'set -a; . $BRIDGE_ENV; set +a; exec $HOME_DIR/bin/$CHAIN fence -signers $SET -chain $chain'"
+    echo "  runuser -u $CHAIN -- bash -c 'set -a; . $BRIDGE_ENV; set +a; exec $HOME_DIR/bin/$CHAIN ${BRIDGE_ARGS[*]:1} -fence $chain'"
   done
 }
-if [[ $RESUME == 1 && $WAS_PAUSED == 0 && -z $failing && $NEEDS_FENCE == 1 ]]; then
-  # A rebuilt log signs only a fence until the cutover is done, so the
-  # signers can resume; the bridge stays paused until the fences are deep.
-  log "resuming the signers and sending the cutover fences"
+# cutover_left: the signers still in a cutover, with their coins left.
+cutover_left() {
+  local unit st
   for unit in "${SIGNERS[@]}"; do
-    [[ ${PAUSED_BY_US[$unit]} == 1 ]] && as_signer "$unit" "$SIGNER_BIN" resume -signers "${SSET[$unit]}" >/dev/null
+    st=$(signer_log "$unit" status) || { echo "$unit: status failed"; continue; }
+    if in_cutover "$st"; then
+      echo "$unit: $(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print({c: len(v) for c, v in (d.get("cutoverLeft") or {}).items()} or "starting")' "$st")"
+    fi
   done
-  for chain in dogecoin dogecoinvm; do
-    as_coordinator "$HOME_DIR/bin/$CHAIN" fence -signers "$SET" -chain "$chain" || echo "upgrade-bridge: the $chain fence failed; read it, then send it again:"
+}
+
+if [[ $NEEDS_FENCE == 1 ]]; then
+  # Fences pay no one, so the signers sign them while paused, and nothing
+  # else; the bridge stays paused. A Dogecoin fence needs rootDepth
+  # confirmations (about 20 minutes); a set with more coins than one fence
+  # holds takes several in turn. FENCE_WAIT (minutes) keeps proposing and
+  # waiting; the default sends one round and leaves the rest to the
+  # operator.
+  log "cutover: sending fences (the signers stay paused for everything else)"
+  deadline=$(( $(date +%s) + ${FENCE_WAIT:-0} * 60 ))
+  while :; do
+    for chain in dogecoin dogecoinvm; do
+      send_fence "$chain" || echo "($chain: no fence now; see above)"
+    done
+    left=$(cutover_left)
+    [[ -z $left ]] && break
+    (( $(date +%s) < deadline )) || break
+    sleep 60
   done
-  echo
-  echo "upgrade-bridge: done; the bridge stays paused. Once the Dogecoin fence has its confirmations"
-  echo "(RUNBOOK.md, \"Cutover fence\"), resume it:"
-  echo "  runuser -u $CHAIN -- $HOME_DIR/bin/$CHAIN resume -signers $SET"
-  echo "A fence that failed is sent again with:"
-  fence_cmds
-elif [[ $RESUME == 1 && $WAS_PAUSED == 0 && -z $failing ]]; then
+  if [[ -n $left ]]; then
+    echo
+    echo "upgrade-bridge: done; the cutover isn't finished, so the bridge and signers stay paused:"
+    echo "$left"
+    echo "Repeat the fences until every signer's cutoverLeft is empty (RUNBOOK.md, \"Cutover\"):"
+    fence_cmds
+    echo "check each signer with:"
+    for unit in "${SIGNERS[@]}"; do
+      echo "  runuser -u $unit -- bash -c 'set -a; . $VARLIB/$unit/signer.env; set +a; exec $SIGNER_BIN signer-log status -signers ${SSET[$unit]} -key-file ${SKEY[$unit]} -log ${SLOG[$unit]}'"
+    done
+    echo "then read the checks (curl -s http://$WEB/api/health) and resume:"
+    resume_cmds
+    echo "Backups (old binaries, logs, cosigners.json, contribution lists) are in $WORK."
+    exit 0
+  fi
+  log "cutover done on every signer"
+fi
+if [[ $RESUME == 1 && $WAS_PAUSED == 0 && -z $failing ]]; then
   log "resuming"
   for unit in "${SIGNERS[@]}"; do
     [[ ${PAUSED_BY_US[$unit]} == 1 ]] && as_signer "$unit" "$SIGNER_BIN" resume -signers "${SSET[$unit]}" >/dev/null
@@ -405,15 +473,7 @@ else
   [[ $RESUME == 1 && -n $failing ]] && echo "upgrade-bridge: not resuming: failing checks: $failing"
   echo "upgrade-bridge: done; the bridge and its signers are still paused. Read the checks:"
   echo "  curl -s http://$WEB/api/health"
-  if [[ $NEEDS_FENCE == 1 ]]; then
-    echo "then resume the signers, send the cutover fences, and resume the bridge only once the"
-    echo "Dogecoin fence has its confirmations (RUNBOOK.md, \"Cutover fence\"):"
-    resume_cmds | tail -n +2
-    fence_cmds
-    resume_cmds | head -1
-  else
-    echo "then resume the signers and the bridge:"
-    resume_cmds
-  fi
+  echo "then resume the signers and the bridge:"
+  resume_cmds
 fi
 echo "Backups (old binaries, logs, cosigners.json, contribution lists) are in $WORK."

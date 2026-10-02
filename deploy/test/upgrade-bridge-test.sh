@@ -20,9 +20,11 @@ expect() { if eval "$1"; then ok "$2"; else bad "$2"; fi; }
 # creates and adopts -log, and "anchors" prints the tips ($TIPS, or
 # $TIPS_<unit> for a signer whose nodes see another line), the log's
 # anchors ($ANCHORS_<unit>, default the tips), where they lead
-# ($WALKED_<unit>, default the tips) and, with NEEDS_FENCE, that the log
-# needs a cutover fence; with -set it records them in the log. "fence"
-# logs the chain it fences.
+# ($WALKED_<unit>, default the tips); with -set it records them in the log.
+# "status" reports a log unproven (history "") when NEEDS_FENCE is set or
+# it was adopted, and in a cutover (coins left) once "cutover" (or adopt)
+# started one, until FENCES_NEEDED (default 2) fences were sent. "bridge
+# ... -fence CHAIN" logs the fence with its whole command line.
 stub_bridge() { # path version
   cat >"$1" <<EOF
 #!/usr/bin/env bash
@@ -39,7 +41,19 @@ case \$cmd in
     tips=\${TIPS:-'{"dogecoin":"aa:1","dogecoinvm":"bb:1"}'}
     if [[ -n \$set ]]; then u=\$(unit_of "\$set"); v=TIPS_\${u//-/_}; tips=\${!v:-\$tips}; fi
     case \$step in
-      init|adopt) [[ -f \$log ]] && { echo "exists" >&2; exit 1; }; echo '{"actions":{}}' >"\$log" ;;
+      init) [[ -f \$log ]] && { echo "exists" >&2; exit 1; }; echo '{"actions":{}}' >"\$log" ;;
+      adopt) [[ -f \$log ]] && { echo "exists" >&2; exit 1; }; printf '{"actions":{}}\\nUNPROVEN\\nCUTOVER\\n' >"\$log" ;;
+      cutover|status)
+        [[ \$step == cutover ]] && echo CUTOVER >>"\$log"
+        unproven=\${NEEDS_FENCE:-}; grep -q UNPROVEN "\$log" && unproven=1
+        sent=\$(grep -c '^fence' "\$EVENTS" || true)
+        if [[ -n \$unproven ]] && grep -q CUTOVER "\$log" && (( sent < \${FENCES_NEEDED:-2} )); then
+          echo "{\\"history\\":\\"\\",\\"cutoverEpoch\\":1,\\"cutoverLeft\\":{\\"dogecoin\\":[\\"cc:0\\"]},\\"lineageTips\\":\$tips}"
+        elif [[ -n \$unproven ]] && ! grep -q CUTOVER "\$log"; then
+          echo "{\\"history\\":\\"\\",\\"cutoverLeft\\":{},\\"lineageTips\\":\$tips}"
+        else
+          echo "{\\"history\\":\\"fenced\\",\\"cutoverLeft\\":{},\\"lineageTips\\":\$tips}"
+        fi ;;
       check) [[ -f \$log ]] || { echo "no log" >&2; exit 1; }; grep -q QUARANTINE "\$log" && { echo "quarantined" >&2; exit 1; }; true ;;
       anchors)
         if [[ -z \$(arg -key-file "\$@") ]]; then echo "{\"tips\":\$tips}"; exit 0; fi
@@ -49,10 +63,9 @@ case \$cmd in
           v=ANCHORS_\${u//-/_}; anchors=\${!v:-\$anchors}
           v=WALKED_\${u//-/_}; walked=\${!v:-\$walked}
         fi
-        [[ -n \${NEEDS_FENCE:-} ]] && fence='{"dogecoin":true,"dogecoinvm":true}'
-        echo "{\"anchors\":\$anchors,\"tips\":\$tips,\"walked\":\$walked,\"needsFence\":\$fence}" ;;
+        echo "{\"anchors\":\$anchors,\"tips\":\$tips,\"walked\":\$walked}" ;;
     esac ;;
-  fence) echo "fence \$(arg -chain "\$@")" >>"\$EVENTS"; echo '{"fenceTxid":"ff"}' ;;
+  bridge) has -fence "\$@" && { echo "fence \$(arg -fence "\$@") \$*" >>"\$EVENTS"; echo '{"fenceTxid":"ff"}'; } ;;
 esac
 EOF
   chmod +x "$1"
@@ -281,19 +294,41 @@ code=$(ANCHORS_dogevm_signer_2='{"dogecoin":"a0:1","dogecoinvm":"bb:1"}' WALKED_
 expect '[[ $code != 0 && $(version) == old ]]' "leading elsewhere: fails, old binary back"
 expect 'grep -q "anchor leads to error" "$T/out"' "says where it leads"
 
-echo "17. logs that need a cutover fence: RESUME=1 resumes the signers, sends both fences, keeps the bridge paused (round 4, T5)"
+echo "17. unproven logs cut over: fences with the bridge unit's own flags, then RESUME=1 resumes (round 5, U1, U9)"
 setup
 code=$(NEEDS_FENCE=1 RESUME=1 run)
-expect '[[ $code == 0 ]]' "succeeds"
-expect '! signer_paused 1 && ! signer_paused 2 && ! signer_paused 3' "signers resumed (they sign only fences)"
-expect 'paused' "the bridge stays paused"
-expect 'grep -qx "fence dogecoin" "$EVENTS" && grep -qx "fence dogecoinvm" "$EVENTS"' "a fence on each chain"
-expect 'grep -q "Cutover fence" "$T/out"' "says what to wait for"
+expect '[[ $code == 0 ]]' "succeeds ($(tail -2 "$T/out" | tr '\n' ' '))"
+expect 'grep -q "starting a cutover" "$T/out"' "each unproven log starts a cutover"
+expect 'grep -q "^fence dogecoin .*-deposits $STATE/registry/deposits.json" "$EVENTS" && grep -q "^fence dogecoinvm " "$EVENTS"' "a fence on each chain, with the unit's -deposits"
+expect '[[ $(line_of "^fence dogecoin ") -lt $(line_of "^resume") ]]' "fences before any resume"
+expect '! paused && ! signer_paused 1' "resumed once the cutover is done"
+
+echo "18. a cutover that isn't done never resumes, even with RESUME=1"
 setup
-code=$(NEEDS_FENCE=1 run)
-expect '[[ $code == 0 ]] && paused && all_signers_paused' "without RESUME: everything stays paused"
-expect '! grep -q "^fence" "$EVENTS"' "no fence sent"
-expect 'grep -q "fence -signers .* -chain dogecoinvm" "$T/out"' "prints the fence commands"
+code=$(NEEDS_FENCE=1 FENCES_NEEDED=99 RESUME=1 run)
+expect '[[ $code == 0 ]]' "the upgrade itself stands"
+expect 'paused && all_signers_paused' "bridge and signers stay paused"
+expect 'grep -q "cutover isn.t finished" "$T/out" && grep -q "bridge -signers .* -fence dogecoinvm" "$T/out"' "says so, prints the fence commands"
+expect '! grep -q "^resume" "$EVENTS"' "nothing resumed"
+
+echo "19. an old log whose anchors walk to the tip is still cut over (Grok r5 #1)"
+setup
+code=$(NEEDS_FENCE=1 FENCES_NEEDED=99 run)
+expect 'grep -q "dogevm-signer-2: unproven log: starting a cutover" "$T/out"' "signer 2 cut over though its anchors agree"
+expect '! grep -q "dogevm-signer-2: anchors lead" "$T/out"' "not just compared"
+
+echo "20. an adopted log is in a cutover from the start"
+setup
+rm "$VARLIB/dogevm-signer-3/signing-log.json"
+code=$(ADOPT_LOGS=dogevm-signer-3 FENCES_NEEDED=99 run)
+expect '[[ $code == 0 ]] && grep -q "dogevm-signer-3: in cutover" "$T/out"' "signer 3 in a cutover"
+expect 'grep -q "dogevm-signer-1: anchors lead" "$T/out"' "proven signers just compared"
+expect 'grep -q "^fence dogecoin " "$EVENTS" && paused' "fences sent, bridge paused"
+
+echo "21. a signer in a cutover whose nodes see another tip stops it"
+setup
+code=$(NEEDS_FENCE=1 TIPS_dogevm_signer_2='{"dogecoin":"ff:0","dogecoinvm":"bb:1"}' run)
+expect '[[ $code != 0 && $(version) == old ]] && grep -q "don.t see the coordinator.s tips" "$T/out"' "fails, old binary back, says why"
 
 echo
 echo "$pass passed, $fail failed"
