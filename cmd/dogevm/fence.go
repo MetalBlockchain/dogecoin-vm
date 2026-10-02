@@ -141,7 +141,7 @@ func adoptedKey(tx *wire.MsgTx) (string, bool) {
 func (c *cosigner) adopt(s *pegState) ([]string, error) {
 	missing := c.unlogged(s)
 	if len(missing) == 0 {
-		if _, err := c.fillAnchors(s); err != nil {
+		if _, err := c.fillAnchors(s, false); err != nil {
 			return nil, err
 		}
 		return nil, c.log.write()
@@ -178,7 +178,7 @@ func (c *cosigner) adopt(s *pegState) ([]string, error) {
 	// The anchors too: a log rebuilt from the chains starts where the
 	// lines are now, not empty (anchorMoved refuses an empty one once a
 	// line has moved).
-	if _, err := c.fillAnchors(s); err != nil {
+	if _, err := c.fillAnchors(s, false); err != nil {
 		return nil, err
 	}
 	return missing, c.log.write()
@@ -208,8 +208,16 @@ func tips(s *pegState) (map[string]string, error) {
 // tip; it changes nothing on a failure. Run by adopt and by signer-log
 // anchors -set: every signer of a set must end up with the same anchors
 // (deploy/upgrade-bridge.sh compares them), or one could follow a line of
-// its own.
-func (c *cosigner) fillAnchors(s *pegState) (map[string]string, error) {
+// its own. An anchor set rather than reached by the signer's own
+// signatures needs a cutover fence first (cutover.go).
+//
+// With refence, an anchor that no longer leads to the tip (the line ended
+// at a spend that paid nothing back, or a reorganisation took the coin) is
+// set to the tip too, and so needs a fence: the fence spends every coin
+// the set holds, the old anchor included if it is still unspent, so
+// whatever this signer signed from it can't confirm. That, not moving the
+// anchor alone, is the recovery (RUNBOOK.md, "Anchor lineage").
+func (c *cosigner) fillAnchors(s *pegState, refence bool) (map[string]string, error) {
 	t, err := tips(s)
 	if err != nil {
 		return nil, err
@@ -227,10 +235,13 @@ func (c *cosigner) fillAnchors(s *pegState) (map[string]string, error) {
 		probe := wire.NewMsgTx(1)
 		probe.AddTxIn(wire.NewTxIn(&op, nil, nil))
 		if c.log.Anchors[chain] != "" {
-			if err := c.log.anchorMoved(chain, probe, nil, line); err != nil {
-				return nil, fmt.Errorf("%s: the log's anchor doesn't lead to the line's tip %v: %w", chain, op, err)
+			err := c.log.anchorMoved(chain, probe, nil, line)
+			if err == nil {
+				continue
 			}
-			continue
+			if !refence {
+				return nil, fmt.Errorf("%s: the log's anchor doesn't lead to the line's tip %v: %w (RUNBOOK.md, \"Anchor lineage\")", chain, op, err)
+			}
 		}
 		set[chain] = tip
 	}
@@ -399,6 +410,7 @@ func cmdSignerLog(args []string) error {
 	depositsPath := fs.String("deposits", "", "this signer's deposit address registry (default: deposits.json next to -signers)")
 	logPath := fs.String("log", "", "signing log (default: signing-log.json next to -key-file)")
 	setAnchors := fs.Bool("set", false, "anchors: set the log's empty anchors to the lines' tips")
+	refence := fs.Bool("refence", false, "anchors -set: also set an anchor that no longer leads to the tip, which then needs a cutover fence (RUNBOOK.md)")
 	s.register(fs)
 	b := bridgeFlags(fs)
 	if err := fs.Parse(args[1:]); err != nil {
@@ -414,6 +426,9 @@ func cmdSignerLog(args []string) error {
 	}
 	if err := s.resolve(); err != nil {
 		return err
+	}
+	if *refence && !(step == "anchors" && *setAnchors) {
+		return errors.New("-refence goes with anchors -set")
 	}
 	if step == "anchors" && *keyFile == "" {
 		// The coordinator's view: the lines' tips alone, to compare with
@@ -477,7 +492,7 @@ func cmdSignerLog(args []string) error {
 		}
 		var t map[string]string
 		if *setAnchors {
-			if t, err = c.fillAnchors(state); err != nil {
+			if t, err = c.fillAnchors(state, *refence); err != nil {
 				return err
 			}
 			if err := log.write(); err != nil {

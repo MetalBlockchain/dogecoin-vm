@@ -442,3 +442,31 @@ func TestWalkedTips(t *testing.T) {
 	s.pegLine = newLineage([]chainTx{{tx: seed, confirmations: 20}, {tx: p1, confirmations: 10}, {tx: dead, confirmations: 5}}, peg, 6)
 	require.Contains(walkedTips(log, s)[chainDogecoin], "error: the line ended")
 }
+
+// TestRefenceRecoversABrokenAnchor (round 4): a log whose anchor no longer
+// leads to the tip (here the line ended at a spend that paid nothing back)
+// refuses anchors -set; with -refence its anchor moves to the tip and it
+// needs a cutover fence before it signs anything else, so whatever it
+// signed from the old anchor can't confirm.
+func TestRefenceRecoversABrokenAnchor(t *testing.T) {
+	require := require.New(t)
+	peg, other := []byte{0xa9, 0x14, 0xaa}, []byte{0x51}
+	at := func(tx *wire.MsgTx, i uint32) wire.OutPoint { return wire.OutPoint{Hash: tx.TxHash(), Index: i} }
+	seed := lineTx(nil, 1, peg)
+	p1 := lineTx(&wire.OutPoint{Hash: seed.TxHash()}, 0, other, peg)
+	dead := lineTx(&wire.OutPoint{Hash: p1.TxHash(), Index: 1}, 0, other)
+	later := lineTx(nil, 3, peg)
+	s := &pegState{pegLine: newLineage([]chainTx{{tx: seed, confirmations: 20}, {tx: p1, confirmations: 15},
+		{tx: dead, confirmations: 12}, {tx: later, confirmations: 10}}, peg, 6)}
+	c := &cosigner{log: &signingLog{path: filepath.Join(t.TempDir(), "signing-log.json"), Actions: map[string]*loggedAction{},
+		Anchors: map[string]string{chainDogecoin: at(p1, 1).String()}}}
+	_, err := c.fillAnchors(s, false)
+	require.ErrorIs(err, errLineEnded)
+	require.Equal(at(p1, 1).String(), c.log.Anchors[chainDogecoin], "unchanged")
+	require.Empty(c.log.Unfenced)
+
+	_, err = c.fillAnchors(s, true)
+	require.NoError(err)
+	require.Equal(at(later, 0).String(), c.log.Anchors[chainDogecoin])
+	require.True(c.log.Unfenced[chainDogecoin], "a fence first")
+}

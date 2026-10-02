@@ -60,7 +60,7 @@ func setAnchors(t *testing.T, c *cosigner) {
 	t.Helper()
 	state, err := c.b.load()
 	require.NoError(t, err)
-	_, err = c.fillAnchors(state)
+	_, err = c.fillAnchors(state, false)
 	require.NoError(t, err)
 	// The harness's set starts already cut over: its signers never signed
 	// without a log (the fence tests in round4_test.go start unfenced).
