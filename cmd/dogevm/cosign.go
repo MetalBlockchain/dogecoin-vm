@@ -782,11 +782,15 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		if isCancelled(s, op) {
 			return nil, nil, 0, fmt.Errorf("deposit %v is already cancelled", op)
 		}
-		// A release this signer signed must be dead on the chain: never
-		// cancel one that could still confirm (it would conflict on the
-		// anchor anyway, but the refund that follows would not).
-		if !c.releasesDead(ev, op) {
-			return nil, nil, 0, fmt.Errorf("this signer signed a release of deposit %v that could still confirm, so it doesn't cancel it", op)
+		// A release this signer signed must be dead on the chain, or spend
+		// the anchor this cancellation spends: then at most one of the two
+		// confirms, and the refund that follows still waits for this
+		// cancellation to be in a block (and the release dead).
+		if s.reserveAnchor == nil {
+			return nil, nil, 0, errors.New("this signer sees no reserve anchor")
+		}
+		if !c.releasesDeadOrConflicting(ev, op, s.reserveAnchor.outPoint) {
+			return nil, nil, 0, fmt.Errorf("this signer signed a release of deposit %v that could still confirm beside a cancellation, so it doesn't cancel it", op)
 		}
 		if _, creditable := findDeposit(s.deposits, op); creditable {
 			if !c.forceApproved(op) {
@@ -802,19 +806,23 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		if err := spendsAnchor(tx, s.reserveAnchor); err != nil {
 			return nil, nil, 0, err
 		}
-		inputs, _, err := pick([]utxo{*s.reserveAnchor})
+		inputs, _, err := pick(s.reserveUTXOs)
 		if err != nil {
 			return nil, nil, 0, err
 		}
-		if want, err = b.buildCancel(inputs[0], op); err != nil {
+		if want, err = b.buildCancel(inputs, op); err != nil {
 			return nil, nil, 0, err
 		}
-		redeems = [][]byte{b.signers.redeemScript}
+		for range inputs {
+			redeems = append(redeems, b.signers.redeemScript)
+		}
 		// The fee leaves the reserve and circulates: it needs the surplus.
 		if err := c.feeRoom(b.audit(s), b.vmFee, unseen); err != nil {
 			return nil, nil, 0, err
 		}
-		unspent[s.reserveAnchor.outPoint] = true
+		for _, u := range inputs {
+			unspent[u.outPoint] = true
+		}
 
 	case actionPayout, actionRefund:
 		if req.Chain != chainDogecoin {

@@ -160,7 +160,9 @@ func TestFeePromisesFitTheSurplusAcrossQuorums(t *testing.T) {
 	cancel := func(op wire.OutPoint) signRequest {
 		s, err := h.b.load()
 		require.NoError(err)
-		tx, err := h.b.buildCancel(*s.reserveAnchor, op)
+		inputs, err := s.cancelInputs(h.b.vmFee)
+		require.NoError(err)
+		tx, err := h.b.buildCancel(inputs, op)
 		require.NoError(err)
 		return signRequest{Chain: chainDogecoinVM, Action: action{Kind: actionCancel, Deposit: op.String()}, Tx: encodeTx(tx)}
 	}

@@ -80,3 +80,85 @@ func TestLogDoesntFollowARestart(t *testing.T) {
 	err = log.anchorMoved(chainDogecoin, probe, nil, line)
 	require.ErrorIs(err, errLineEnded)
 }
+
+// TestCancelUsesMoreReserveWhenTheAnchorIsTiny (round 4, T8): a release can
+// leave the reserve's anchor with little more than pegDust. A cancellation
+// then spends the anchor first and as much more of the reserve as it needs
+// to pay its fee and leave pegDust of change; an input it doesn't need is
+// refused. Before, it spent the anchor alone and failed.
+func TestCancelUsesMoreReserveWhenTheAnchorIsTiny(t *testing.T) {
+	require := require.New(t)
+	b := &bridge{vmFee: doge / 10}
+	set, err := newSignerSet(2, 3)
+	require.NoError(err)
+	b.signers = set
+	script := b.signers.pkScript()
+	tiny := utxo{outPoint: wire.OutPoint{Hash: chainhash.Hash{1}}, value: pegDust, pkScript: script, confirmations: 3}
+	big := utxo{outPoint: wire.OutPoint{Hash: chainhash.Hash{2}}, value: 100 * doge, pkScript: script, confirmations: 5}
+	other := utxo{outPoint: wire.OutPoint{Hash: chainhash.Hash{3}}, value: 50 * doge, pkScript: script, confirmations: 4}
+	s := &pegState{reserveAnchor: &tiny, reserveUTXOs: []utxo{tiny, big, other}}
+	op := wire.OutPoint{Hash: chainhash.Hash{9}}
+
+	inputs, err := s.cancelInputs(b.vmFee)
+	require.NoError(err)
+	require.Equal([]utxo{tiny, big}, inputs, "the anchor first, then the largest other coin")
+	tx, err := b.buildCancel(inputs, op)
+	require.NoError(err)
+	require.Equal(tiny.outPoint, tx.TxIn[0].PreviousOutPoint)
+	require.Equal(tiny.value+big.value-b.vmFee, tx.TxOut[0].Value)
+	require.True(tx.TxOut[0].Value >= pegDust)
+
+	_, err = b.buildCancel([]utxo{tiny, big, other}, op)
+	require.ErrorContains(err, "does not need")
+	_, err = b.buildCancel([]utxo{tiny}, op)
+	require.ErrorContains(err, "needs")
+}
+
+// TestSignerOfAWithheldReleaseMayCancel (Grok r4 #2, T11): A and B sign a
+// release and B keeps it back. A, which signed it, may still sign the
+// cancellation with C: both spend the reserve's anchor, so at most one of
+// them confirms. (Before, A refused, and with B unwilling the honest
+// signers couldn't cancel at all.) The refund still waits until the
+// cancellation is in a block and A's release is dead.
+func TestSignerOfAWithheldReleaseMayCancel(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	alice, back := h.user(1), h.user(9)
+	dep := h.deposit(5*doge, &alice, 6)
+	op := wire.OutPoint{Hash: dep.TxHash()}
+	s, err := h.b.load()
+	require.NoError(err)
+	d, ok := findDeposit(s.deposits, op)
+	require.True(ok)
+	inputs, total, err := s.releaseInputs(d.value)
+	require.NoError(err)
+	release := h.b.buildRelease(inputs, total, d)
+	redeems := make([][]byte, len(inputs))
+	for i := range redeems {
+		redeems[i] = h.b.signers.redeemScript
+	}
+	kept := h.signWith(&proposal{Chain: chainDogecoinVM, tx: release, redeems: redeems,
+		Action: action{Kind: actionRelease, Deposit: op.String()}, Register: []destination{alice}}, 0, 1)
+
+	h.approveRefunds(op, back, " force")
+	cancelInputs, err := s.cancelInputs(h.b.vmFee)
+	require.NoError(err)
+	cancelTx, err := h.b.buildCancel(cancelInputs, op)
+	require.NoError(err)
+	cancelRedeems := make([][]byte, len(cancelInputs))
+	for i := range cancelRedeems {
+		cancelRedeems[i] = h.b.signers.redeemScript
+	}
+	cancelSigs := h.signWith(&proposal{Chain: chainDogecoinVM, tx: cancelTx, redeems: cancelRedeems,
+		Action: action{Kind: actionCancel, Deposit: op.String()}}, 0, 2) // A and C
+	require.NoError(h.b.signers.assemble(cancelTx, cancelRedeems, cancelSigs))
+	_, err = h.vm.send(cancelTx)
+	require.NoError(err)
+	h.vm.mine()
+
+	require.NoError(h.b.signers.assemble(release, redeems, kept))
+	_, err = h.vm.send(release)
+	require.ErrorContains(err, "missing or spent", "the kept-back release can't confirm after the cancellation")
+	_, _, _, err = h.signers[0].check(h.refundRequest(op, d.value, back))
+	require.NoError(err, "A's release is dead: A refunds")
+}

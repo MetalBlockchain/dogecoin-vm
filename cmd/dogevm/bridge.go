@@ -1042,19 +1042,47 @@ func isCancelled(s *pegState, op wire.OutPoint) bool {
 }
 
 // buildCancel is the unsigned DogecoinVM transaction cancelling deposit op:
-// it spends the reserve's anchor alone, back to the reserve less the fee,
-// tagged with op. Any release of op signed and kept back spends that same
-// anchor (or an earlier one, already spent), so once this is in a block
-// (final on DogecoinVM) no release of op can ever confirm.
-func (b *bridge) buildCancel(anchor utxo, op wire.OutPoint) (*wire.MsgTx, error) {
-	if anchor.value <= b.vmFee {
-		return nil, errors.New("the reserve's anchor is too small to pay a cancellation's fee")
+// it spends inputs, the reserve's anchor first, back to the reserve less
+// the fee, tagged with op. Any release of op signed and kept back spends
+// that same anchor (or an earlier one, already spent), so once this is in a
+// block (final on DogecoinVM) no release of op can ever confirm. More
+// reserve coins follow the anchor only when it can't pay the fee and leave
+// pegDust of change (the next anchor) on its own, and each must be needed
+// (cancelInputs picks them); signers rebuild it, so it depends only on its
+// arguments.
+func (b *bridge) buildCancel(inputs []utxo, op wire.OutPoint) (*wire.MsgTx, error) {
+	need := b.vmFee + pegDust
+	var total int64
+	for _, u := range inputs {
+		total += u.value
+	}
+	if len(inputs) == 0 || total < need {
+		return nil, fmt.Errorf("the reserve coins proposed hold %s DOGE; a cancellation needs %s (its fee and the reserve's change)",
+			formatDoge(total), formatDoge(need))
+	}
+	for i := 1; i < len(inputs); i++ {
+		if total-inputs[i].value >= need {
+			return nil, fmt.Errorf("spends %v, which the cancellation does not need", inputs[i].outPoint)
+		}
 	}
 	tx := wire.NewMsgTx(wire.TxVersion)
-	tx.AddTxIn(wire.NewTxIn(&anchor.outPoint, nil, nil))
-	tx.AddTxOut(wire.NewTxOut(anchor.value-b.vmFee, b.signers.pkScript()))
+	for _, u := range inputs {
+		tx.AddTxIn(wire.NewTxIn(&u.outPoint, nil, nil))
+	}
+	tx.AddTxOut(wire.NewTxOut(total-b.vmFee, b.signers.pkScript()))
 	tx.AddTxOut(nullData(encodeCancel(op)))
 	return tx, nil
+}
+
+// cancelInputs is what a cancellation spends: the reserve's anchor, and
+// more of the reserve, largest first, only if the anchor alone can't pay
+// the fee and leave pegDust of change.
+func (s *pegState) cancelInputs(fee int64) ([]utxo, error) {
+	if s.reserveAnchor == nil || !containsOutPoint(s.reserveUTXOs, s.reserveAnchor.outPoint) {
+		return nil, errors.New("waiting for the reserve's anchor to be free")
+	}
+	inputs, _, err := anchoredSelection(*s.reserveAnchor, s.reserveUTXOs, fee+pegDust)
+	return inputs, err
 }
 
 // cancel proposes and sends the DogecoinVM cancellation of deposit op.
@@ -1062,14 +1090,19 @@ func (b *bridge) cancel(s *pegState, op wire.OutPoint) (chainhash.Hash, error) {
 	if s.vmPending {
 		return chainhash.Hash{}, errors.New("a DogecoinVM transaction of the peg is pending; try again in a moment")
 	}
-	if s.reserveAnchor == nil {
-		return chainhash.Hash{}, errors.New("the reserve has no anchor")
-	}
-	tx, err := b.buildCancel(*s.reserveAnchor, op)
+	inputs, err := s.cancelInputs(b.vmFee)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
-	p := &proposal{Chain: chainDogecoinVM, tx: tx, redeems: [][]byte{b.signers.redeemScript},
+	tx, err := b.buildCancel(inputs, op)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+	redeems := make([][]byte, len(inputs))
+	for i := range redeems {
+		redeems[i] = b.signers.redeemScript
+	}
+	p := &proposal{Chain: chainDogecoinVM, tx: tx, redeems: redeems,
 		Action: action{Kind: actionCancel, Deposit: op.String()}}
 	if err := b.authorize(p); err != nil {
 		return chainhash.Hash{}, err

@@ -131,3 +131,24 @@ func (c *cosigner) releasesDead(e *chainEvidence, op wire.OutPoint) bool {
 	}
 	return true
 }
+
+// releasesDeadOrConflicting reports whether every release of deposit op
+// this signer signed is dead (releasesDead's test) or spends anchor, the
+// coin a cancellation of op spends first: none is in a block, and none
+// could confirm beside that cancellation.
+func (c *cosigner) releasesDeadOrConflicting(e *chainEvidence, op, anchor wire.OutPoint) bool {
+	a := c.log.Actions[actionRelease+":"+op.String()]
+	if a == nil {
+		return true
+	}
+	for _, t := range a.Txs {
+		if e.confirmed(chainDogecoinVM, t) {
+			return false
+		}
+		if e.spentElsewhere(chainDogecoinVM, t) || contains(t.Inputs, anchor.String()) {
+			continue
+		}
+		return false
+	}
+	return true
+}
