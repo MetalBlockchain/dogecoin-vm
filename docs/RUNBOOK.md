@@ -177,7 +177,7 @@ unconfirmed. A new set's peg address holds nothing until something is paid
 to it, so it needs one contribution, with full confirmations, before its
 first payout.
 
-Fees paid from the surplus (a cancellation's) need room: each signer signs
+Fees paid from the surplus (a cancellation's, a cutover fence's) need room: each signer signs
 one only if it, with the fees that signer already signed for and that could
 still confirm, is at most half the surplus (2 of 3 signers). Two pairs of
 signers that share a dishonest one then can't promise more than the
@@ -223,15 +223,21 @@ running. It:
    and checks they match;
 6. checks each signer's signing log;
 7. sets each signer's empty anchors to the tips of the anchor lines as its
-   own nodes see them, and checks every signer's anchors are the tips the
-   coordinator sees (see "Anchor lineage");
+   own nodes see them, and checks every signer's anchors lead, along
+   confirmed spends, to the tips the coordinator sees (see "Anchor
+   lineage"). A log whose anchors were set rather than signed needs a
+   cutover fence on each chain before it signs anything else (see
+   "Cutover fence");
 8. fills in each signer's public key in `cosigners.json` from its
    `card.json` if missing, checking every key is in the signer set;
 9. starts the signers (still paused), then the bridge, and checks the peg
    is solvent.
 
 It leaves the bridge and the signers paused unless `RESUME=1`, it did the
-pausing, and every check in `/api/health` but the pause passes; otherwise
+pausing, and every check in `/api/health` but the pause passes. If a log
+needs a cutover fence, `RESUME=1` resumes only the signers and sends both
+fences; resume the bridge once the Dogecoin fence has its confirmations.
+Otherwise
 read `/api/health` and resume the signers and the bridge with the commands
 it prints. On a failure it puts the previous binaries, `cosigners.json` and
 contribution lists back and leaves everything paused. It never puts an older
@@ -248,20 +254,26 @@ backup. The only exceptions are named explicitly:
   separate signers existed, so every signature it made is on the chains.
   It rebuilds the log from them, anchors included.
 
-The three DogecoinVM signers set up in September 2026 signed only under the
-old combined bridge, so the first upgrade adopts them:
+The three DogecoinVM signers set up in September 2026 signed without logs,
+so the first upgrade adopts them, and then fences both chains (see "Cutover
+fence"): adoption sees only what reached a chain, not a signature kept back.
 
-    ADOPT_LOGS="dogevm-signer-1 dogevm-signer-2 dogevm-signer-3" deploy/upgrade-bridge.sh COMMIT
+    ADOPT_LOGS="dogevm-signer-1 dogevm-signer-2 dogevm-signer-3" RESUME=1 deploy/upgrade-bridge.sh COMMIT
 
 After an upgrade to this version, move the web server's files out of the
 secrets directory once, then sandbox the services:
 
-    deploy/move-web-state.sh     # the registry and finality samples, to /var/lib/metal-main/web
+    deploy/move-web-state.sh     # the registry, finality samples and coin index, to /var/lib/metal-main/web
     deploy/sandbox-units.sh
 
-The web server then writes only that directory and its coin index, never
-the secrets directory (the pause file, the signer set, `cosigners.json`,
-`contributions.txt`).
+The web server then writes only that directory, never the secrets
+directory (the pause file, the signer set, `cosigners.json`,
+`contributions.txt`). `move-web-state.sh` stops the bridge, web wallet and
+monitor and checks they are down before it moves anything, never
+overwrites a file already at a destination (a half-done earlier run: sort
+out which copy is newer by hand), and on a failure moves back exactly what
+it moved. `deploy/sandbox-units.sh remove` takes the sandbox away again,
+and fails unless the bridge answers as it did before.
 
 **Never run `deploy/provision.sh` on the mainnet host.** It is the testnet
 provisioner: it rewrites the bridge to hold every key in one process and
@@ -274,20 +286,24 @@ explorer); if not, contribute first, or payouts wait.
 
 ## Anchor lineage
 
-Every payout, refund and release spends an **anchor** first, so any two
-transactions the signers sign on one chain conflict, or one descends from
-the other: a payout signed and kept back can't confirm beside a second one.
+Every payout, refund, release, cancellation and fence spends an **anchor**
+first, so any two transactions the signers sign on one chain conflict, or
+one descends from the other: a payout signed and kept back can't confirm
+beside a second one.
 
 The anchor is the tip of a **line** of coins, one per chain: at the peg
 address on Dogecoin, at the reserve on DogecoinVM. The line starts at its
-**root**, the oldest output ever paid to that address with full
-confirmations (on Dogecoin a contribution, see "Operating capital"; on
-DogecoinVM the reserve's first coin), and moves only along confirmed spends:
-each transaction in a block that spends the line's coin moves it to that
+**root**: of the outputs ever paid to that address with full
+confirmations, the oldest one the signers have spent, or, before they have
+spent any, the oldest of all (on Dogecoin a contribution, see "Operating
+capital"; on DogecoinVM the reserve's first coin). Preferring a spent coin
+means a payment shown to a node late, in an old block, can't take the line
+over: nobody has spent it. The line moves only along confirmed spends: each
+transaction in a block that spends the line's coin moves it to that
 transaction's last output to the same address, its change. Coins anyone
 else pays there (deposits, contributions, peg-outs) never become the anchor
 unless one is the root; they are spent beside it. Every signer reading the
-same chain finds the same line.
+same chain finds the same line. BTCVM and LTCVM use the same rule.
 
 Each signer's log keeps the anchor it last signed with, and moves on only
 by following the line forward from it. A log with **no anchor** signs
@@ -298,25 +314,86 @@ nodes:
 
     dv signer-log anchors -set -signers SET -key-file KEY -log LOG
 
-and check the `anchors` it prints are the `tips` the coordinator sees
-(`dv signer-log anchors -signers SET` with the bridge's settings) and the
-other signers': `deploy/upgrade-bridge.sh` does this for every signer. A
-new signer set does it once its first contribution has full confirmations.
+and check the `walked` tips it prints (where its anchors lead) are the
+`tips` the coordinator sees (`dv signer-log anchors -signers SET` with the
+bridge's settings) and the other signers': `deploy/upgrade-bridge.sh` does
+this for every signer. An anchor set this way, not reached by the signer's
+own signatures, needs a cutover fence before the signer signs anything
+else (`needsFence` in the output; see "Cutover fence"). A new signer set
+does this once its first contribution has full confirmations, then fences.
 
 If the trail breaks, the signer refuses with "anchor ... is gone, but no
-confirmed transaction it knows spends it". That happens when:
+confirmed transaction it knows spends it", or "the line ended". That
+happens when:
 
 - **A reorganisation removed the transaction that created or spent the
   anchor.** Wait: when the chain settles, the transactions are usually mined
   again and the trail is whole.
 - **The signer's wallet is missing history** (restored, or a new node).
   Rescan the signer's Dogecoin Core wallet (`rescan`), then retry.
+- **A confirmed transaction spent the anchor and paid nothing back** (only
+  history from before every transaction kept change). The line, read from
+  history, starts again at a later coin; a signer's log never follows that
+  by itself.
 
 A signer whose `anchors -set` reports a tip different from the others' has
 a wallet that sees a different history: rescan it, and don't let it sign
 until the tips agree.
 
-Never hand-edit a signer's `anchors` entry, unless you've confirmed on a
-public explorer that the old anchor was spent by a signers' transaction in
-a block deeper than any plausible reorganisation, and every transaction any
-signer signed with it is that one or conflicts with it.
+If the trail stays broken, the recovery is a fence, never moving the anchor
+alone: with the signer stopped,
+
+    dv signer-log anchors -set -refence -signers SET -key-file KEY -log LOG
+
+sets the broken anchor to the tip and marks the log as needing a fence; then
+fence that chain (see "Cutover fence"). The fence spends every coin the set
+holds there, the old anchor too if it is still unspent, so nothing this
+signer signed from it can confirm afterwards. Never hand-edit a signer's
+`anchors` entry.
+
+## Cutover fence
+
+A signer whose log was rebuilt (`ADOPT_LOGS`, `signer-log adopt`) or whose
+anchors were set (`anchors -set` on an empty or broken anchor) knows only
+what reached the chains. A transaction it signed before and someone kept
+back is in no log, and could spend any coin it could then: the live
+DogecoinVM signers signed for months without logs or an anchor line. So
+such a log signs nothing on a chain but a **fence** there first:
+
+    dv fence -signers SET -chain dogecoin      # with the bridge's settings
+    dv fence -signers SET -chain dogecoinvm
+
+A fence spends the line's tip and then every other confirmed coin the set
+holds on that chain (on Dogecoin the peg address and every personal deposit
+address; on DogecoinVM the reserve), all of it back to the set's own
+address less a fee, tagged `DVMZ`. Each signer signs it only if it spends
+exactly the coins its own view holds: a coin left out could carry a
+kept-back signature. Once a fence from the log's anchor on is in a block
+(on Dogecoin with the full deposit confirmations, so no reorganisation
+undoes it), and no coin from an older block is left unspent, every
+signature made before is dead, and the signer signs normally again; it
+checks this itself, the next time it is asked. Until then it refuses
+everything else with "signs only a fence".
+
+- Fence while nothing of the set is pending on the chain: a fence refuses
+  while a payout, refund or release is unconfirmed.
+- Its fee (one `-doge-fee` or VM fee per started 10 kB) comes from the
+  surplus, under the half-surplus rule: contribute first if a signer
+  refuses for room.
+- A set holding more than 250 coins on a chain fences in rounds: send it
+  again until the signers accept other proposals.
+- Deposits aren't affected: what is owed is read from each deposit's own
+  transaction, not from its coin staying where it was paid.
+- If a signer is quarantined during the cutover (the chains show a
+  transaction it signed that its new log lacks), someone sent a kept-back
+  signature: stop, and find out what it was, before anything else.
+- Run the fences right after the upgrade, before resuming the bridge
+  (`RESUME=1` does both). While the bridge is paused, nothing else is
+  proposed.
+
+Cancellations spend the reserve's anchor first and, when it alone can't pay
+the fee and leave change, the largest other reserve coins it needs. A
+signer that signed a release of a deposit may sign its cancellation when
+that release spends the same anchor (the two conflict); the refund that
+follows still waits until the cancellation is in a block and every release
+the signer signed is dead.
