@@ -222,22 +222,25 @@ running. It:
 5. copies the coordinator's `contributions.txt` beside every signer's set,
    and checks they match;
 6. checks each signer's signing log;
-7. sets each signer's empty anchors to the tips of the anchor lines as its
-   own nodes see them, and checks every signer's anchors lead, along
-   confirmed spends, to the tips the coordinator sees (see "Anchor
-   lineage"). A log whose anchors were set rather than signed needs a
-   cutover fence on each chain before it signs anything else (see
-   "Cutover fence");
+7. starts a cutover (see "Cutover") for every signer whose log is
+   unproven: adopted, or written by software from before the cutover rule,
+   whatever its anchors; and checks its nodes see the coordinator's tips.
+   A proven log (a new key's, or one that has been through a cutover)
+   gets its empty anchors set, and must lead, along confirmed spends, to
+   those tips (see "Anchor lineage");
 8. fills in each signer's public key in `cosigners.json` from its
    `card.json` if missing, checking every key is in the signer set;
 9. starts the signers (still paused), then the bridge, and checks the peg
    is solvent.
 
-It leaves the bridge and the signers paused unless `RESUME=1`, it did the
-pausing, and every check in `/api/health` but the pause passes. If a log
-needs a cutover fence, `RESUME=1` resumes only the signers and sends both
-fences; resume the bridge once the Dogecoin fence has its confirmations.
-Otherwise
+If a signer is in a cutover, it then sends a fence on each chain, with
+the bridge unit's own command line plus `-fence` (the signers sign fences
+while paused, and nothing else), and with `FENCE_WAIT=MINUTES` keeps
+proposing until every signer's cutover is done. It never resumes while a
+cutover is unfinished; it prints the commands to repeat the fences and to
+read each signer's `signer-log status`. It leaves the bridge and the
+signers paused unless `RESUME=1`, it did the pausing, and every check in
+`/api/health` but the pause passes. Otherwise
 read `/api/health` and resume the signers and the bridge with the commands
 it prints. On a failure it puts the previous binaries, `cosigners.json` and
 contribution lists back and leaves everything paused. It never puts an older
@@ -317,10 +320,9 @@ nodes:
 and check the `walked` tips it prints (where its anchors lead) are the
 `tips` the coordinator sees (`dv signer-log anchors -signers SET` with the
 bridge's settings) and the other signers': `deploy/upgrade-bridge.sh` does
-this for every signer. An anchor set this way, not reached by the signer's
-own signatures, needs a cutover fence before the signer signs anything
-else (`needsFence` in the output; see "Cutover fence"). A new signer set
-does this once its first contribution has full confirmations, then fences.
+this for every proven signer. A new signer set does this once its first
+contribution has full confirmations. A log that is unproven goes through a
+cutover instead (see "Cutover"), which ends with its anchors at the tips.
 
 If the trail breaks, the signer refuses with "anchor ... is gone, but no
 confirmed transaction it knows spends it", or "the line ended". That
@@ -340,56 +342,93 @@ A signer whose `anchors -set` reports a tip different from the others' has
 a wallet that sees a different history: rescan it, and don't let it sign
 until the tips agree.
 
-If the trail stays broken, the recovery is a fence, never moving the anchor
-alone: with the signer stopped,
+If the trail stays broken, the recovery is a cutover, never moving the
+anchor alone: with the signer stopped,
 
-    dv signer-log anchors -set -refence -signers SET -key-file KEY -log LOG
+    dv signer-log cutover -signers SET -key-file KEY -log LOG
 
-sets the broken anchor to the tip and marks the log as needing a fence; then
-fence that chain (see "Cutover fence"). The fence spends every coin the set
-holds there, the old anchor too if it is still unspent, so nothing this
-signer signed from it can confirm afterwards. Never hand-edit a signer's
-`anchors` entry.
+starts a new one (see "Cutover"). Its fences spend every coin the set holds,
+the old anchor too if it is still unspent, so nothing this signer signed
+from it can confirm afterwards; when it is done, the anchor is the tip.
+Never hand-edit a signer's `anchors` entry.
 
-## Cutover fence
+## Cutover
 
-A signer whose log was rebuilt (`ADOPT_LOGS`, `signer-log adopt`) or whose
-anchors were set (`anchors -set` on an empty or broken anchor) knows only
-what reached the chains. A transaction it signed before and someone kept
-back is in no log, and could spend any coin it could then: the live
-DogecoinVM signers signed for months without logs or an anchor line. So
-such a log signs nothing on a chain but a **fence** there first:
+A signature already given stays valid as long as every coin its
+transaction spends is unspent. A log rebuilt from the chains
+(`ADOPT_LOGS`, `signer-log adopt`) holds only what reached them; a log from
+software before this rule may hold signatures that spend any coin the set
+had (the live DogecoinVM signers signed for months without logs or an
+anchor line). Matching anchors don't kill such a signature. So such a log
+is **unproven** (`history` empty in `signer-log status`) and goes through a
+**cutover** before it signs anything else, on either chain: an action has
+a transaction on each chain (a release on DogecoinVM, a refund on
+Dogecoin), and a new one on a finished chain could confirm beside an old
+one kept back on the other.
 
-    dv fence -signers SET -chain dogecoin      # with the bridge's settings
-    dv fence -signers SET -chain dogecoinvm
+The cutover records, per chain, every coin a signature given before could
+spend: every output to the set's addresses (the peg address and every
+registered personal deposit address on Dogecoin, the reserve on
+DogecoinVM) in any transaction its wallet lists, in a block, in the
+mempool, or conflicting with one in a block; and every input of every
+transaction in its log. It leaves out what is already spent deep. A coin is
+**cleared** when a transaction spends it with full confirmations
+(DogecoinVM: in a block), or when its transaction is conflicted by one that
+deep. The cutover is done when every recorded coin on both chains is
+cleared: then the log's `history` is `fenced` and its anchors are the
+lines' tips. Until then it refuses everything but fences with "in a cutover
+... signs only fences".
 
-A fence spends the line's tip and then every other confirmed coin the set
-holds on that chain (on Dogecoin the peg address and every personal deposit
-address; on DogecoinVM the reserve), all of it back to the set's own
-address less a fee, tagged `DVMZ`. Each signer signs it only if it spends
-exactly the coins its own view holds: a coin left out could carry a
-kept-back signature. Once a fence from the log's anchor on is in a block
-(on Dogecoin with the full deposit confirmations, so no reorganisation
-undoes it), and no coin from an older block is left unspent, every
-signature made before is dead, and the signer signs normally again; it
-checks this itself, the next time it is asked. Until then it refuses
-everything else with "signs only a fence".
+It starts by itself: adopt starts one, and an unproven log starts one on its
+first status or sign request. `signer-log cutover` starts a new one by hand
+(a new epoch; the coins of an unfinished one stay recorded).
+`signer-log status` shows `history`, `cutoverEpoch`, `cutoverLeft` (coins
+not yet cleared, per chain), `cutoverPending` (coins nothing in a block
+spends yet), `anchors` and `lineageTips`.
 
-- Fence while nothing of the set is pending on the chain: a fence refuses
-  while a payout, refund or release is unconfirmed.
-- Its fee (one `-doge-fee` or VM fee per started 10 kB) comes from the
-  surplus, under the half-surplus rule: contribute first if a signer
-  refuses for room.
-- A set holding more than 250 coins on a chain fences in rounds: send it
-  again until the signers accept other proposals.
-- Deposits aren't affected: what is owed is read from each deposit's own
-  transaction, not from its coin staying where it was paid.
-- If a signer is quarantined during the cutover (the chains show a
-  transaction it signed that its new log lacks), someone sent a kept-back
-  signature: stop, and find out what it was, before anything else.
-- Run the fences right after the upgrade, before resuming the bridge
-  (`RESUME=1` does both). While the bridge is paused, nothing else is
-  proposed.
+The coordinator spends the recorded coins with **fences**:
+
+    dv bridge <the bridge unit's flags> -fence dogecoin
+    dv bridge <the bridge unit's flags> -fence dogecoinvm
+
+(`deploy/upgrade-bridge.sh` runs these with the unit's own command line.) A
+fence spends the line's tip, then every confirmed recorded coin nothing in
+a block spends, oldest first (at most 100 on Dogecoin, 400 on DogecoinVM),
+all to one output at the set's own address, less a fee, tagged `DVMZ`. The
+coordinator asks the signers' status for the recorded coins and builds from
+the list at least the required number of them share; each signer signs only
+the fence its own view and its own record call for. Fences:
+
+- are signed while paused (they pay no one), and only inside a cutover:
+  never once it is done, however often asked;
+- wait while anything else of the set is pending on that chain, while a
+  fence of this cutover is pending, and while one is in a block short of
+  full confirmations: a set with more coins than one fence holds fences in
+  turn, about 20 minutes apart on Dogecoin;
+- pay one `-doge-fee` (or VM fee) per started 10 kB, from the surplus,
+  under the half-surplus rule: contribute first if a signer refuses for
+  room;
+- are replaced on Dogecoin when one has waited `-fence-bump-after` (default
+  30 minutes): the same coins, one fence fee more, at most 4 times;
+- count only if they spend a recorded coin: a stranger's payment tagged
+  `DVMZ` neither holds the next fence up nor clears anything.
+
+Deposits aren't affected: what is owed is read from each deposit's own
+transaction, not from its coin staying where it was paid.
+
+A recorded coin whose transaction a reorganisation took out of its block
+can't be fenced until it is mined again; normally that takes minutes. If it
+never comes back, an operator may waive it, a day after the cutover began
+and only while its transaction is in no block and not in the node's
+mempool:
+
+    dv signer-log cutover -waive TXID:VOUT -chain dogecoin -signers SET -key-file KEY -log LOG
+
+(recorded in the log's `cutoverWaived`).
+
+If a signer is quarantined during the cutover (the chains show a
+transaction it signed that its new log lacks), someone sent a kept-back
+signature: stop, and find out what it was, before anything else.
 
 Cancellations spend the reserve's anchor first and, when it alone can't pay
 the fee and leave change, the largest other reserve coins it needs. A
