@@ -185,6 +185,11 @@ func (c *cosigner) checkFence(s *pegState, chain string) (*wire.MsgTx, [][]byte,
 	if !c.log.Unfenced[chain] {
 		return nil, nil, 0, fmt.Errorf("this signer's log needs no fence on %s", chain)
 	}
+	if from, err := parseOutPoint(c.log.Anchors[chain]); err == nil {
+		if _, deepening, _ := cutoverState(s, chain, from); deepening {
+			return nil, nil, 0, fmt.Errorf("a fence on %s is in a block and not yet deep enough: wait for it, rather than pay for another", chain)
+		}
+	}
 	inputs, err := s.fenceInputs(chain)
 	if err != nil {
 		return nil, nil, 0, err
@@ -209,6 +214,14 @@ func (c *cosigner) checkFence(s *pegState, chain string) (*wire.MsgTx, [][]byte,
 // unspent. Every signature made before the log was rebuilt spent coins
 // from older blocks, all of them now spent in blocks, so none can confirm.
 func cutoverDone(s *pegState, chain string, from wire.OutPoint) (bool, string) {
+	done, _, why := cutoverState(s, chain, from)
+	return done, why
+}
+
+// cutoverState is cutoverDone, and also whether a fence from from on is in
+// a block but not yet depth deep (deepening): then the cutover only needs
+// time, and another fence would only spend more of the surplus.
+func cutoverState(s *pegState, chain string, from wire.OutPoint) (done, deepening bool, why string) {
 	txs, depth, line := s.dogeTxs, int64(1), s.pegLine
 	isCoin := func(out *wire.TxOut) bool { return s.redeemFor[string(out.PkScript)] != nil }
 	if chain == chainDogecoinVM {
@@ -243,12 +256,16 @@ func cutoverDone(s *pegState, chain string, from wire.OutPoint) (bool, string) {
 		return false
 	}
 	spent := confirmedSpends(txs)
-	why := fmt.Sprintf("no fence on %s from this log's anchor with %d confirmations yet", chain, depth)
+	why = fmt.Sprintf("no fence on %s from this log's anchor with %d confirmations yet", chain, depth)
 fences:
 	for _, f := range txs {
 		anchor, ok := parseFence(f.tx)
-		if !ok || f.confirmations < depth || len(f.tx.TxIn) == 0 || f.tx.TxIn[0].PreviousOutPoint != anchor ||
+		if !ok || f.confirmations <= 0 || len(f.tx.TxIn) == 0 || f.tx.TxIn[0].PreviousOutPoint != anchor ||
 			!coins[anchor] || !after(anchor) {
+			continue
+		}
+		if f.confirmations < depth {
+			deepening = true
 			continue
 		}
 		for _, t := range txs {
@@ -264,9 +281,9 @@ fences:
 				}
 			}
 		}
-		return true, ""
+		return true, false, ""
 	}
-	return false, why
+	return false, deepening, why
 }
 
 // fenced reports whether this signer may sign anything but a fence on
