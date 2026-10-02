@@ -1389,7 +1389,9 @@ func (l *signingLog) anchorMoved(chain string, tx *wire.MsgTx, inChain func(wire
 		if cur == want {
 			return nil
 		}
-		next, more, err := line.step(cur)
+		// next, not step: the log never follows the line's restart after a
+		// spend that paid nothing back (lineage.go).
+		next, more, err := line.next(cur)
 		if err != nil {
 			return fmt.Errorf("%w: it signs nothing on %s until an operator recovers (RUNBOOK.md, \"Anchor lineage\")", err, chain)
 		}

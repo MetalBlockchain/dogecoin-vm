@@ -7,14 +7,19 @@ package main
 // "some coin the signers made" or "the oldest coin": it is the tip of one
 // line of coins, the same for every signer that reads the same chain.
 //
-// The line starts at the root: the oldest output ever paid to script (the
-// peg address on Dogecoin, the reserve on DogecoinVM) by a transaction with
-// at least rootDepth confirmations, read from history, spent or not. It
-// moves only along confirmed spends: when a transaction in a block spends
-// the current coin, the line moves to that transaction's last output paying
-// script (its change; every transaction the signers build pays change back
-// to script, at least pegDust). A transaction in the mempool doesn't move
-// it. The tip is the coin no confirmed transaction spends.
+// The line starts at the root: of the outputs ever paid to script (the peg
+// address on Dogecoin, the reserve on DogecoinVM) by a transaction with at
+// least rootDepth confirmations, read from history, spent or not, the
+// oldest one the signers have spent (only they can spend script), or, while
+// they have spent none, the oldest of all. Ties go to the lower outpoint.
+// Preferring a spent coin means a payment someone shows a node late, in an
+// old block, can't take the line over once it has begun: nobody has spent
+// it. It moves only along confirmed spends: when a transaction in a block
+// spends the current coin, the line moves to that transaction's last output
+// paying script (its change; every transaction the signers build pays
+// change back to script, at least pegDust). A transaction in the mempool
+// doesn't move it. The tip is the coin no confirmed transaction spends.
+// The same rule as BTCVM's and LTCVM's.
 //
 // Coins others pay to script (deposits, contributions, peg-outs into the
 // reserve) never become the anchor unless one is the root: they are spent,
@@ -22,12 +27,15 @@ package main
 //
 // If a confirmed transaction spends the line's coin and pays nothing back
 // to script (no transaction built today does; an old one might have), the
-// line starts again at the oldest coin paid to script, with rootDepth
-// confirmations, in a later block. Both are read from blocks, so every
-// signer with the chain's history finds the same.
+// line, as read from history, starts again at a root chosen the same way
+// among coins in later blocks. A signer's log does not follow that restart
+// (anchorMoved refuses it, lineage.next): the coin its last signature spent
+// led nowhere, and moving on to another is what an operator decides, by
+// fencing (fence.go), not what a signer assumes.
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
@@ -64,24 +72,37 @@ func newLineage(txs []chainTx, script []byte, rootDepth int64) *lineage {
 	return l
 }
 
-// root is the oldest coin at script with at least rootDepth confirmations,
-// and, if before > 0, fewer than before (in a later block than one with
-// before confirmations); nil if there is none.
+// root is the line's start among coins at script with at least rootDepth
+// confirmations and, if before > 0, fewer than before (in a later block
+// than one with before confirmations): the oldest the signers have spent,
+// else the oldest of all; nil if there is none.
 func (l *lineage) root(before int64) *utxo {
-	var eligible []utxo
+	var spent, unspent []utxo
 	for _, u := range l.coins {
-		if u.confirmations >= l.rootDepth && (before <= 0 || u.confirmations < before) {
-			eligible = append(eligible, u)
+		if u.confirmations < l.rootDepth || before > 0 && u.confirmations >= before {
+			continue
+		}
+		if _, ok := l.spentBy[u.outPoint]; ok {
+			spent = append(spent, u)
+		} else {
+			unspent = append(unspent, u)
 		}
 	}
-	return oldestCoin(eligible)
+	if len(spent) > 0 {
+		return oldestCoin(spent)
+	}
+	return oldestCoin(unspent)
 }
 
-// step is the coin after cur on the line, and whether there is one (a
-// confirmed transaction spends cur). It fails if one spends cur, pays
-// nothing back to script, and no coin at script is deep enough to start
-// the line again.
-func (l *lineage) step(cur wire.OutPoint) (wire.OutPoint, bool, error) {
+// errLineEnded: a confirmed transaction spent the coin and paid nothing
+// back to script.
+var errLineEnded = errors.New("the line ended")
+
+// next is the coin after cur on the line without a restart, and whether
+// there is one (a confirmed transaction spends cur): the spending
+// transaction's last output to script. If that transaction pays nothing
+// back, it fails with errLineEnded.
+func (l *lineage) next(cur wire.OutPoint) (wire.OutPoint, bool, error) {
 	t, spent := l.spentBy[cur]
 	if !spent {
 		return cur, false, nil
@@ -92,6 +113,20 @@ func (l *lineage) step(cur wire.OutPoint) (wire.OutPoint, bool, error) {
 			return wire.OutPoint{Hash: hash, Index: uint32(i)}, true, nil
 		}
 	}
+	return cur, false, fmt.Errorf("%w: the anchor %v was spent by %v, which pays nothing back to the peg", errLineEnded, cur, hash)
+}
+
+// step is the coin after cur on the line, and whether there is one (a
+// confirmed transaction spends cur). It fails if one spends cur, pays
+// nothing back to script, and no coin at script is deep enough to start
+// the line again.
+func (l *lineage) step(cur wire.OutPoint) (wire.OutPoint, bool, error) {
+	next, more, err := l.next(cur)
+	if !errors.Is(err, errLineEnded) {
+		return next, more, err
+	}
+	t := l.spentBy[cur]
+	hash := t.tx.TxHash()
 	if r := l.root(t.confirmations); r != nil {
 		return r.outPoint, true, nil
 	}
