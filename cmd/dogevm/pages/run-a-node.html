@@ -33,10 +33,10 @@ protocol 43 and won't load in other versions)</td>
 <td><code>mEUwHwfd8UTHf23UYkQxHvy1n1EGwWieXQnjmtzSryJRZckzu</code></td>
 </tr>
 <tr>
-<td>Source</td>
-<td><a
-href="https://github.com/MetalBlockchain/dogecoin-vm">https://github.com/MetalBlockchain/dogecoin-vm</a>
-(default branch <code>dogecoin</code>)</td>
+<td>Plugin release</td>
+<td><strong>v0.1.1</strong>, the build mainnet runs (<a
+href="https://github.com/MetalBlockchain/dogecoin-vm">https://github.com/MetalBlockchain/dogecoin-vm</a>,
+tag <code>v0.1.1</code>)</td>
 </tr>
 </tbody>
 </table></div>
@@ -59,9 +59,10 @@ should be reachable, so the node can talk to peers.</li>
 sudo install -m 755 metalgo/build/metalgo /usr/local/bin/metalgo</code></pre>
 <h2 id="2-build-the-dogecoinvm-plugin">2. Build the DogecoinVM
 plugin</h2>
-<p>The plugin file must be named after the VM ID and sit in metalgo's
-plugin directory.</p>
-<pre class="sh"><code>git clone https://github.com/MetalBlockchain/dogecoin-vm
+<p>Build the release tag the network runs (v0.1.1); newer commits on the
+default branch may not be deployed yet. The plugin file must be named
+after the VM ID and sit in metalgo's plugin directory.</p>
+<pre class="sh"><code>git clone --branch v0.1.1 https://github.com/MetalBlockchain/dogecoin-vm
 cd dogecoin-vm
 go run ./scripts/vm-id-generator.go       # prints mEUwHwfd8UTHf23UYkQxHvy1n1EGwWieXQnjmtzSryJRZckzu
 sudo install -d /var/lib/metal/plugins
