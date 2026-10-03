@@ -283,6 +283,9 @@ type dogeChain struct {
 	mu    sync.Mutex
 	hist  *walletHistory
 	known map[string]*wire.MsgTx // wallet transactions read so far, by txid: their bytes never change
+	// dead keeps unsettled transactions on disk (deadhistory.go); nil
+	// keeps nothing (tests, and commands that read no cutover).
+	dead *deadHistory
 }
 
 // importTx adds one transaction, already in a block, to the wallet without a
@@ -440,8 +443,42 @@ type historyEntry struct {
 }
 
 // history brings the wallet history up to date and returns the tip's height
-// and a copy of every entry.
+// and a copy of every entry, with every unsettled transaction the wallet no
+// longer lists added back as conflicted (deadhistory.go).
 func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
+	tip, entries, err := c.walletEntries()
+	if err != nil || c.dead == nil {
+		return tip, entries, err
+	}
+	gone, err := c.dead.sync(tip, entries, func(txid string) (string, error) {
+		tx, err := c.walletTx(txid)
+		if err != nil {
+			return "", err
+		}
+		return encodeTx(tx), nil
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	for txid, rec := range gone {
+		tx, err := decodeTx(rec.Hex)
+		if err != nil {
+			return 0, nil, fmt.Errorf("unsettled transaction %s: %w", txid, err)
+		}
+		c.mu.Lock()
+		if c.known == nil {
+			c.known = map[string]*wire.MsgTx{}
+		}
+		c.known[txid] = tx
+		c.mu.Unlock()
+		entries[txid] = historyEntry{conflicted: true, conflictDepth: rec.ConflictDepth, time: rec.Time}
+	}
+	return tip, entries, nil
+}
+
+// walletEntries brings the wallet history up to date and returns the tip's
+// height and a copy of every entry the wallet lists.
+func (c *dogeChain) walletEntries() (int64, map[string]historyEntry, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	tip, err := c.readHistory(false)

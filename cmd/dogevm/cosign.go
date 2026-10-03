@@ -1713,6 +1713,7 @@ func cmdSigner(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.recordUnsettled = true
 	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 	if err := watchPeg(b, *rescan); err != nil {
 		return fmt.Errorf("importing the peg addresses into Dogecoin Core: %w", err)

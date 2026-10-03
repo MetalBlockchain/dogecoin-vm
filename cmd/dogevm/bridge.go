@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -55,6 +56,10 @@ type bridge struct {
 	// bumpAfter is how long a payout or refund may wait unconfirmed before
 	// the bridge replaces it with one paying another -doge-fee (bumpStuck).
 	bumpAfter time.Duration
+	// recordUnsettled: this process keeps the unsettled-transaction file
+	// (deadhistory.go).
+	recordUnsettled bool
+
 	// fenceBumpAfter is how long a cutover's fence may wait unconfirmed on
 	// Dogecoin before one paying another fence fee may replace it
 	// (cutover.go).
@@ -252,7 +257,22 @@ func outputsTo(tx *wire.MsgTx, script []byte) (map[wire.OutPoint]bool, int64) {
 	return outs, total
 }
 
+// keepUnsettled points the Dogecoin client's unsettled-transaction file
+// (deadhistory.go) beside the deposit registry, once both are known. Only
+// the processes that sign or propose keep it (the coordinator, the signers,
+// signer-log): the web server and the monitor read only, and their sandbox
+// may not let them write there.
+func (b *bridge) keepUnsettled() {
+	dc, ok := b.doge.(*dogeChain)
+	if !ok || dc.dead != nil || b.registry == nil || !b.recordUnsettled {
+		return
+	}
+	dc.dead = &deadHistory{path: filepath.Join(filepath.Dir(b.registry.path), deadHistoryFile),
+		depth: max(b.depositConfirmations, b.confFloor, 1)}
+}
+
 func (b *bridge) load() (*pegState, error) {
+	b.keepUnsettled()
 	script := b.signers.pkScript()
 	s := &pegState{
 		pendingCoins:  map[wire.OutPoint]utxo{},
