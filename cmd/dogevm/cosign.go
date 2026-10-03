@@ -1286,9 +1286,8 @@ type signingLog struct {
 	// goes down. CutoverStarted is when the current one began (unix s).
 	CutoverEpoch   int   `json:"cutoverEpoch,omitempty"`
 	CutoverStarted int64 `json:"cutoverStarted,omitempty"`
-	// CutoverWaived is, per chain, coins an operator waived (signer-log
-	// cutover -waive), kept for the record.
-	CutoverWaived map[string][]string `json:"cutoverWaived,omitempty"`
+	// An old log's "cutoverWaived" (round 5's operator waiver, since
+	// removed) is not read: it never discharges anything.
 }
 
 // History values (signingLog.History).

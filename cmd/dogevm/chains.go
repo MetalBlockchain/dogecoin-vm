@@ -49,12 +49,6 @@ type conflictLister interface {
 	conflictedFor(addresses []btcutil.Address) ([]chainTx, error)
 }
 
-// mempooler is a chain whose node can say whether its mempool holds a
-// transaction.
-type mempooler interface {
-	inMempool(txid chainhash.Hash) (bool, error)
-}
-
 // confirmer is a chain that can say whether a transaction is in a block.
 type confirmer interface {
 	confirmed(txid chainhash.Hash) (bool, error)
@@ -392,23 +386,6 @@ func (c *dogeChain) conflictedFor(addresses []btcutil.Address) ([]chainTx, error
 	}
 	return txs, nil
 }
-
-// inMempool reports whether the node's mempool holds txid.
-func inMempool(rpc *rpcClient, txid chainhash.Hash) (bool, error) {
-	var ids []string
-	if err := rpc.call(&ids, "getrawmempool", false); err != nil {
-		return false, err
-	}
-	for _, id := range ids {
-		if id == txid.String() {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (c *dogeChain) inMempool(txid chainhash.Hash) (bool, error) { return inMempool(c.rpc, txid) }
-func (c *vmChain) inMempool(txid chainhash.Hash) (bool, error)   { return inMempool(c.rpc, txid) }
 
 // walletTx is wallet transaction txid, read from the node once.
 func (c *dogeChain) walletTx(txid string) (*wire.MsgTx, error) {

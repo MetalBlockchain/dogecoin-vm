@@ -401,8 +401,6 @@ func cmdSignerLog(args []string) error {
 	depositsPath := fs.String("deposits", "", "this signer's deposit address registry (default: deposits.json next to -signers)")
 	logPath := fs.String("log", "", "signing log (default: signing-log.json next to -key-file)")
 	setAnchors := fs.Bool("set", false, "anchors: set the log's empty anchors to the lines' tips")
-	waive := fs.String("waive", "", "cutover: clear this one recorded coin (TXID:VOUT) instead of starting a cutover; needs -chain (RUNBOOK.md, \"Cutover\")")
-	waiveChain := fs.String("chain", "", "cutover -waive: dogecoin or dogecoinvm")
 	s.register(fs)
 	b := bridgeFlags(fs)
 	if err := fs.Parse(args[1:]); err != nil {
@@ -418,9 +416,6 @@ func cmdSignerLog(args []string) error {
 	}
 	if err := s.resolve(); err != nil {
 		return err
-	}
-	if (*waive != "" || *waiveChain != "") && step != "cutover" {
-		return errors.New("-waive and -chain go with signer-log cutover")
 	}
 	if step == "anchors" && *keyFile == "" {
 		// The coordinator's view: the lines' tips alone, to compare with
@@ -502,23 +497,6 @@ func cmdSignerLog(args []string) error {
 			return fmt.Errorf("there is no signing log at %s", *logPath)
 		}
 		switch {
-		case step == "cutover" && *waive != "":
-			op, err := parseOutPoint(*waive)
-			if err != nil {
-				return err
-			}
-			if *waiveChain != chainDogecoin && *waiveChain != chainDogecoinVM {
-				return fmt.Errorf("-chain must be %s or %s", chainDogecoin, chainDogecoinVM)
-			}
-			var mp mempooler
-			if *waiveChain == chainDogecoin {
-				mp, _ = b.doge.(mempooler)
-			} else {
-				mp, _ = b.vm.(mempooler)
-			}
-			if err := c.waiveCoin(state, *waiveChain, op, mp); err != nil {
-				return err
-			}
 		case step == "cutover":
 			if err := c.startCutover(state); err != nil {
 				return err

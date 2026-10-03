@@ -16,8 +16,9 @@ package main
 // input of every transaction in its log, less those already spent deep. It
 // signs nothing but fences, on either chain, until every recorded coin is
 // cleared: spent by a transaction rootDepth deep (DogecoinVM: in a block,
-// final), or its funding transaction conflicted by one that deep, or waived
-// by an operator (signer-log cutover -waive). Clearing every coin one by one
+// final), or its funding transaction conflicted by one that deep. Nothing
+// else clears a coin: its transaction's absence from a block or a mempool
+// proves nothing, since it can still be mined. Clearing every coin one by one
 // is what makes a multi-batch cutover safe: a later batch's spend must be
 // deep too, not just the first fence's.
 //
@@ -682,49 +683,4 @@ func (c *cosigner) checkFence(s *pegState, chain string) (*wire.MsgTx, [][]byte,
 		return nil, nil, 0, err
 	}
 	return want, redeems, fee, nil
-}
-
-// waiveCoin clears one recorded coin by hand: only one whose funding
-// transaction is unconfirmed (not in a block, not conflicting with one),
-// not in this node's mempool, in a cutover begun at least a day ago. A
-// coin that was confirmed and taken out by a reorganisation normally comes
-// back within minutes; this is for one that never will.
-func (c *cosigner) waiveCoin(s *pegState, chain string, op wire.OutPoint, mempool mempooler) error {
-	coins, in := c.log.Cutover[chain]
-	if !in || !recordedSet(coins)[op] {
-		return fmt.Errorf("%v is not a recorded coin of this signer's cutover on %s", op, chain)
-	}
-	if started := time.Unix(c.log.CutoverStarted, 0); time.Since(started) < 24*time.Hour {
-		return fmt.Errorf("the cutover began %v ago: a coin may be waived only a day after", time.Since(started).Round(time.Minute))
-	}
-	v := s.view(chain)
-	t, ok := v.funding[op.Hash]
-	switch {
-	case ok && t.confirmations > 0:
-		return fmt.Errorf("%v's transaction is in a block: a fence spends it", op)
-	case ok && t.confirmations < 0:
-		return fmt.Errorf("%v's transaction conflicts with one in a block: it clears once that is %d deep", op, v.depth)
-	}
-	if mempool == nil {
-		return fmt.Errorf("this signer's %s node can't say whether its mempool holds %v", chain, op.Hash)
-	}
-	inPool, err := mempool.inMempool(op.Hash)
-	if err != nil {
-		return err
-	}
-	if inPool {
-		return fmt.Errorf("%v's transaction is in the mempool: it may still confirm", op)
-	}
-	var kept []string
-	for _, raw := range coins {
-		if raw != op.String() {
-			kept = append(kept, raw)
-		}
-	}
-	c.log.Cutover[chain] = kept
-	if c.log.CutoverWaived == nil {
-		c.log.CutoverWaived = map[string][]string{}
-	}
-	c.log.CutoverWaived[chain] = append(c.log.CutoverWaived[chain], op.String())
-	return c.log.write()
 }

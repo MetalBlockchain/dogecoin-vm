@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -277,7 +278,9 @@ func TestMultiBatchNeedsEveryCoinDeep(t *testing.T) {
 // unconfirmed in the wallet, not unspent in a block: a fence can't spend
 // it. It is still recorded (a kept-back signature may spend it once its
 // transaction is mined again), so the cutover can't finish until it is
-// mined and fenced, or waived a day later once nothing can bring it back.
+// mined and fenced (or its transaction is conflicted deep). Round 6, V1:
+// there is no waiver; time, absence from a mempool, and an old log's
+// "cutoverWaived" record clear nothing.
 func TestDisconnectedCoinIsRecorded(t *testing.T) {
 	require := require.New(t)
 	h := newCosignHarness(t)
@@ -301,19 +304,29 @@ func TestDisconnectedCoinIsRecorded(t *testing.T) {
 	require.Equal([]string{goneCoin.String()}, c.cutoverLeft(s)[chainDogecoin], "only the disconnected coin is left")
 	require.ErrorContains(h.releaseErr(c, dep, alice), "in a cutover")
 
-	// It can't be waived while its transaction may still confirm, nor
-	// within a day.
-	require.ErrorContains(c.waiveCoin(s, chainDogecoin, goneCoin, stubMempool(true)), "a day after")
+	// A day on, still gated: nothing but a deep spend or a deep conflict
+	// clears a coin. A round-5 log's waiver record is not read either.
 	c.log.CutoverStarted = time.Now().Add(-25 * time.Hour).Unix()
-	require.ErrorContains(c.waiveCoin(s, chainDogecoin, goneCoin, stubMempool(true)), "in the mempool")
-	require.NoError(c.waiveCoin(s, chainDogecoin, goneCoin, stubMempool(false)))
-	require.Contains(c.log.CutoverWaived[chainDogecoin], goneCoin.String())
+	require.NoError(c.log.write())
+	raw, err := json.Marshal(c.log)
+	require.NoError(err)
+	var doc map[string]any
+	require.NoError(json.Unmarshal(raw, &doc))
+	doc["cutoverWaived"] = map[string][]string{chainDogecoin: {goneCoin.String()}}
+	raw, err = json.Marshal(doc)
+	require.NoError(err)
+	var reread signingLog
+	require.NoError(json.Unmarshal(raw, &reread))
+	c.log.Cutover = reread.Cutover
+	require.Equal([]string{goneCoin.String()}, c.cutoverLeft(s)[chainDogecoin], "a waiver record clears nothing")
+	require.ErrorContains(h.releaseErr(c, dep, alice), "in a cutover")
+
+	// Once its transaction is mined again, a fence spends it and the
+	// cutover ends the normal way.
+	h.doge.mine()
+	h.fenceUntilDone(20)
 	require.NoError(h.releaseErr(c, dep, alice))
 }
-
-type stubMempool bool
-
-func (m stubMempool) inMempool(chainhash.Hash) (bool, error) { return bool(m), nil }
 
 // mineExcept mines a block holding everything but skip.
 func (c *fakeChain) mineExcept(skip *wire.MsgTx) {
