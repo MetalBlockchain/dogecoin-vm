@@ -284,7 +284,9 @@ func (c *cosigner) cutoverLeft(s *pegState) map[string][]string {
 				left = append(left, raw)
 			}
 		}
-		out[chain] = left
+		if len(left) > 0 { // only chains with coins left: {} when none (FENCE-NAMES.md)
+			out[chain] = left
+		}
 	}
 	return out
 }
@@ -302,7 +304,9 @@ func (c *cosigner) cutoverPending(s *pegState) map[string][]string {
 				pending = append(pending, raw)
 			}
 		}
-		out[chain] = pending
+		if len(pending) > 0 {
+			out[chain] = pending
+		}
 	}
 	return out
 }
@@ -325,8 +329,8 @@ func (c *cosigner) advanceCutover(s *pegState) (bool, error) {
 	}
 	left := c.cutoverLeft(s)
 	changed := false
-	for chain, coins := range left {
-		if len(coins) == 0 {
+	for chain := range c.log.Cutover {
+		if len(left[chain]) == 0 {
 			delete(c.log.Cutover, chain)
 			changed = true
 			c.b.logf("cutover %d on %s done: every recorded coin is cleared", c.log.CutoverEpoch, chain)
