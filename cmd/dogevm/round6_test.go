@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // Round 6 (V1, V5, V6, V9): the parts of the shared cutover DogecoinVM still
@@ -92,4 +94,65 @@ func TestVMFenceFeeIsSizeBased(t *testing.T) {
 			require.GreaterOrEqual(fee*1000, size*floorPerKB, "%d inputs, vmFee %d: under the relay floor", inputs, base)
 		}
 	}
+}
+
+// TestCoinOnlyOneSignerWatchesKeepsItGated (V9; Grok r6 "untested"): a
+// deposit address registered on one signer only. That signer records the
+// coin; the coordinator's fences don't spend it, so the other two finish
+// and that signer stays in its cutover (fail closed), signing nothing but
+// fences. Recovery: register the address with the coordinator and start a
+// new epoch on the others, so they sign the fence that spends it.
+func TestCoinOnlyOneSignerWatchesKeepsItGated(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	_, _, _, _ = h.inUse()
+	a, b, c := h.signers[0], h.signers[1], h.signers[2]
+	carol := h.user(7)
+	_, err := registerDeposit(a.b, carol)
+	require.NoError(err)
+	dep := h.personalDeposit(2*doge, carol, 30)
+	coin := wire.OutPoint{Hash: dep.TxHash()}.String()
+	h.rebuildLogs()
+	require.Contains(a.log.Cutover[chainDogecoin], coin, "the signer that watches it records it")
+	require.NotContains(b.log.Cutover[chainDogecoin], coin)
+
+	h.fenceUntil(30, b, c)
+	s, err := a.b.load()
+	require.NoError(err)
+	_, err = a.advanceCutover(s)
+	require.NoError(err)
+	require.Equal([]string{coin}, a.cutoverLeft(s)[chainDogecoin], "A still waits for its coin")
+	require.True(a.log.unproven(), "and signs nothing but fences")
+
+	_, err = registerDeposit(h.b, carol)
+	require.NoError(err)
+	for _, other := range []*cosigner{b, c} {
+		s, err := other.b.load()
+		require.NoError(err)
+		require.NoError(other.startCutover(s))
+	}
+	h.fenceUntil(30, a, b, c)
+}
+
+// TestMixedHistoryQuorum (V9; Grok r6 "untested"): one signer new (init: its
+// key never signed), one fenced, one adopted and still in its cutover. The
+// new and the fenced one sign a release; the one in a cutover refuses it,
+// on either chain, until its own cutover is done.
+func TestMixedHistoryQuorum(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	_, _, _, _ = h.inUse()
+	a, b, c := h.signers[0], h.signers[1], h.signers[2]
+	alice := h.user(1)
+	h.adoptOne(b)
+	h.adoptOne(c)
+	h.fenceUntil(30, b, c)
+	require.Equal(historyFenced, c.log.History)
+	h.adoptOne(b) // B again unproven, in a new cutover
+	require.Equal(historyNew, a.log.History)
+
+	dep := h.deposit(4*doge, &alice, 30)
+	require.NoError(h.releaseErr(a, dep, alice), "new: signs")
+	require.NoError(h.releaseErr(c, dep, alice), "fenced: signs")
+	require.ErrorContains(h.releaseErr(b, dep, alice), "in a cutover", "in a cutover: refuses")
 }
