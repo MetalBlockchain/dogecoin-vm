@@ -38,10 +38,12 @@ EOF
 h=$(cat "$HEALTH_FILE")
 code=${h%%-*}
 case $h in
-  503-pause) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"dogecoinvm","ok":true}]}' ;;
-  503-vm) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"dogecoinvm","ok":false}]}' ;;
+  503-pause) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":true}]}' ;;
+  503-vm) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":false}]}' ;;
+  503-short) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true}]}' ;;
   503) body='not json' ;;
-  *) body='{"checks":[{"name":"pause","ok":true}]}' ;;
+  200-short) body='{"checks":[{"name":"pause","ok":true}]}' ;;
+  *) body='{"checks":[{"name":"pause","ok":true},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":true}]}' ;;
 esac
 for a in "$@"; do [[ $a == -w ]] && { printf '%s\n%s' "$body" "$code"; exit 0; }; done
 [[ $code == 200 ]]
@@ -105,6 +107,15 @@ expect '[[ $code != 0 ]] && [[ ! -e $SYSTEMD_DIR/dogevm-web-main.service.d ]]' "
 setup
 code=$(AFTER=503-vm run)
 expect '[[ $code != 0 ]] && [[ ! -e $SYSTEMD_DIR/dogevm-web-main.service.d/10-sandbox.conf ]]' "apply that breaks the VM check: fails and puts things back"
+
+echo "5. every expected check must be present, for a 200 and a 503 (round 6, V8)"
+setup
+echo 503-pause >"$HEALTH_FILE"
+code=$(AFTER=503-short run remove)
+expect '[[ $code != 0 ]] && grep -q "missing checks bridge, dogecoin, dogecoinvm" "$T/out"' "paused after, but the node checks are missing: fails, names them"
+setup
+code=$(AFTER=200-short run remove)
+expect '[[ $code != 0 ]] && grep -q "missing checks" "$T/out"' "a 200 with only the pause check: fails"
 
 echo
 echo "$pass passed, $fail failed"

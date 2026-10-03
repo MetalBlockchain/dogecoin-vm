@@ -132,7 +132,7 @@ exit 0
 EOF
   cat >"$T/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-if [[ -n ${HEALTH:-} ]]; then echo "$HEALTH"; else echo '{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"dogecoinvm","ok":true}]}'; fi
+if [[ -n ${HEALTH:-} ]]; then echo "$HEALTH"; else echo '{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":true}]}'; fi
 EOF
   cat >"$T/bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -151,7 +151,8 @@ EOF
   chmod +x "$T"/bin/*
   export PATH=$T/bin:$PATH
 }
-run() { "${BASH5:-bash}" "$SCRIPT" abc123 >"$T/out" 2>&1; echo $?; }
+# FENCE_WAIT=0: one round of fences (sleep is stubbed, so a wait would spin).
+run() { FENCE_WAIT=${FENCE_WAIT:-0} "${BASH5:-bash}" "$SCRIPT" abc123 >"$T/out" 2>&1; echo $?; }
 paused() { [[ -f $(dirname "$SET")/paused.json ]]; }
 signer_paused() { [[ -f $VARLIB/dogevm-signer-$1/paused.json ]]; }
 all_signers_paused() { signer_paused 1 && signer_paused 2 && signer_paused 3; }
@@ -194,15 +195,18 @@ code=$(INIT_LOGS=dogevm-signer-3 run)
 expect '[[ $code == 0 ]]' "succeeds"
 expect 'grep -q ANCHORS "$VARLIB/dogevm-signer-3/signing-log.json"' "a log made for it, with its anchors"
 
-echo "4. an unhealthy peg after the upgrade rolls back; a log it made, unchanged since, goes"
+echo "4. a failure before the signers run rolls back; a log it made, unchanged since, goes"
 setup
 rm "$VARLIB/dogevm-signer-3/signing-log.json"
-code=$(INIT_LOGS=dogevm-signer-3 HEALTH='{"checks":[{"name":"peg","ok":false}]}' run)
+code=$(INIT_LOGS=dogevm-signer-3 FAIL_START=dogevm-signer-1 run)
 expect '[[ $code != 0 ]]' "fails"
 expect '[[ $(version) == old ]]' "old binary back"
 expect '[[ ! -f $VARLIB/dogevm-signer-3/signing-log.json ]]' "the log it made is removed"
 expect '! grep -q publicKey "$(dirname "$SET")/cosigners.json"' "cosigners.json restored"
 expect 'paused && all_signers_paused' "still paused"
+setup
+code=$(HEALTH='{"checks":[{"name":"peg","ok":false}]}' run)
+expect '[[ $code != 0 && $(version) == new ]] && paused && all_signers_paused' "an unhealthy peg once the signers run: no rollback (round 6, V7), everything paused"
 
 echo "5. a pause already in place stays, even with RESUME=1"
 setup
@@ -221,7 +225,7 @@ expect 'signer_paused 3' "a signer its operator paused stays paused"
 
 echo "7. RESUME=1 doesn't resume while a check other than the peg fails"
 setup
-code=$(RESUME=1 HEALTH='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"dogecoinvm","ok":false,"detail":"unhealthy"}]}' run)
+code=$(RESUME=1 HEALTH='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":false,"detail":"unhealthy"}]}' run)
 expect '[[ $code == 0 ]]' "the upgrade itself stands"
 expect 'paused && all_signers_paused' "nothing resumed"
 expect 'grep -q "not resuming: failing checks: dogecoinvm" "$T/out"' "says why"
@@ -252,7 +256,7 @@ expect '[[ -z $(ls "$BACKUPS"/*/coordinator 2>/dev/null) ]]' "no backup taken wh
 
 echo "12. a log that changes after the backup is never rolled back"
 setup
-code=$(LATE_WRITE=dogevm-signer-2 HEALTH='{"checks":[{"name":"peg","ok":false}]}' run)
+code=$(LATE_WRITE=dogevm-signer-2 FAIL_START=dogevm-signer-1 run)
 expect '[[ $code != 0 ]]' "fails"
 expect 'grep -q SIGNED-LATE "$VARLIB/dogevm-signer-2/signing-log.json"' "the newer log is kept"
 expect 'grep -q "kept as it is" "$T/out"' "and flagged"
@@ -274,7 +278,7 @@ expect 'grep -qx "$c" "$VARLIB/dogevm-signer-1/contributions.txt" && grep -qx "$
 setup
 echo "$c" >"$(dirname "$SET")/contributions.txt"
 echo "$(printf '%064d' 9):0" >"$VARLIB/dogevm-signer-1/contributions.txt"
-code=$(HEALTH='{"checks":[{"name":"peg","ok":false}]}' run)
+code=$(FAIL_START=dogevm-signer-1 run)
 expect '[[ $code != 0 ]] && grep -q "$(printf "%064d" 9):0" "$VARLIB/dogevm-signer-1/contributions.txt"' "signer 1's own list back after a failure"
 expect '[[ ! -f $VARLIB/dogevm-signer-2/contributions.txt ]]' "and none where there was none"
 
@@ -301,12 +305,14 @@ expect '[[ $code == 0 ]]' "succeeds ($(tail -2 "$T/out" | tr '\n' ' '))"
 expect 'grep -q "starting a cutover" "$T/out"' "each unproven log starts a cutover"
 expect 'grep -q "^fence dogecoin .*-deposits $STATE/registry/deposits.json" "$EVENTS" && grep -q "^fence dogecoinvm " "$EVENTS"' "a fence on each chain, with the unit's -deposits"
 expect '[[ $(line_of "^fence dogecoin ") -lt $(line_of "^resume") ]]' "fences before any resume"
+expect '[[ $(line_of "^start dogevm-web-main") -lt $(line_of "^fence dogecoin ") && $(line_of "^fence dogecoin ") -lt $(line_of "^start dogevm-bridge-main") ]]' "web wallet up while fencing; the bridge starts only after (round 6, V7)"
 expect '! paused && ! signer_paused 1' "resumed once the cutover is done"
 
 echo "18. a cutover that isn't done never resumes, even with RESUME=1"
 setup
 code=$(NEEDS_FENCE=1 FENCES_NEEDED=99 RESUME=1 run)
-expect '[[ $code == 0 ]]' "the upgrade itself stands"
+expect '[[ $code != 0 && $(version) == new ]]' "exits non-zero; the upgrade itself stands (no rollback once a fence may be signed)"
+expect '! grep -q "^start dogevm-bridge-main" "$EVENTS"' "the bridge stays stopped (round 6, V7)"
 expect 'paused && all_signers_paused' "bridge and signers stay paused"
 expect 'grep -q "cutover isn.t finished" "$T/out" && grep -q "bridge -signers .* -fence dogecoinvm" "$T/out"' "says so, prints the fence commands"
 expect '! grep -q "^resume" "$EVENTS"' "nothing resumed"
@@ -321,7 +327,7 @@ echo "20. an adopted log is in a cutover from the start"
 setup
 rm "$VARLIB/dogevm-signer-3/signing-log.json"
 code=$(ADOPT_LOGS=dogevm-signer-3 FENCES_NEEDED=99 run)
-expect '[[ $code == 0 ]] && grep -q "dogevm-signer-3: in cutover" "$T/out"' "signer 3 in a cutover"
+expect '[[ $code != 0 ]] && grep -q "dogevm-signer-3: in cutover" "$T/out"' "signer 3 in a cutover; unfinished, so non-zero"
 expect 'grep -q "dogevm-signer-1: anchors lead" "$T/out"' "proven signers just compared"
 expect 'grep -q "^fence dogecoin " "$EVENTS" && paused' "fences sent, bridge paused"
 
@@ -329,6 +335,18 @@ echo "21. a signer in a cutover whose nodes see another tip stops it"
 setup
 code=$(NEEDS_FENCE=1 TIPS_dogevm_signer_2='{"dogecoin":"ff:0","dogecoinvm":"bb:1"}' run)
 expect '[[ $code != 0 && $(version) == old ]] && grep -q "don.t see the coordinator.s tips" "$T/out"' "fails, old binary back, says why"
+
+echo "22. fresh health before resuming: a missing check means no resume (round 6, V7)"
+setup
+code=$(NEEDS_FENCE=1 RESUME=1 HEALTH='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoinvm","ok":true}]}' run)
+expect '[[ $code == 0 ]] && grep -q "not resuming: failing checks: dogecoin: missing" "$T/out"' "says the dogecoin check is missing"
+expect 'paused && all_signers_paused' "nothing resumed"
+
+echo "23. once the signers run, nothing rolls back: a bridge that won't start leaves the new binary, everything paused"
+setup
+code=$(FAIL_START=dogevm-bridge-main RESUME=1 run)
+expect '[[ $code != 0 && $(version) == new ]]' "fails, new binary stays"
+expect 'paused && all_signers_paused' "bridge and signers paused"
 
 echo
 echo "$pass passed, $fail failed"

@@ -35,19 +35,25 @@
 #      lineage");
 #   8. fill each signer's public key into cosigners.json from its own card
 #      where missing, and check every key there is in the signer set;
-#   9. start the signers (still paused), then the bridge, web wallet and
-#      monitor, and check the peg's audit is solvent.
+#   9. start the signers (still paused) and the web wallet and monitor;
+#      the bridge stays stopped. From here nothing is rolled back: the new
+#      signers may sign a fence, and the old binary knows nothing of the
+#      cutover gate;
+#  10. while any current-set signer is unproven or has coins left in a
+#      cutover (later epochs included), send fences on both chains with the
+#      bridge unit's own flags (signers sign them while paused, and nothing
+#      else), every FENCE_WAIT_POLL seconds (default 60), for up to
+#      FENCE_WAIT minutes (default 360; 0: one round). If that time runs
+#      out, stop with the bridge stopped and everything paused (exit 1);
+#  11. start the bridge, take fresh health, and check the peg is solvent.
 #
-# If a signer is in a cutover, it sends fences on both chains (signers
-# sign them while paused, and nothing else), with the bridge unit's own
-# flags, and with FENCE_WAIT=MINUTES keeps going until every cutover is
-# done. It never resumes while a cutover is unfinished, nor unless
-# RESUME=1, the bridge wasn't already paused before the upgrade, and every
-# health check but the pause passes; then it resumes the bridge and each
-# signer it paused. Otherwise read the checks, then resume the bridge and
-# each signer (the commands are printed).
+# It resumes only if every cutover is done, RESUME=1, the bridge wasn't
+# already paused before the upgrade, and every health check but the pause
+# is present and passing; then it resumes the bridge and each signer it
+# paused. Otherwise read the checks, then resume the bridge and each signer
+# (the commands are printed).
 #
-# On any failure after step 2, the previous binaries, cosigners.json and
+# On any failure after step 2 and before step 9, the previous binaries, cosigners.json and
 # contribution lists go back, everything is started again, and the bridge
 # and signers stay paused. Signing logs never go back: a log only grows,
 # and an older copy over a newer one would forget a signature. A log this
@@ -264,7 +270,6 @@ log "cutover and anchors"
 # back could spend is spent deep (RUNBOOK.md, "Cutover"). Its nodes must
 # see the coordinator's tips. A proven log (new, or fenced) keeps its
 # anchors, which must lead to those tips.
-NEEDS_FENCE=0
 tips=$(as_coordinator "$HOME_DIR/bin/$CHAIN" signer-log anchors -signers "$SET" ${COORD_DEPOSITS:+-deposits "$COORD_DEPOSITS"})
 echo "coordinator: $tips"
 signer_log() { # unit step [args]: signer-log as that signer, with its own files
@@ -281,7 +286,6 @@ for unit in "${SIGNERS[@]}"; do
     st=$(signer_log "$unit" cutover)
   fi
   if in_cutover "$st"; then
-    NEEDS_FENCE=1
     python3 - "$unit" "$tips" "$st" <<'PY' || die "$unit's nodes don't see the coordinator's tips; stopped (RUNBOOK.md, \"Anchor lineage\")"
 import json, sys
 unit, coord, st = sys.argv[1], json.loads(sys.argv[2])["tips"], json.loads(sys.argv[3])
@@ -367,30 +371,16 @@ for unit in "${SIGNERS[@]}"; do
     die "$unit reports a quarantine: journalctl -u $unit"
   fi
 done
-
-log "starting the bridge"
-systemctl start "${COORD[@]}" || die "couldn't start ${COORD[*]}"
-sleep 20
-for unit in "${COORD[@]}"; do
-  systemctl is-active --quiet "$unit" || die "$unit didn't start: journalctl -u $unit"
-done
-health=$(curl -s --max-time 30 "http://$WEB/api/health") || die "the web server doesn't answer"
-python3 - "$health" <<'PY' || die "the peg check fails after the upgrade: $health"
-import json, sys
-d = json.loads(sys.argv[1])
-peg = [c for c in d.get("checks", []) if c.get("name") == "peg"]
-sys.exit(0 if peg and peg[0].get("ok") else 1)
-PY
+# From here on nothing goes back: the new signers may sign a fence, and the
+# old binary knows nothing of the cutover gate. A failure leaves everything
+# paused, the bridge stopped, for the operator.
 ok=1
 trap - EXIT
 
-# Every check but the pause itself (which fails while paused, as it should).
-failing=$(python3 - "$health" <<'PY'
-import json, sys
-d = json.loads(sys.argv[1])
-print(", ".join(f"{c.get('name')}: {c.get('detail')}" for c in d.get("checks", []) if c.get("name") != "pause" and not c.get("ok")))
-PY
-)
+# The web wallet and monitor run (the site shows the pause); the bridge
+# stays stopped until every cutover is done.
+log "starting the web wallet and monitor (the bridge stays stopped)"
+systemctl start "$CHAIN-web-main" "$CHAIN-monitor-main" || die "couldn't start the web wallet or monitor"
 
 resume_cmds() {
   echo "  runuser -u $CHAIN -- $HOME_DIR/bin/$CHAIN resume -signers $SET"
@@ -416,7 +406,8 @@ fence_cmds() {
     echo "  runuser -u $CHAIN -- bash -c 'set -a; . $BRIDGE_ENV; set +a; exec $HOME_DIR/bin/$CHAIN ${BRIDGE_ARGS[*]:1} -fence $chain'"
   done
 }
-# cutover_left: the signers still in a cutover, with their coins left.
+# cutover_left: every current-set signer not yet done (history unproven, or
+# coins left on a chain, later epochs included), with its coins left.
 cutover_left() {
   local unit st
   for unit in "${SIGNERS[@]}"; do
@@ -427,15 +418,16 @@ cutover_left() {
   done
 }
 
-if [[ $NEEDS_FENCE == 1 ]]; then
+FENCE_WAIT=${FENCE_WAIT:-360}       # minutes; 0: one round of fences, no waiting
+FENCE_WAIT_POLL=${FENCE_WAIT_POLL:-60} # seconds between rounds
+left=$(cutover_left)
+if [[ -n $left ]]; then
   # Fences pay no one, so the signers sign them while paused, and nothing
-  # else; the bridge stays paused. A Dogecoin fence needs rootDepth
-  # confirmations (about 20 minutes); a set with more coins than one fence
-  # holds takes several in turn. FENCE_WAIT (minutes) keeps proposing and
-  # waiting; the default sends one round and leaves the rest to the
-  # operator.
-  log "cutover: sending fences (the signers stay paused for everything else)"
-  deadline=$(( $(date +%s) + ${FENCE_WAIT:-0} * 60 ))
+  # else. A Dogecoin fence needs rootDepth confirmations (about 20
+  # minutes); a set with more coins than one fence holds takes several in
+  # turn, and a stuck one is replaced after -fence-bump-after.
+  log "cutover: sending fences until every signer is done (FENCE_WAIT=${FENCE_WAIT}m)"
+  deadline=$(( $(date +%s) + FENCE_WAIT * 60 ))
   while :; do
     for chain in dogecoin dogecoinvm; do
       send_fence "$chain" || echo "($chain: no fence now; see above)"
@@ -443,25 +435,50 @@ if [[ $NEEDS_FENCE == 1 ]]; then
     left=$(cutover_left)
     [[ -z $left ]] && break
     (( $(date +%s) < deadline )) || break
-    sleep 60
+    sleep "$FENCE_WAIT_POLL"
   done
-  if [[ -n $left ]]; then
-    echo
-    echo "upgrade-bridge: done; the cutover isn't finished, so the bridge and signers stay paused:"
-    echo "$left"
-    echo "Repeat the fences until every signer's cutoverLeft is empty (RUNBOOK.md, \"Cutover\"):"
-    fence_cmds
-    echo "check each signer with:"
-    for unit in "${SIGNERS[@]}"; do
-      echo "  runuser -u $unit -- bash -c 'set -a; . $VARLIB/$unit/signer.env; set +a; exec $SIGNER_BIN signer-log status -signers ${SSET[$unit]} -key-file ${SKEY[$unit]} -log ${SLOG[$unit]}'"
-    done
-    echo "then read the checks (curl -s http://$WEB/api/health) and resume:"
-    resume_cmds
-    echo "Backups (old binaries, logs, cosigners.json, contribution lists) are in $WORK."
-    exit 0
-  fi
-  log "cutover done on every signer"
 fi
+if [[ -n $left ]]; then
+  echo
+  echo "upgrade-bridge: the cutover isn't finished. The bridge is stopped and every signer stays paused:"
+  echo "$left"
+  echo "Keep sending fences until every signer's cutoverLeft is {} (RUNBOOK.md, \"Cutover\"):"
+  fence_cmds
+  echo "check each signer with:"
+  for unit in "${SIGNERS[@]}"; do
+    echo "  runuser -u $unit -- bash -c 'set -a; . $VARLIB/$unit/signer.env; set +a; exec $SIGNER_BIN signer-log status -signers ${SSET[$unit]} -key-file ${SKEY[$unit]} -log ${SLOG[$unit]}'"
+  done
+  echo "Only then start the bridge (systemctl start $CHAIN-bridge-main), read the checks and resume (RUNBOOK.md, \"Upgrading the bridge software\")."
+  echo "Backups (old binaries, logs, cosigners.json, contribution lists) are in $WORK."
+  exit 1
+fi
+log "every current-set signer is done with its cutover"
+
+log "starting the bridge"
+systemctl start "$CHAIN-bridge-main" || die "couldn't start $CHAIN-bridge-main"
+sleep 20
+for unit in "${COORD[@]}"; do
+  systemctl is-active --quiet "$unit" || die "$unit didn't start: journalctl -u $unit"
+done
+# Fresh health, taken now: every expected check present, and none failing
+# but the pause.
+health=$(curl -s --max-time 30 "http://$WEB/api/health") || die "the web server doesn't answer"
+failing=$(python3 - "$health" <<'PY'
+import json, sys
+d = json.loads(sys.argv[1])
+checks = {c.get("name"): c for c in d.get("checks", [])}
+problems = [f"{name}: missing" for name in ("pause", "peg", "bridge", "dogecoin", "dogecoinvm") if name not in checks]
+problems += [f"{n}: {c.get('detail')}" for n, c in checks.items() if n != "pause" and not c.get("ok")]
+print(", ".join(problems))
+PY
+) || die "can't read the health checks: $health"
+python3 - "$health" <<'PY' || die "the peg check fails after the upgrade: $health"
+import json, sys
+d = json.loads(sys.argv[1])
+peg = [c for c in d.get("checks", []) if c.get("name") == "peg"]
+sys.exit(0 if peg and peg[0].get("ok") else 1)
+PY
+
 if [[ $RESUME == 1 && $WAS_PAUSED == 0 && -z $failing ]]; then
   log "resuming"
   for unit in "${SIGNERS[@]}"; do

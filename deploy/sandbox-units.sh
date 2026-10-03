@@ -45,30 +45,38 @@ REGISTRY=$(sed -nE 's/.* -deposits ([^ ;]+).*/\1/p' <<<"$web_start")
 FINALITY=$(sed -nE 's/.* -finality ([^ ;]+).*/\1/p' <<<"$web_start")
 [[ -n $WEB ]] || die "can't read the web server's -listen"
 [[ -n ${SANDBOX_TEST:-} ]] && systemd-analyze() { :; }
-# health_now: "ok" (200), "paused" (503 with the pause the only failing
-# check, in a response that parses), or "bad CODE: why". A 503 hides which
-# check failed, so the body is read: a pause is expected around this
-# script, a broken VM or node check behind the same code is not.
+# health_now: "ok" (200 and every expected check passing), "paused" (503
+# with every expected check present and the pause the only one failing), or
+# "bad CODE: why". The body is read either way: a pause is expected around
+# this script, a broken VM or node check behind the same code is not, and a
+# response missing a check proves nothing about it.
 health_now() {
   local body code
   body=$(curl -s --max-time 30 -w $'\n%{http_code}' "http://$WEB/api/health" || true)
   code=${body##*$'\n'}
   body=${body%$'\n'*}
-  [[ $code == 200 ]] && { echo ok; return; }
-  if [[ $code == 503 ]]; then
-    python3 - "$body" <<'PY' && return
+  if [[ $code == 200 || $code == 503 ]]; then
+    python3 - "$code" "$body" <<'PY'
 import json, sys
+code, body = sys.argv[1], sys.argv[2]
+want = ["pause", "peg", "bridge", "dogecoin", "dogecoinvm"]
 try:
-    checks = json.loads(sys.argv[1])["checks"]
-    failing = sorted(c["name"] for c in checks if not c["ok"])
+    checks = {c["name"]: bool(c["ok"]) for c in json.loads(body)["checks"]}
 except Exception as e:
-    print(f"bad 503: the health response doesn't parse ({e})")
+    print(f"bad {code}: the health response doesn't parse ({e})")
     sys.exit(0)
-if failing == ["pause"]:
+missing = [n for n in want if n not in checks]
+failing = sorted(n for n, ok in checks.items() if not ok)
+if missing:
+    print(f"bad {code}: missing checks " + ", ".join(missing))
+elif code == "200" and not failing:
+    print("ok")
+elif code == "503" and failing == ["pause"]:
     print("paused")
 else:
-    print("bad 503: failing " + ", ".join(failing or ["(none named)"]))
+    print(f"bad {code}: failing " + ", ".join(failing or ["(none named)"]))
 PY
+    return
   fi
   echo "bad $code"
 }
