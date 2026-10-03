@@ -93,6 +93,13 @@ func TestDeepConflictSettlesAnUnsettledTransaction(t *testing.T) {
 type stubDogecoinCore struct {
 	listed map[string]int64
 	bodies map[string]string
+	// blocks are the blocks getblock knows, by hash (deadproof_test.go).
+	blocks map[string]stubBlock
+}
+
+type stubBlock struct {
+	confirmations int64
+	tx            []string
 }
 
 func (n *stubDogecoinCore) serve(t *testing.T) *httptest.Server {
@@ -112,6 +119,13 @@ func (n *stubDogecoinCore) serve(t *testing.T) *httptest.Server {
 			result = map[string]any{"transactions": txs, "lastblock": "tip"}
 		case "getblockheader":
 			result = map[string]any{"height": 100, "confirmations": 1}
+		case "getblock":
+			b, ok := n.blocks[req.Params[0].(string)]
+			if !ok {
+				_ = json.NewEncoder(w).Encode(map[string]any{"result": nil, "error": map[string]any{"code": -5, "message": "Block not found"}})
+				return
+			}
+			result = map[string]any{"confirmations": b.confirmations, "tx": b.tx}
 		case "getwalletinfo":
 			result = map[string]any{"txcount": len(n.listed)}
 		case "gettransaction":

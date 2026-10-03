@@ -460,10 +460,24 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	// A dropped transaction is settled once a spend of one of its inputs is
+	// rootDepth deep (deadproof.go); its depth is read now, not remembered,
+	// as a reorganisation can make it shallower again.
+	// Dropped transactions added back below are never in a block, so the
+	// wallet scan in droppedDepth skips them.
+	var settled []string
 	for txid, rec := range gone {
 		tx, err := decodeTx(rec.Hex)
 		if err != nil {
 			return 0, nil, fmt.Errorf("unsettled transaction %s: %w", txid, err)
+		}
+		depth, err := c.droppedDepth(tip, tx, entries, rec.Proof)
+		if err != nil {
+			return 0, nil, fmt.Errorf("unsettled transaction %s: %w", txid, err)
+		}
+		if depth >= c.dead.depth {
+			settled = append(settled, txid)
+			continue
 		}
 		c.mu.Lock()
 		if c.known == nil {
@@ -471,7 +485,10 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 		}
 		c.known[txid] = tx
 		c.mu.Unlock()
-		entries[txid] = historyEntry{conflicted: true, conflictDepth: rec.ConflictDepth, time: rec.Time}
+		entries[txid] = historyEntry{conflicted: true, conflictDepth: depth, time: rec.Time}
+	}
+	if err := c.dead.settle(settled); err != nil {
+		return 0, nil, err
 	}
 	return tip, entries, nil
 }

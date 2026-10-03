@@ -68,6 +68,8 @@ Bridge (peg signers):
   dogevm signer-log check|init|adopt|anchors|cutover|status -signers FILE -key-file FILE
                                               check a signer's log against the chains, start the
                                               log of a key that has never signed, or run a cutover
+  dogevm unsettled list|prove -signers FILE   a node's unsettled Dogecoin transactions; record proof a
+                                              dropped one can never be mined (RUNBOOK, "Cutover")
 
 Personal deposit addresses are recorded in -deposits (default deposits.json
 next to the signers file) so the bridge knows to watch them.
@@ -140,6 +142,7 @@ func main() {
 		"signer":          cmdSigner,
 		"signer-key":      cmdSignerKey,
 		"signer-log":      cmdSignerLog,
+		"unsettled":       cmdUnsettled,
 		"signer-setup":    cmdSignerSetup,
 		"signers-check":   cmdSignersCheck,
 		"pause":           cmdPause,

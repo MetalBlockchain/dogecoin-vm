@@ -20,10 +20,10 @@ import (
 // is written, body and all, to a file beside the signer set (unsettledFor:
 // a directory the web server can't write), and read
 // back on every history read, full rereads and restarts included. One the
-// wallet no longer lists comes back as conflicted with an unknown (zero)
-// depth: its outputs stay recorded, and a cutover stays gated, until it is
-// listed again and settles. Disappearing proves nothing: it may still be
-// mined.
+// wallet no longer lists comes back as conflicted, at the depth of the best
+// current evidence that it can never be mined (deadproof.go): its outputs
+// stay recorded, and a cutover stays gated, until that evidence is rootDepth
+// deep. Disappearing proves nothing: it may still be mined.
 
 // deadHistoryFile is the file name beside the registry.
 const deadHistoryFile = "dogecoin-unsettled.json"
@@ -34,6 +34,9 @@ type deadRecord struct {
 	// ConflictDepth is the deepest the wallet ever saw a conflict of it.
 	ConflictDepth int64 `json:"conflictDepth,omitempty"`
 	Time          int64 `json:"time,omitempty"`
+	// Proof is an operator-recorded spender of one of its inputs, checked
+	// against the chain on every read (deadproof.go).
+	Proof *conflictProof `json:"proof,omitempty"`
 }
 
 // deadHistory is the file and what this process last read of it.
