@@ -514,13 +514,17 @@ from software that had a waiver, is ignored.
 
 Every Dogecoin wallet transaction that isn't settled yet (not in a block
 with full confirmations, nor conflicted by one that deep) is kept, body and
-all, in `dogecoin-unsettled.json` beside the deposit registry: the
-coordinator's (moved with the registry by `move-web-state.sh`) and each
-signer's (`/var/lib/dogevm-signer-N/`). Dogecoin Core 1.14 doesn't report
-what a reorganisation removed, and rereads the whole wallet after one; a
+all, in `dogecoin-unsettled.json` beside the signer set: the
+coordinator's in `/var/lib/metal-main/secrets/separate-signers/`, each
+signer's in `/var/lib/dogevm-signer-N/`. The bridge and the signers write
+it; the web server and the monitor can only read it
+(`deploy/sandbox-units.sh` makes it read-only for them, and refuses a web
+directory that would contain it). Dogecoin Core 1.14 doesn't report what a
+reorganisation removed, and rereads the whole wallet after one; a
 transaction the wallet stops listing is put back, as conflicted with no
 known depth, so the cutover still covers its coins, across restarts too.
-Back it up with the registry (the backup does); don't delete it.
+The daily backup includes it (it backs up the secrets directory and every
+signer's directory); don't delete it.
 
 A coin at a personal deposit address only some signers watch is recorded
 only by them, and the fences, built from the coordinator's view, don't

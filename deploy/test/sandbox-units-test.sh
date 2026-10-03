@@ -55,6 +55,17 @@ EOF
 }
 run() { "${BASH5:-bash}" "$SCRIPT" "$@" >"$T/out" 2>&1; echo $?; }
 web_dropin() { cat "$SYSTEMD_DIR/dogevm-web-main.service.d/10-sandbox.conf"; }
+# web_can_write PATH: PATH is, or is under, one of the web unit's
+# ReadWritePaths.
+web_can_write() {
+  local line d
+  line=$(web_dropin | grep '^ReadWritePaths=') || return 1
+  for d in ${line#ReadWritePaths=}; do
+    d=${d#-}
+    [[ $1 == "$d" || $1 == "$d"/* ]] && return 0
+  done
+  return 1
+}
 
 echo "1. apply: the web server may write its own directory, its index and finality, nothing in secrets"
 setup
@@ -63,6 +74,10 @@ expect '[[ $code == 0 ]]' "exits 0 ($(tail -1 "$T/out"))"
 expect 'web_dropin | grep -qx "ReadWritePaths=$STATE/web -$STATE/web/dogeindex $STATE/web"' "web writes only its own paths"
 expect '! web_dropin | grep "^ReadWritePaths" | grep -q secrets' "nothing in secrets"
 expect 'grep -q "InaccessiblePaths=.*separate-signers/coordinator" <(web_dropin)' "the coordinator's key hidden from it"
+U=$STATE/secrets/separate-signers/dogecoin-unsettled.json
+expect '! web_can_write "$U"' "the web server can't write the unsettled-transaction record (round 6, V2)"
+expect 'web_dropin | grep -q "^ReadOnlyPaths=.*-$U" && grep -q "^ReadOnlyPaths=.*-$U" "$SYSTEMD_DIR/dogevm-monitor-main.service.d/10-sandbox.conf"' "web and monitor: read-only"
+expect 'grep "^ReadWritePaths" "$SYSTEMD_DIR/dogevm-bridge-main.service.d/10-sandbox.conf" | grep -q "$STATE/secrets"' "the bridge can write it"
 
 echo "2. apply refuses while the registry is still in secrets"
 setup secrets
@@ -107,6 +122,12 @@ expect '[[ $code != 0 ]] && [[ ! -e $SYSTEMD_DIR/dogevm-web-main.service.d ]]' "
 setup
 code=$(AFTER=503-vm run)
 expect '[[ $code != 0 ]] && [[ ! -e $SYSTEMD_DIR/dogevm-web-main.service.d/10-sandbox.conf ]]' "apply that breaks the VM check: fails and puts things back"
+
+echo "4b. a web directory holding the unsettled-transaction record is refused (round 6, V2)"
+setup
+sed -i.bak "s#-finality $STATE/web/finality.json#-finality $STATE/secrets/separate-signers/finality.json#" "$T/webstart"
+code=$(run)
+expect '[[ $code != 0 ]] && [[ ! -e $SYSTEMD_DIR/dogevm-web-main.service.d ]]' "refuses, writes nothing"
 
 echo "5. every expected check must be present, for a 200 and a 503 (round 6, V8)"
 setup

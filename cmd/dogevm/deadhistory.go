@@ -17,7 +17,8 @@ import (
 // wallet that is rebuilt, or a transaction the wallet stops listing, would
 // take that evidence with it. So every wallet transaction that isn't yet
 // settled (not in a block rootDepth deep, nor conflicted by one that deep)
-// is written, body and all, to a file beside the deposit registry, and read
+// is written, body and all, to a file beside the signer set (unsettledFor:
+// a directory the web server can't write), and read
 // back on every history read, full rereads and restarts included. One the
 // wallet no longer lists comes back as conflicted with an unknown (zero)
 // depth: its outputs stay recorded, and a cutover stays gated, until it is
@@ -97,9 +98,9 @@ func (d *deadHistory) write(records map[string]deadRecord) error {
 // sync brings the file up to date with the wallet's entries at tip, and
 // returns every record the wallet no longer lists, for the history read to
 // add back. body reads a listed transaction's bytes. Under the file's lock,
-// so the coordinator and the web server, which share the directory, don't
-// lose each other's records; each process only adds what it saw unsettled
-// and removes what it saw settle.
+// so the bridge and a signer-log command run beside it don't lose each
+// other's records; each process only adds what it saw unsettled and
+// removes what it saw settle.
 func (d *deadHistory) sync(tip int64, entries map[string]historyEntry, body func(string) (string, error)) (map[string]deadRecord, error) {
 	unlock, err := d.lock()
 	if err != nil {

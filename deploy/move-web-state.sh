@@ -113,10 +113,6 @@ move() { # from, to
   moved+=("$1|$2")
 }
 move "$OLD_REG" "$NEW_REG"
-# The coordinator's record of unsettled Dogecoin transactions lives beside
-# the registry (round 6, V2): it moves with it, or the bridge would start an
-# empty one and forget what a reorganisation took out of the wallet.
-move "$(dirname "$OLD_REG")/dogecoin-unsettled.json" "$(dirname "$NEW_REG")/dogecoin-unsettled.json"
 [[ -n $OLD_IDX ]] && move "$OLD_IDX" "$NEW_IDX"
 [[ -n $OLD_FIN ]] && move "$OLD_FIN" "$NEW_FIN"
 for u in "${UNITS[@]}"; do

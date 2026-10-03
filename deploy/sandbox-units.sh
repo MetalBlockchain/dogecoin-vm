@@ -32,6 +32,11 @@ STATE=${STATE:-/var/lib/metal-main}
 DROPIN=10-sandbox.conf
 UNITS=("$CHAIN-bridge-main" "$CHAIN-web-main" "$CHAIN-monitor-main")
 SECRETS=$STATE/secrets
+SET=${SET:-$SECRETS/separate-signers/signers.json}
+# The coordinator's record of unsettled Dogecoin transactions (round 6, V2)
+# sits beside the signer set: the bridge writes it, the web server and the
+# monitor may only read it.
+UNSETTLED=$(dirname "$SET")/dogecoin-unsettled.json
 
 die() { echo "sandbox-units: $*" >&2; exit 1; }
 [[ $(id -u) == 0 || -n ${SANDBOX_TEST:-} ]] || die "run as root"
@@ -109,6 +114,9 @@ for dir in "$(dirname "$REGISTRY")" "$(dirname "$FINALITY")"; do
   esac
 done
 case $INDEX in "$SECRETS" | "$SECRETS"/*) die "the coin index $INDEX is inside the secrets directory; move it out first" ;; esac
+for dir in "$(dirname "$REGISTRY")" "$(dirname "$FINALITY")" "$INDEX"; do
+  case $UNSETTLED in "$dir"/*) die "the web server would write $dir, which holds the coordinator's $UNSETTLED" ;; esac
+done
 before=$(health_now)
 [[ $before == ok || $before == paused ]] || die "the bridge isn't healthy now ($before; http://$WEB/api/health); fix that first"
 
@@ -168,9 +176,9 @@ InaccessiblePaths=-$SECRETS/telegram-token"
 # finality samples, and writes its coin index; everything else, the
 # secrets directory included, stays read-only to it.
 write "$CHAIN-web-main" "ReadWritePaths=$(dirname "$REGISTRY") -$INDEX $(dirname "$FINALITY")
-ReadOnlyPaths=-$STATE/chain-configs -$STATE/genesis.json -$STATE/chain.json
+ReadOnlyPaths=-$STATE/chain-configs -$STATE/genesis.json -$STATE/chain.json -$UNSETTLED
 InaccessiblePaths=-$SECRETS/separate-signers/coordinator -$SECRETS/telegram-token -$SECRETS/rotation-1"
-write "$CHAIN-monitor-main" "ReadOnlyPaths=$SECRETS
+write "$CHAIN-monitor-main" "ReadOnlyPaths=$SECRETS -$UNSETTLED
 InaccessiblePaths=-$SECRETS/separate-signers/coordinator"
 
 systemctl daemon-reload
