@@ -312,7 +312,7 @@ node keeps running it); that is upgraded separately.
    (`DOGECOIND_DOCKER=...`: the Core tests must run, a skip fails this
    step) and `deploy/test/*.sh` under bash 5. Push the branch to `origin`
    (an operator's decision) and record the commit hash.
-2. **Operating capital.** `dv audit` (or `/api/audit`) must show surplus
+2. **Operating capital.** `dv audit -signers $S/separate-signers/signers.json` (or `/api/audit`) must show surplus
    and circulating at least zero. Contribute 2 DOGE to the peg address
    with the `DVMC` tag (see "Operating capital") and wait for 6
    confirmations: each signer promises at most half the surplus, and the
@@ -325,7 +325,7 @@ node keeps running it); that is upgraded separately.
        done
 
    A signer holding an address the coordinator lacks: register it with the
-   coordinator (`dv deposit-address`) first. The coordinator holding more
+   coordinator (`dv deposit-address -signers $S/separate-signers/signers.json ...`) first. The coordinator holding more
    is fine: fence proposals register them on the signers. Check Dogecoin
    Core's wallet isn't missing history (`getwalletinfo` `txcount` against
    the explorer's count for the peg address); rescan if it is.
@@ -345,7 +345,7 @@ node keeps running it); that is upgraded separately.
    shows `cutoverLeft` `{}` and `history` `"fenced"`, then
    `systemctl start dogevm-bridge-main`.
 6. **Check before resuming.** `curl -s http://127.0.0.1:8081/api/health`
-   (every check present, only the pause failing), `dv audit` solvent, each
+   (every check present, only the pause failing), `dv audit -signers $S/separate-signers/signers.json` solvent, each
    signer's `signer-log status` fenced with anchors equal to the
    coordinator's `lineageTips`, and no "quarantin" in
    `journalctl -u dogevm-signer-N`. Then resume each signer and the bridge
@@ -356,7 +356,7 @@ node keeps running it); that is upgraded separately.
 8. **Smoke test, small amounts.** One deposit (a few DOGE) to a personal
    deposit address and its credit; one withdrawal and its payout; restart
    one signer (`systemctl restart dogevm-signer-2`) and check it comes back
-   fenced; `dv audit` after each.
+   fenced; `dv audit -signers $S/separate-signers/signers.json` after each.
 9. **Backup again** (`dogevm-backup run`) and copy it off the host: the
    signers' new logs and `dogecoin-unsettled.json` are now worth keeping.
 

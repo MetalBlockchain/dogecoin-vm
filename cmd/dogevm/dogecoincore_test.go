@@ -634,3 +634,50 @@ func TestStuckFenceIsReplacedOnDogecoinCore(t *testing.T) {
 	require.NoError(err)
 	require.Empty(s.unconfirmed, "one fence confirmed, the others gone")
 }
+
+// TestLargeFenceOnDogecoinCore (round 6, V9): a fence the size of a busy
+// peg, 61 inputs (the anchor and 60 personal deposits, each spending a
+// deposit's own redeem script), relays and confirms on Dogecoin Core
+// 1.14.9 at the fee the bridge computes for its signed size, and the
+// deposits are still credited after.
+func TestLargeFenceOnDogecoinCore(t *testing.T) {
+	require := require.New(t)
+	n := startDogecoin(t)
+	h := n.bridgeHarness()
+	peg, err := h.b.signers.address(h.b.dogeParams)
+	require.NoError(err)
+	n.pay(peg.EncodeAddress(), 5, hex.EncodeToString(tagContrib))
+	for i := range 60 {
+		addr, err := registerDeposit(h.b, h.user(byte(10+i)))
+		require.NoError(err)
+		n.pay(addr.EncodeAddress(), 1, "")
+	}
+	n.mine(6)
+	s, err := h.b.load()
+	require.NoError(err)
+	coins, err := cutoverCoins(s, &signingLog{Actions: map[string]*loggedAction{}})
+	require.NoError(err)
+	recorded := recordedSet(coins[chainDogecoin])
+	inputs, err := s.fenceInputs(chainDogecoin, recorded)
+	require.NoError(err)
+	require.GreaterOrEqual(len(inputs), 61)
+	size, err := h.b.fenceSizeOf(s, chainDogecoin, inputs)
+	require.NoError(err)
+	fee := fenceFee(chainDogecoin, h.b.dogeFee, size)
+
+	txid, err := h.b.sendFence(chainDogecoin, recorded)
+	require.NoError(err)
+	require.True(n.inMempool(txid), "Dogecoin Core relayed a %d-byte fence paying %d koinu", size, fee)
+	var raw string
+	require.NoError(n.rpc.call(&raw, "getrawtransaction", txid.String(), 0))
+	require.LessOrEqual(int64(len(raw)/2), size, "the size estimate covers the signed fence")
+	n.mine(int(s.pegLine.rootDepth))
+	s, err = h.b.load()
+	require.NoError(err)
+	v := s.view(chainDogecoin)
+	for op := range recorded {
+		require.True(v.cleared(op), "%v cleared", op)
+	}
+	a := h.audit()
+	require.True(a.solvent(), "%+v", a)
+}
