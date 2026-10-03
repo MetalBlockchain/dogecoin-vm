@@ -43,6 +43,10 @@ var sitePages = []sitePage{
 		Description: "How DogecoinVM and its DOGE bridge work: deposits, withdrawals, fees and timings, trust and limits, wallets and the API."},
 	{Path: "/download", File: "download", Title: "DogecoinVM Wallet for Mac",
 		Description: "A native Mac wallet for Dogecoin and DogecoinVM: review before you sign, Touch ID for every payment, signed and notarized by Apple."},
+	{Path: "/developers", File: "developers", Title: "DogecoinVM API reference",
+		Description: "The DogecoinVM and bridge API: balances, transactions, deposits, withdrawals, proof of reserves and JSON-RPC, with examples, and how to build a wallet."},
+	{Path: "/run-a-node", File: "run-a-node", Title: "Run a DogecoinVM node",
+		Description: "Run a Metal node that tracks the DogecoinVM L1 and serves its JSON-RPC: build, configure, run with systemd, check sync."},
 	{Path: "/terms", File: "terms", Title: "DogecoinVM alpha terms of use",
 		Description: "The terms for using DogecoinVM and its DOGE bridge during the alpha: the risks, the limits, held deposits and refunds."},
 }

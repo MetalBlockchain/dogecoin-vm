@@ -1,0 +1,621 @@
+{{define "head"}}
+  <script type="module" src="docs.js"></script>
+{{end}}
+{{define "main"}}
+  <main class="page">
+<h1 id="dogecoinvm-api-reference">DogecoinVM API reference</h1>
+<p>The DogecoinVM site at <strong><a
+href="https://metaldoge.com">https://metaldoge.com</a></strong> serves
+two APIs, the same ones its web wallet and the Mac app use:</p>
+<ul>
+<li><strong><code>/api/*</code></strong>: a JSON API for wallets and
+explorers: balances, transactions, the bridge (deposits and
+withdrawals), proof of reserves, and the Dogecoin side of a wallet.</li>
+<li><strong><code>/rpc</code></strong>: the DogecoinVM node's own
+JSON-RPC (btcd / Bitcoin Core style), through a limited public
+login.</li>
+</ul>
+<blockquote>
+<p><strong>Alpha.</strong> DogecoinVM and its bridge are alpha software,
+not yet audited, and capped. Read the <a
+href="/terms">alpha terms</a> before moving real
+DOGE. The current caps are always in <a
+href="#get-apiinfo"><code>GET /api/info</code></a>.</p>
+</blockquote>
+<p><strong>Keys never go to any server.</strong> Nothing in this API
+takes a private key. Make keys and sign transactions on the user's own
+device (see <a href="#build-a-wallet-in-5-steps">Build a wallet in 5
+steps</a> and <a href="#security">Security</a>).</p>
+<h2 id="conventions">Conventions</h2>
+<ul>
+<li><strong>Amounts in DOGE</strong> are decimal strings with 8 places,
+such as <code>"1.50000000"</code>.</li>
+<li><strong>Amounts in koinu</strong> (1 DOGE = 100,000,000 koinu) are
+integer strings, used where a wallet signs: each UTXO's
+<code>value</code>. Strings, so JavaScript never rounds them.</li>
+<li><strong>Addresses</strong> are base58 Dogecoin mainnet addresses
+(<code>D…</code> for P2PKH, <code>9…</code>/<code>A…</code> for P2SH).
+The same string is a valid address on Dogecoin and on DogecoinVM; each
+endpoint says which chain it means.</li>
+<li><strong>Errors</strong> are JSON: <code>{"error": "…"}</code>, with
+HTTP status 400 (bad request), 404 (not found), 429 (rate limited), 502
+(node didn't answer) or 503 (busy or starting up).</li>
+<li><strong>Confirmations</strong> on DogecoinVM: a transaction in a
+block is final (Snowman consensus, no reorganisations);
+<code>confirmations: 0</code> means it is still in the mempool. On
+Dogecoin, confirmations mean what they always do.</li>
+<li><strong>Times</strong> are Unix seconds unless the field says
+otherwise.</li>
+</ul>
+<p>In the examples, <code>D5EQRCnPMXmRvUoZwC7gu7fYspean3PQ9a</code> is a
+made-up address and the transaction IDs are placeholders. The response
+shapes are real.</p>
+<h2 id="limits">Limits</h2>
+<div class="table-wrap"><table class="fees-table">
+<thead>
+<tr>
+<th>What</th>
+<th>Limit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Explorer-style endpoints (<code>/api/address</code>,
+<code>/api/tx</code>, <code>/api/block</code>, <code>/api/blocks</code>,
+<code>/api/doge/import</code>, <code>/api/doge/rawtx</code>)</td>
+<td>8 at a time across all users; a request waiting over 10 s gets
+<code>503 busy; try again shortly</code></td>
+</tr>
+<tr>
+<td>New deposit addresses (<code>POST /api/deposit-address</code>) and
+new Dogecoin addresses (<code>POST /api/doge/watch</code>)</td>
+<td>30 per hour per IP (registering one already known is free)</td>
+</tr>
+<tr>
+<td><code>/api/events</code> streams</td>
+<td>5,000 open at once</td>
+</tr>
+<tr>
+<td>Request bodies</td>
+<td>1 MiB</td>
+</tr>
+</tbody>
+</table></div>
+<p>This is one public site, not a hosted API service: there are no API
+keys or uptime guarantees. An app with real traffic should run its own
+node (<a href="/run-a-node">RUN-A-NODE.md</a>) and use its
+JSON-RPC.</p>
+<hr />
+<h2 id="network-and-bridge">Network and bridge</h2>
+<h3 id="get-apiinfo"><code>GET /api/info</code></h3>
+<p>The network's parameters and the bridge's current policy. Read it at
+start-up and <strong>check <code>chainID</code> and
+<code>dogecoinvmNetwork</code></strong> before signing anything.</p>
+<pre class="sh"><code>curl https://metaldoge.com/api/info</code></pre>
+<pre class="json"><code>{
+  &quot;chainID&quot;: &quot;2hFCfzdMmfXBxYgvvdL7BYiJAxdejyn4AksMYUM2eM5gN7Xrjy&quot;,
+  &quot;dogecoinvmNetwork&quot;: &quot;dogecoinvm&quot;,
+  &quot;dogecoinNetwork&quot;: &quot;mainnet&quot;,
+  &quot;dogecoinvmVersions&quot;: { &quot;p2pkh&quot;: 30, &quot;p2sh&quot;: 22, &quot;wif&quot;: 158 },
+  &quot;dogecoinVersions&quot;: { &quot;p2pkh&quot;: 30, &quot;p2sh&quot;: 22, &quot;wif&quot;: 158 },
+  &quot;pegAddress&quot;: &quot;AAvNfukpAa4iTcRJPetxuxX8XxbC5gFqUM&quot;,
+  &quot;reserveAddress&quot;: &quot;AAvNfukpAa4iTcRJPetxuxX8XxbC5gFqUM&quot;,
+  &quot;signers&quot;: { &quot;required&quot;: 2, &quot;publicKeys&quot;: [&quot;0212a0…&quot;, &quot;…&quot;, &quot;…&quot;] },
+  &quot;depositConfirmations&quot;: 20,
+  &quot;confirmationTiers&quot;: [
+    { &quot;upTo&quot;: &quot;1.00000000&quot;, &quot;confirmations&quot;: 1 },
+    { &quot;upTo&quot;: &quot;10.00000000&quot;, &quot;confirmations&quot;: 6 },
+    { &quot;upTo&quot;: &quot;50.00000000&quot;, &quot;confirmations&quot;: 12 }
+  ],
+  &quot;vmFee&quot;: &quot;0.01000000&quot;,
+  &quot;dogeFee&quot;: &quot;0.10000000&quot;,
+  &quot;minDeposit&quot;: &quot;1.00000000&quot;,
+  &quot;maxDeposit&quot;: &quot;100.00000000&quot;,
+  &quot;minPegOut&quot;: &quot;2.00000000&quot;,
+  &quot;maxCirculating&quot;: &quot;4200.00000000&quot;,
+  &quot;faucet&quot;: { &quot;enabled&quot;: false },
+  &quot;dogeWallet&quot;: true
+}</code></pre>
+<div class="table-wrap"><table class="fees-table">
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chainID</code></td>
+<td>DogecoinVM's blockchain ID on Metal. Pin it in your app.</td>
+</tr>
+<tr>
+<td><code>*Versions</code></td>
+<td>Base58 version bytes. Identical on both chains: that's why one key
+has one address on both.</td>
+</tr>
+<tr>
+<td><code>pegAddress</code></td>
+<td>The bridge's multisig on <strong>Dogecoin</strong> (the shared
+deposit address; see <a
+href="#post-apideposit-address">deposits</a>).</td>
+</tr>
+<tr>
+<td><code>reserveAddress</code></td>
+<td>The bridge's reserve on <strong>DogecoinVM</strong>. Paying DOGE
+into it (with a tag) is how you withdraw. It is the same script as
+<code>pegAddress</code>, so the same string.</td>
+</tr>
+<tr>
+<td><code>signers</code></td>
+<td>The bridge's m-of-n signer set (public keys).</td>
+</tr>
+<tr>
+<td><code>confirmationTiers</code>,
+<code>depositConfirmations</code></td>
+<td>Dogecoin confirmations a deposit needs before it is credited: by
+amount, up to each <code>upTo</code>; above the last tier,
+<code>depositConfirmations</code>.</td>
+</tr>
+<tr>
+<td><code>vmFee</code></td>
+<td>What the bridge deducts from a deposit when it credits it on
+DogecoinVM.</td>
+</tr>
+<tr>
+<td><code>dogeFee</code></td>
+<td>What the bridge deducts from a withdrawal for the Dogecoin
+payout.</td>
+</tr>
+<tr>
+<td><code>minDeposit</code> / <code>maxDeposit</code></td>
+<td>Per-deposit limits. A deposit outside them isn't credited; it's held
+for a refund.</td>
+</tr>
+<tr>
+<td><code>minPegOut</code></td>
+<td>The smallest withdrawal.</td>
+</tr>
+<tr>
+<td><code>maxCirculating</code></td>
+<td>The alpha cap on all DOGE on DogecoinVM. A deposit that would exceed
+it waits.</td>
+</tr>
+<tr>
+<td><code>faucet</code></td>
+<td>Test networks only; disabled on mainnet.</td>
+</tr>
+<tr>
+<td><code>dogeWallet</code></td>
+<td>Whether the <code>/api/doge/*</code> endpoints are served.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="get-apistatus"><code>GET /api/status</code></h3>
+<p>Both chains' heights, Dogecoin sync, the peg audit (proof of
+reserves), measured finality, and whether the bridge is paused. Updated
+every 15 s.</p>
+<pre class="sh"><code>curl https://metaldoge.com/api/status</code></pre>
+<pre class="json"><code>{
+  &quot;dogecoinvmHeight&quot;: 51,
+  &quot;dogecoinHeight&quot;: 6400367,
+  &quot;dogecoinSync&quot;: { &quot;headers&quot;: 6400367, &quot;progress&quot;: 0.9999997, &quot;syncing&quot;: false, &quot;available&quot;: true },
+  &quot;dogecoinBlockTime&quot;: 1791065270,
+  &quot;dogecoinSupply&quot;: { &quot;amount&quot;: &quot;156175782865&quot;, &quot;height&quot;: 6400328 },
+  &quot;finality&quot;: { &quot;payments&quot;: 21, &quot;medianMs&quot;: 196, &quot;p90Ms&quot;: 268, &quot;latestMs&quot;: 97 },
+  &quot;audit&quot;: {
+    &quot;solvent&quot;: true,
+    &quot;locked&quot;: &quot;46.61000000&quot;,
+    &quot;circulating&quot;: &quot;46.61000000&quot;,
+    &quot;pendingPegIns&quot;: &quot;0.00000000&quot;,
+    &quot;pendingPegOuts&quot;: &quot;0.00000000&quot;,
+    &quot;surplus&quot;: &quot;0.00000000&quot;,
+    &quot;unclaimedOnDogecoin&quot;: &quot;0.00000000&quot;,
+    &quot;unclaimedOnDogecoinVM&quot;: &quot;0.00000000&quot;
+  },
+  &quot;updated&quot;: &quot;2026-10-03T22:08:11Z&quot;
+}</code></pre>
+<ul>
+<li><code>audit.locked</code> is DOGE held by the bridge on Dogecoin;
+<code>audit.circulating</code> is DOGE released onto DogecoinVM.
+<code>solvent</code> is true when locked covers everything owed.</li>
+<li><code>finality</code> is measured live: from the moment this site
+receives a payment to the moment its block is accepted (final), over
+recent payments.</li>
+<li><code>paused</code> (object) appears only while the bridge is
+paused; <code>error</code> appears in place of <code>audit</code> if the
+bridge can't read a chain.</li>
+</ul>
+<h3 id="get-apihealth"><code>GET /api/health</code></h3>
+<p>Health checks, for uptime monitors: HTTP 200 when everything passes
+(including <code>"status": "degraded"</code>, a deliberate pause or a
+Dogecoin node catching up), 503 when something is down.</p>
+<pre class="json"><code>{
+  &quot;ok&quot;: true,
+  &quot;status&quot;: &quot;ok&quot;,
+  &quot;checks&quot;: [
+    { &quot;name&quot;: &quot;pause&quot;, &quot;ok&quot;: true, &quot;detail&quot;: &quot;not paused&quot; },
+    { &quot;name&quot;: &quot;peg&quot;, &quot;ok&quot;: true, &quot;detail&quot;: &quot;locked 46.61000000, circulating 46.61000000, …&quot; }
+  ],
+  &quot;updated&quot;: &quot;2026-10-03T22:08:11Z&quot;
+}</code></pre>
+<h3 id="get-apireserves"><code>GET /api/reserves</code></h3>
+<p>Every output the bridge holds on Dogecoin, for checking the proof of
+reserves yourself against any Dogecoin explorer.</p>
+<pre class="json"><code>{
+  &quot;lockedOnDogecoin&quot;: &quot;46.61000000&quot;,
+  &quot;circulating&quot;: &quot;46.61000000&quot;,
+  &quot;pegAddress&quot;: &quot;AAvNfukpAa4iTcRJPetxuxX8XxbC5gFqUM&quot;,
+  &quot;reserveAddress&quot;: &quot;AAvNfukpAa4iTcRJPetxuxX8XxbC5gFqUM&quot;,
+  &quot;reserveCreated&quot;: &quot;9000000000.00000000&quot;,
+  &quot;reserveHeld&quot;: &quot;8999999953.39000000&quot;,
+  &quot;personalDepositCount&quot;: 11,
+  &quot;dogecoinOutputs&quot;: [
+    { &quot;address&quot;: &quot;9rctRHEpjCvZmVJqwSaGNTzCqUWKS9MmYB&quot;, &quot;amount&quot;: &quot;1.00000000&quot;,
+      &quot;confirmations&quot;: 11580, &quot;txid&quot;: &quot;709b55bd…201b&quot;, &quot;vout&quot;: 0 }
+  ]
+}</code></pre>
+<p><code>reserveCreated</code> is the reserve the chain created at
+genesis (it backs nothing by itself);
+<code>reserveCreated − reserveHeld</code> is what circulates.</p>
+<h3 id="get-apiactivity"><code>GET /api/activity</code></h3>
+<p>Recent bridge activity: deposits and withdrawals, newest first (up to
+20).</p>
+<pre class="json"><code>[
+  { &quot;type&quot;: &quot;withdrawal&quot;, &quot;status&quot;: &quot;paid&quot;, &quot;amount&quot;: &quot;2.00000000&quot;, &quot;pays&quot;: &quot;1.90000000&quot;,
+    &quot;to&quot;: &quot;D5EQRCnPMXmRvUoZwC7gu7fYspean3PQ9a&quot;,
+    &quot;dogecoinvmTxid&quot;: &quot;27ca64c0…a1e3&quot;, &quot;dogecoinTxid&quot;: &quot;1f3cb18e…b7a9&quot;, &quot;time&quot;: 1790899406 }
+]</code></pre>
+<hr />
+<h2 id="dogecoinvm-addresses-transactions-blocks">DogecoinVM: addresses,
+transactions, blocks</h2>
+<h3
+id="get-apiaddressaddress"><code>GET /api/address/{address}</code></h3>
+<p>A DogecoinVM address's balance, unspent outputs and last 50
+transactions.</p>
+<pre class="sh"><code>curl https://metaldoge.com/api/address/D5EQRCnPMXmRvUoZwC7gu7fYspean3PQ9a</code></pre>
+<pre class="json"><code>{
+  &quot;address&quot;: &quot;D5EQRCnPMXmRvUoZwC7gu7fYspean3PQ9a&quot;,
+  &quot;confirmed&quot;: &quot;5.65601300&quot;,
+  &quot;pending&quot;: &quot;0.00000000&quot;,
+  &quot;utxos&quot;: [
+    { &quot;txid&quot;: &quot;709b55bd…201b&quot;, &quot;vout&quot;: 0, &quot;value&quot;: &quot;99000000&quot;,
+      &quot;script&quot;: &quot;76a914…88ac&quot;, &quot;confirmations&quot;: 3 }
+  ],
+  &quot;history&quot;: [
+    { &quot;txid&quot;: &quot;709b55bd…201b&quot;, &quot;confirmations&quot;: 3, &quot;net&quot;: &quot;0.99000000&quot;, &quot;time&quot;: 1790899408 }
+  ]
+}</code></pre>
+<ul>
+<li><code>utxos[].value</code> is in <strong>koinu</strong> (integer
+string); <code>confirmed</code>, <code>pending</code> and
+<code>history[].net</code> are in DOGE. <code>net</code> is signed:
+negative for a payment out.</li>
+<li><code>pending</code> is outputs still in the mempool (normally for
+well under a second).</li>
+<li><strong>Don't trust <code>value</code> when signing</strong>: fetch
+the raw transaction (<a
+href="#get-apirawtxtxid"><code>/api/rawtx</code></a>), check it hashes
+to <code>txid</code>, and read the output's value and script from it.
+Legacy signatures don't commit to input amounts, so a lying server could
+otherwise inflate your fee.</li>
+</ul>
+<h3 id="get-apitxtxid"><code>GET /api/tx/{txid}</code></h3>
+<p>A DogecoinVM transaction, decoded and described.</p>
+<pre class="json"><code>{
+  &quot;txid&quot;: &quot;27ca64c0…a1e3&quot;,
+  &quot;confirmations&quot;: 1,
+  &quot;blockHash&quot;: &quot;5af2392a…ee73&quot;,
+  &quot;time&quot;: 1790899408,
+  &quot;kind&quot;: &quot;credit&quot;,
+  &quot;label&quot;: &quot;Credit for a deposit on Dogecoin, released from the peg reserve&quot;,
+  &quot;inputs&quot;: [ { &quot;address&quot;: &quot;AAvNfukpAa4iTcRJPetxuxX8XxbC5gFqUM&quot;, &quot;value&quot;: &quot;8999999935.06000000&quot;, &quot;note&quot;: &quot;peg reserve&quot; } ],
+  &quot;outputs&quot;: [
+    { &quot;address&quot;: &quot;D5EQRCnPMXmRvUoZwC7gu7fYspean3PQ9a&quot;, &quot;value&quot;: &quot;0.99000000&quot; },
+    { &quot;address&quot;: &quot;AAvNfukpAa4iTcRJPetxuxX8XxbC5gFqUM&quot;, &quot;value&quot;: &quot;8999999934.06000000&quot;, &quot;note&quot;: &quot;peg reserve&quot; },
+    { &quot;value&quot;: &quot;0.00000000&quot;, &quot;note&quot;: &quot;bridge message&quot; }
+  ],
+  &quot;fee&quot;: &quot;0.01000000&quot;,
+  &quot;dogecoinTxid&quot;: &quot;959f7afe…b68b&quot;
+}</code></pre>
+<p><code>kind</code> is one of <code>transfer</code>,
+<code>credit</code> (a bridge deposit credited), <code>withdrawal</code>
+(a payment into the reserve), <code>reserve</code>, <code>reward</code>.
+<code>dogecoinTxid</code> links a bridge transaction to its Dogecoin
+side.</p>
+<h3 id="get-apirawtxtxid"><code>GET /api/rawtx/{txid}</code></h3>
+<p>A DogecoinVM transaction's raw hex: <code>{"hex": "0100…"}</code>.
+404 if the chain doesn't have it.</p>
+<h3 id="post-apitx"><code>POST /api/tx</code></h3>
+<p>Broadcast a signed DogecoinVM transaction.</p>
+<pre class="sh"><code>curl -X POST https://metaldoge.com/api/tx -H &#39;content-type: application/json&#39; \
+  -d &#39;{&quot;hex&quot;:&quot;0100000001…&quot;}&#39;</code></pre>
+<pre class="json"><code>{ &quot;txid&quot;: &quot;709b55bd…201b&quot; }</code></pre>
+<ul>
+<li><strong>400</strong> <code>rejected by the network: …</code>: the
+node refused it; it was not sent.</li>
+<li><strong>502</strong>: the node didn't answer, so it <strong>may or
+may not</strong> have been sent. Keep your record and check the txid
+(<code>/api/tx/{txid}</code>) before sending again.</li>
+</ul>
+<h3
+id="get-apiblocksbeforeheight"><code>GET /api/blocks?before={height}</code></h3>
+<p>The 15 newest blocks (or the 15 below <code>before</code>):
+<code>{"tip": 51, "blocks": [{height, hash, time, txCount, previousHash}, …]}</code>.
+DogecoinVM makes a block only when there are transactions, so heights
+grow slowly and a block can be minutes or days after the last.</p>
+<h3
+id="get-apiblockheight-or-hash"><code>GET /api/block/{height-or-hash}</code></h3>
+<p>One block with its transactions (up to 50 described):
+<code>{"block": {height, hash, time, txCount, previousHash, txids}, "transactions": [tx, …], "txCount": n}</code>.</p>
+<h3 id="get-apievents"><code>GET /api/events</code></h3>
+<p>A Server-Sent Events stream that says when a chain has a new block,
+so wallets refresh at once instead of polling. It carries no account
+data.</p>
+<pre><code>event: block
+data: {&quot;chain&quot;:&quot;dogecoinvm&quot;,&quot;height&quot;:52}
+
+event: block
+data: {&quot;chain&quot;:&quot;dogecoin&quot;,&quot;height&quot;:6400368}</code></pre>
+<p>On connect, the latest height of each chain is sent first.</p>
+<hr />
+<h2 id="the-bridge-deposits-and-withdrawals">The bridge: deposits and
+withdrawals</h2>
+<h3
+id="post-apideposit-address"><code>POST /api/deposit-address</code></h3>
+<p>Gives the <strong>personal Dogecoin deposit address</strong> for a
+DogecoinVM address. DOGE sent to it on Dogecoin is credited to that
+DogecoinVM address (less <code>vmFee</code>) once it has enough
+confirmations. Each DogecoinVM address has one deposit address, and it
+never changes; registering it again returns the same one.</p>
+<pre class="sh"><code>curl -X POST https://metaldoge.com/api/deposit-address -H &#39;content-type: application/json&#39; \
+  -d &#39;{&quot;address&quot;:&quot;D5EQRCnPMXmRvUoZwC7gu7fYspean3PQ9a&quot;}&#39;</code></pre>
+<pre class="json"><code>{
+  &quot;depositAddress&quot;: &quot;9rctRHEpjCvZmVJqwSaGNTzCqUWKS9MmYB&quot;,
+  &quot;creditTo&quot;: &quot;D5EQRCnPMXmRvUoZwC7gu7fYspean3PQ9a&quot;,
+  &quot;redeemScript&quot;: &quot;15000101…0101755221…53ae&quot;
+}</code></pre>
+<p><strong>Check it yourself; don't just trust the server.</strong> The
+deposit address is the P2SH of <code>redeemScript</code>, which is</p>
+<pre><code>OP_DATA_21 &lt;type&gt; &lt;hash160 of the DogecoinVM address&gt;  OP_DROP  &lt;the bridge&#39;s m-of-n multisig&gt;</code></pre>
+<p>where <code>type</code> is <code>0x00</code> for P2PKH and
+<code>0x01</code> for P2SH, and the multisig is
+<code>OP_m &lt;signers.publicKeys…&gt; OP_n OP_CHECKMULTISIG</code> from
+<code>/api/info</code>. A wallet should rebuild the script from
+<code>/api/info</code> and the user's own address, and refuse to show a
+deposit address that doesn't match.</p>
+<p>Rules (alpha; read the current values from
+<code>/api/info</code>):</p>
+<ul>
+<li>A deposit below <code>minDeposit</code> or above
+<code>maxDeposit</code> isn't credited: it's <strong>held</strong> and
+can be refunded on request (<a
+href="/terms">terms</a>).</li>
+<li>A deposit that would take circulating DOGE above
+<code>maxCirculating</code> waits for room.</li>
+<li>Credit comes after the confirmations for its amount
+(<code>confirmationTiers</code>).</li>
+<li>Send from any Dogecoin wallet. Several deposits to the same address
+are fine.</li>
+</ul>
+<p>Advanced: instead of a personal address, a deposit can pay
+<code>pegAddress</code> with an <code>OP_RETURN</code> of
+<code>DVMD &lt;type&gt; &lt;hash160&gt;</code> (25 bytes) naming the
+DogecoinVM address. A payment to <code>pegAddress</code> without that
+tag has no destination and is held.</p>
+<h3
+id="get-apidepositsdogecoinvm-address"><code>GET /api/deposits/{dogecoinvm-address}</code></h3>
+<p>Deposits made for a DogecoinVM address, and where each one is.</p>
+<pre class="json"><code>[
+  { &quot;txid&quot;: &quot;959f7afe…b68b&quot;, &quot;vout&quot;: 0, &quot;amount&quot;: &quot;1.00000000&quot;,
+    &quot;confirmations&quot;: 1, &quot;required&quot;: 1, &quot;status&quot;: &quot;credited&quot;,
+    &quot;creditTxid&quot;: &quot;27ca64c0…a1e3&quot;, &quot;credited&quot;: &quot;0.99000000&quot; },
+  { &quot;txid&quot;: &quot;1f3cb18e…b7a9&quot;, &quot;vout&quot;: 1, &quot;amount&quot;: &quot;150.00000000&quot;,
+    &quot;confirmations&quot;: 40, &quot;required&quot;: 20, &quot;status&quot;: &quot;held&quot;,
+    &quot;reason&quot;: &quot;above the maximum deposit&quot; }
+]</code></pre>
+<p><code>status</code> is <code>confirming</code>,
+<code>crediting</code> (enough confirmations; credited within a few
+seconds), <code>waiting_for_capacity</code>, <code>credited</code>,
+<code>held</code> (with a <code>reason</code>) or <code>refunded</code>
+(with <code>refundTxid</code>).</p>
+<h3 id="withdrawing-a-payment-into-the-reserve">Withdrawing: a payment
+into the reserve</h3>
+<p>A withdrawal is an ordinary DogecoinVM transaction that pays DOGE
+into <code>reserveAddress</code> and names the Dogecoin address to pay,
+in its <strong>only</strong> <code>OP_RETURN</code> output:</p>
+<div class="table-wrap"><table class="fees-table">
+<thead>
+<tr>
+<th>Output</th>
+<th>Script</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Payment</td>
+<td>the amount (at least <code>minPegOut</code>) to
+<code>reserveAddress</code> (P2SH)</td>
+</tr>
+<tr>
+<td>Tag</td>
+<td><code>OP_RETURN</code> pushing 25 bytes: <code>"DVMO"</code> (ASCII)
+‖ <code>type</code> (1 byte: <code>0x00</code> P2PKH, <code>0x01</code>
+P2SH) ‖ the 20-byte hash160 of the <strong>Dogecoin</strong> destination
+address</td>
+</tr>
+<tr>
+<td>Change</td>
+<td>back to your own address, as usual</td>
+</tr>
+</tbody>
+</table></div>
+<p>The bridge pays the Dogecoin address <code>amount − dogeFee</code>.
+Rules:</p>
+<ul>
+<li>Exactly one <code>OP_RETURN</code> output; with none, or two, the
+payment isn't a withdrawal and isn't paid out (it's held as unclaimed on
+DogecoinVM).</li>
+<li>Below <code>minPegOut</code>, it isn't paid out either.</li>
+<li>The Dogecoin destination can't be the bridge's own
+<code>pegAddress</code>.</li>
+<li>The payout goes out once the payment is final on DogecoinVM
+(normally within seconds), and arrives with Dogecoin's usual block
+times.</li>
+</ul>
+<p>Example tag for withdrawing to the made-up
+<code>D5R2B6TsTmVihS3WLQMwbpfSsCV9WeqE4v</code> (hash160
+<code>0303…03</code>):</p>
+<pre><code>6a 19 44564d4f 00 0303030303030303030303030303030303030303
+OP_RETURN, push 25: &quot;DVMO&quot;, P2PKH, hash160</code></pre>
+<h3
+id="get-apipegoutdogecoinvm-txid"><code>GET /api/pegout/{dogecoinvm-txid}</code></h3>
+<p>A withdrawal's progress, by the txid of the DogecoinVM payment.</p>
+<pre class="json"><code>{ &quot;status&quot;: &quot;paid&quot;, &quot;amount&quot;: &quot;2.00000000&quot;, &quot;pays&quot;: &quot;1.90000000&quot;,
+  &quot;to&quot;: &quot;D5R2B6TsTmVihS3WLQMwbpfSsCV9WeqE4v&quot;,
+  &quot;paymentTxid&quot;: &quot;1f3cb18e…b7a9&quot;, &quot;paymentConfirmations&quot;: 4 }</code></pre>
+<p><code>status</code> is <code>pending</code> (being paid),
+<code>paid</code> (with the Dogecoin <code>paymentTxid</code> and its
+confirmations), or <code>unknown</code> (not final on DogecoinVM yet, or
+not a valid withdrawal).</p>
+<hr />
+<h2 id="the-dogecoin-side-of-a-wallet">The Dogecoin side of a
+wallet</h2>
+<p>The site also serves a user's <strong>Dogecoin</strong> (mainnet)
+balance, so a light wallet needs no Dogecoin node. Addresses must be
+registered first.</p>
+<h3 id="post-apidogewatch"><code>POST /api/doge/watch</code></h3>
+<p>Start indexing a Dogecoin address: <code>{"address": "D…"}</code> →
+<code>{"address": "D…", "watchedFrom": 6400000}</code>. Payments are
+found from <code>watchedFrom</code> onwards; import older ones with
+<code>/api/doge/import</code>.</p>
+<h3
+id="get-apidogeaddressaddress"><code>GET /api/doge/address/{address}</code></h3>
+<pre class="json"><code>{
+  &quot;address&quot;: &quot;D5EQRCnPMXmRvUoZwC7gu7fYspean3PQ9a&quot;,
+  &quot;confirmed&quot;: &quot;5.00000000&quot;,
+  &quot;pending&quot;: &quot;0.00000000&quot;,
+  &quot;utxos&quot;: [ { &quot;txid&quot;: &quot;1f3cb18e…b7a9&quot;, &quot;vout&quot;: 0, &quot;value&quot;: &quot;500000000&quot;,
+               &quot;script&quot;: &quot;76a914…88ac&quot;, &quot;confirmations&quot;: 6 } ],
+  &quot;history&quot;: [ { &quot;txid&quot;: &quot;1f3cb18e…b7a9&quot;, &quot;net&quot;: &quot;5.00000000&quot;, &quot;confirmations&quot;: 6, &quot;time&quot;: 1791008000 } ],
+  &quot;watchedFrom&quot;: 6400000,
+  &quot;indexedTo&quot;: 6400367
+}</code></pre>
+<p>404 <code>address is not registered</code> until
+<code>/api/doge/watch</code>; 503 while the site's Dogecoin node is
+catching up.</p>
+<h3 id="post-apidogeimport"><code>POST /api/doge/import</code></h3>
+<p>Add a payment made before the address was registered:
+<code>{"address": "D…", "txid": "…"}</code> →
+<code>{"imported": 1}</code>.</p>
+<h3
+id="get-apidogerawtxtxid-and-post-apidogetx"><code>GET /api/doge/rawtx/{txid}</code>
+and <code>POST /api/doge/tx</code></h3>
+<p>The Dogecoin equivalents of <code>/api/rawtx</code> and
+<code>/api/tx</code>: fetch a Dogecoin transaction's hex (to check what
+you spend), and broadcast a signed Dogecoin transaction
+(<code>{"hex": …}</code> → <code>{"txid": …}</code>, same 400/502
+rules).</p>
+<hr />
+<h2 id="json-rpc-rpc">JSON-RPC: <code>/rpc</code></h2>
+<p>The DogecoinVM node's own JSON-RPC (btcd, Bitcoin Core style),
+through a <strong>limited</strong> login whose username and password are
+both <code>public</code>:</p>
+<pre class="sh"><code>curl -s -u public:public https://metaldoge.com/rpc -H &#39;content-type: application/json&#39; \
+  -d &#39;{&quot;jsonrpc&quot;:&quot;1.0&quot;,&quot;id&quot;:1,&quot;method&quot;:&quot;getblockcount&quot;,&quot;params&quot;:[]}&#39;</code></pre>
+<pre class="json"><code>{&quot;result&quot;: 51, &quot;error&quot;: null, &quot;id&quot;: 1}</code></pre>
+<p>The limited login may call: <code>getbestblockhash</code>,
+<code>getblock</code>, <code>getblockcount</code>,
+<code>getblockhash</code>, <code>getblockheader</code>,
+<code>getchaintips</code>, <code>getinfo</code>,
+<code>getrawmempool</code>, <code>getrawtransaction</code>,
+<code>gettxout</code>, <code>searchrawtransactions</code> (the node
+keeps an address index), <code>sendrawtransaction</code>,
+<code>decoderawtransaction</code>, <code>decodescript</code>,
+<code>createrawtransaction</code>, <code>estimatefee</code>,
+<code>validateaddress</code>, <code>verifymessage</code>,
+<code>getcurrentnet</code>, <code>getdifficulty</code>,
+<code>getnettotals</code>, <code>uptime</code>, <code>version</code>,
+<code>help</code> and btcd's notification methods. Wallet and
+node-administration methods are refused.</p>
+<hr />
+<h2 id="build-a-wallet-in-5-steps">Build a wallet in 5 steps</h2>
+<ol type="1">
+<li><p><strong>Make the key on the device.</strong> Use any Dogecoin
+library (for example libdogecoin, or a Bitcoin library with Dogecoin's
+mainnet parameters: P2PKH 30, P2SH 22, WIF 158, BIP44 coin type 3). A
+compressed secp256k1 key gives one <code>D…</code> address, valid on
+<strong>both</strong> Dogecoin and DogecoinVM. Back the key up; nobody
+can recover it.</p></li>
+<li><p><strong>Check the network.</strong> <code>GET /api/info</code>:
+refuse to continue unless <code>chainID</code> is
+<code>2hFCfzdMmfXBxYgvvdL7BYiJAxdejyn4AksMYUM2eM5gN7Xrjy</code> and
+<code>dogecoinvmNetwork</code> is <code>dogecoinvm</code>.</p></li>
+<li><p><strong>Read the balance.</strong>
+<code>GET /api/address/{address}</code> for DogecoinVM (and
+<code>/api/doge/watch</code> + <code>/api/doge/address</code> for
+Dogecoin). For each UTXO you will spend,
+<code>GET /api/rawtx/{txid}</code>, check the hex hashes to
+<code>txid</code>, and take the value and script from that
+output.</p></li>
+<li><p><strong>Build and sign</strong> a standard legacy transaction:
+version 1, P2PKH inputs signed with <code>SIGHASH_ALL</code>, low-S DER
+signatures, compressed public keys. DogecoinVM's relay rules are
+Dogecoin Core 1.14's:</p>
+<ul>
+<li>fee at least <strong>0.001 DOGE per kB</strong> (100 koinu per byte)
+of the signed size;</li>
+<li>each spendable output below 0.01 DOGE adds 0.01 DOGE to the required
+fee; an output below 0.001 DOGE is non-standard;</li>
+<li>at most one <code>OP_RETURN</code>; no SegWit.</li>
+</ul>
+<p>(<code>vmFee</code> and <code>dogeFee</code> in
+<code>/api/info</code> are the <em>bridge's</em> charges on credits and
+payouts, not network fees.)</p></li>
+<li><p><strong>Broadcast</strong> with <code>POST /api/tx</code> (or
+<code>sendrawtransaction</code> on <code>/rpc</code>). Final in under a
+second; <code>/api/events</code> tells you when the block
+lands.</p></li>
+</ol>
+<p><strong>Bridge in:</strong> <code>POST /api/deposit-address</code>
+with the user's DogecoinVM address, check the redeem script as above,
+and show the deposit address (it's a Dogecoin address: say so). Track it
+with <code>/api/deposits/{address}</code>. <strong>Bridge out:</strong>
+pay at least <code>minPegOut</code> to <code>reserveAddress</code> with
+the <code>DVMO</code> tag naming the Dogecoin address; track it with
+<code>/api/pegout/{txid}</code>.</p>
+<h2 id="security">Security</h2>
+<ul>
+<li><strong>Never send a private key, seed or WIF to any
+server</strong>, ours included. Nothing here needs one.</li>
+<li><strong>Pin the chain.</strong> Check <code>chainID</code> (and the
+network names) from <code>/api/info</code> before signing, and keep the
+expected value in your app rather than trusting whatever a server
+returns.</li>
+<li><strong>Dogecoin and DogecoinVM use the same addresses.</strong> A
+<code>D…</code> address doesn't say which chain it's on, so:
+<ul>
+<li>label every balance, address field and confirmation screen with its
+chain;</li>
+<li>never send DOGE on Dogecoin to a DogecoinVM address expecting it to
+bridge: it lands on Dogecoin, at the same key (recoverable with that
+key, but not bridged). Only the <strong>deposit address</strong>
+bridges;</li>
+<li>keep the two chains' UTXOs apart, and fetch each from its own
+endpoints, so a server can't present one chain's coins as the
+other's;</li>
+<li>for a withdrawal, show the Dogecoin address decoded from your own
+<code>DVMO</code> tag before signing.</li>
+</ul></li>
+<li><strong>Verify what a server tells you:</strong> input values from
+raw transactions, deposit addresses from the redeem script, withdrawal
+destinations from the tag.</li>
+<li><strong>Alpha:</strong> the bridge's signers are operator-held
+during the alpha, and amounts are capped. See the <a
+href="/terms">terms</a> and the <a
+href="/roadmap">roadmap</a>.</li>
+<li>Report vulnerabilities privately via <a
+href="https://github.com/MetalBlockchain/dogecoin-vm/security/advisories/new">GitHub
+security advisories</a>.</li>
+</ul>
+  </main>
+{{end}}
