@@ -12,7 +12,7 @@ locally; it doesn't validate, hold any bridge key or need any stake.
 | Subnet (L1) ID | `2t2zEB1T3mNUE2WoheMFMjfhAvQJawtgiwnKPJz2NsFk7FDgyN` |
 | DogecoinVM chain ID | `2hFCfzdMmfXBxYgvvdL7BYiJAxdejyn4AksMYUM2eM5gN7Xrjy` |
 | VM ID (plugin file name) | `mEUwHwfd8UTHf23UYkQxHvy1n1EGwWieXQnjmtzSryJRZckzu` |
-| Source | https://github.com/MetalBlockchain/dogecoin-vm (default branch `dogecoin`) |
+| Plugin release | **v0.1.1**, the build mainnet runs (https://github.com/MetalBlockchain/dogecoin-vm, tag `v0.1.1`) |
 
 ## What you need
 
@@ -34,11 +34,12 @@ sudo install -m 755 metalgo/build/metalgo /usr/local/bin/metalgo
 
 ## 2. Build the DogecoinVM plugin
 
-The plugin file must be named after the VM ID and sit in metalgo's plugin
-directory.
+Build the release tag the network runs (v0.1.1); newer commits on the
+default branch may not be deployed yet. The plugin file must be named after
+the VM ID and sit in metalgo's plugin directory.
 
 ```sh
-git clone https://github.com/MetalBlockchain/dogecoin-vm
+git clone --branch v0.1.1 https://github.com/MetalBlockchain/dogecoin-vm
 cd dogecoin-vm
 go run ./scripts/vm-id-generator.go       # prints mEUwHwfd8UTHf23UYkQxHvy1n1EGwWieXQnjmtzSryJRZckzu
 sudo install -d /var/lib/metal/plugins
