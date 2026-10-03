@@ -406,7 +406,9 @@ func TestFenceSpendsEveryCoinTheSignerSees(t *testing.T) {
 	require.NoError(err)
 	require.Greater(len(inputs), 2)
 	request := func(in []utxo) signRequest {
-		tx, err := h.b.buildFence(chainDogecoin, in, fenceFee(h.b.dogeFee, len(in)))
+		size, err := h.b.fenceSizeOf(s, chainDogecoin, in)
+		require.NoError(err)
+		tx, err := h.b.buildFence(chainDogecoin, in, fenceFee(chainDogecoin, h.b.dogeFee, size))
 		require.NoError(err)
 		return signRequest{Chain: chainDogecoin, Tx: encodeTx(tx), Action: action{Kind: actionFence, Deposit: in[0].outPoint.String()}}
 	}

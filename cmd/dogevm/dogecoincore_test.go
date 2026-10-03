@@ -587,8 +587,9 @@ func TestFenceOnDogecoinCore(t *testing.T) {
 // TestStuckFenceIsReplacedOnDogecoinCore (round 5, U5): a fence Dogecoin
 // Core dropped from its mempool, or one too cheap to mine, is replaced
 // after -fence-bump-after by one spending the same coins and paying one
-// fence fee more; Core takes the replacement (BIP125), and at most
-// maxFenceBumps are paid.
+// fence fee more; Core takes the replacement (BIP125). Round 6, V6: the
+// series isn't cut off at a fixed count (round 5 stopped at four); the
+// signers' half-surplus share is what bounds it.
 func TestStuckFenceIsReplacedOnDogecoinCore(t *testing.T) {
 	require := require.New(t)
 	n := startDogecoin(t)
@@ -613,16 +614,21 @@ func TestStuckFenceIsReplacedOnDogecoinCore(t *testing.T) {
 	require.NoError(err)
 	t2, ok := s.unconfirmed[second]
 	require.True(ok)
-	step := fenceFee(h.b.dogeFee, len(t2.tx.TxIn))
+	var inputs []utxo
+	for _, in := range t2.tx.TxIn {
+		inputs = append(inputs, s.pendingCoins[in.PreviousOutPoint])
+	}
+	size, err := h.b.fenceSizeOf(s, chainDogecoin, inputs)
+	require.NoError(err)
+	step := fenceFee(chainDogecoin, h.b.dogeFee, size)
 	require.Equal(2*step, fenceFeeOf(s, chainDogecoin, t2.tx), "one fence fee more")
-	for range maxFenceBumps - 1 {
+	last := second
+	for range 4 { // a fifth replacement: round 5 refused it
 		time.Sleep(1100 * time.Millisecond)
-		_, err = h.b.sendFence(chainDogecoin, recorded)
+		last, err = h.b.sendFence(chainDogecoin, recorded)
 		require.NoError(err)
 	}
-	time.Sleep(1100 * time.Millisecond)
-	_, err = h.b.sendFence(chainDogecoin, recorded)
-	require.ErrorContains(err, "replaced 4 times already")
+	require.True(n.inMempool(last), "Core took the sixth fence")
 	n.mine(1)
 	s, err = h.b.load()
 	require.NoError(err)

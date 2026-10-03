@@ -71,16 +71,48 @@ func maxFenceInputs(chain string) int {
 	return 400
 }
 
-// maxFenceBumps is how many times a stuck Dogecoin fence may be replaced,
-// each paying one more fence fee.
-const maxFenceBumps = 4
+// fenceSize is a fence's size in bytes once signed, from the redeem script
+// of each input and the number of signatures each needs: P2SH multisig
+// inputs (OP_0, the signatures, the redeem script), one output to the set's
+// script and the tag output.
+func fenceSize(redeems [][]byte, required int) int64 {
+	size := int64(4 + varIntLen(len(redeems)) + 1 + 4) // version, input count, output count, locktime
+	for _, redeem := range redeems {
+		script := 1 + required*(1+73) + pushLen(len(redeem)) + len(redeem)
+		size += int64(36 + varIntLen(script) + script + 4)
+	}
+	size += 8 + 1 + 23            // to the set's P2SH script
+	size += 8 + 1 + 2 + 4 + 36    // OP_RETURN with the tag and an outpoint
+	return size
+}
 
-// fenceFee is a fence's fee: base (the chain's per-transaction fee) for
-// each started 10 kB of its estimated size, at least once. Both chains
-// relay at 0.001 DOGE per kB, so it pays at least ten times that; on
-// DogecoinVM it is never less than -vm-fee.
-func fenceFee(base int64, inputs int) int64 {
-	size := int64(10 + 300*inputs + 80)
+func varIntLen(n int) int {
+	switch {
+	case n < 0xfd:
+		return 1
+	case n <= 0xffff:
+		return 3
+	}
+	return 5
+}
+
+func pushLen(n int) int {
+	switch {
+	case n < 76:
+		return 1
+	case n <= 0xff:
+		return 2
+	}
+	return 3
+}
+
+// fenceFee is a fence's fee for its signed size. On Dogecoin: base (the
+// -doge-fee) for each started 10 kB, at least once. On DogecoinVM, the
+// rule all three bridges share: max(vmFee, ceil(size * vmFee / 250)).
+func fenceFee(chain string, base, size int64) int64 {
+	if chain == chainDogecoinVM {
+		return max(base, (size*base+249)/250)
+	}
 	return base * max(1, (size+9_999)/10_000)
 }
 
@@ -412,13 +444,15 @@ func recordedSet(coins []string) map[wire.OutPoint]bool {
 	return set
 }
 
-// fenceInputs is what a new fence on chain spends for a cutover recording
-// recorded: the lineage's tip first (when the lineage has one), then every
-// confirmed recorded coin no transaction spends, oldest first, at most
-// maxFenceInputs. It fails if that spends no recorded coin a confirmed
-// transaction doesn't already spend (nothing to do), or while a
-// transaction of the set other than a fence is pending there (a fence
-// would conflict with it).
+// fenceInputs is what a new fence on chain spends: the lineage's tip
+// first (when the lineage has one), then every confirmed coin of the set
+// there that nothing spends, oldest first, at most maxFenceInputs. The
+// inputs come from the chain, not from recorded, so two signers whose
+// cutovers began at different times build the same fence (Round 6, V5).
+// recorded (this signer's coins) decides only whether a fence is needed:
+// it fails if the fence would spend none of them, or while a transaction
+// of the set other than a fence is pending there (a fence would conflict
+// with it).
 func (s *pegState) fenceInputs(chain string, recorded map[wire.OutPoint]bool) ([]utxo, error) {
 	var anchor *utxo
 	var free []utxo
@@ -450,19 +484,10 @@ func (s *pegState) fenceInputs(chain string, recorded map[wire.OutPoint]bool) ([
 		anchor = nil // spent in the mempool: by a fence, which a replacement re-spends
 	}
 	var rest []utxo
-	useful := false
 	for _, u := range free {
-		if !recorded[u.outPoint] || anchor != nil && u.outPoint == anchor.outPoint {
-			continue
+		if anchor == nil || u.outPoint != anchor.outPoint {
+			rest = append(rest, u)
 		}
-		rest = append(rest, u)
-		useful = true
-	}
-	if anchor != nil && recorded[anchor.outPoint] {
-		useful = true
-	}
-	if !useful {
-		return nil, fmt.Errorf("no recorded coin on %s is left for a fence to spend", chain)
 	}
 	sort.Slice(rest, func(i, j int) bool {
 		if rest[i].confirmations != rest[j].confirmations {
@@ -478,7 +503,12 @@ func (s *pegState) fenceInputs(chain string, recorded map[wire.OutPoint]bool) ([
 	if n := maxFenceInputs(chain); len(inputs) > n {
 		inputs = inputs[:n] // the rest in the next fence
 	}
-	return inputs, nil
+	for _, u := range inputs {
+		if recorded[u.outPoint] {
+			return inputs, nil
+		}
+	}
+	return nil, fmt.Errorf("no recorded coin on %s is left for a fence to spend", chain)
 }
 
 // fenceBase is the fee a fence fee is a multiple of on chain.
@@ -564,11 +594,13 @@ func (b *bridge) nextFence(s *pegState, chain string, recorded map[wire.OutPoint
 			}
 			inputs = append(inputs, c)
 		}
-		step := fenceFee(base, len(inputs))
-		fee := fenceFeeOf(s, chain, pending.tx) + step
-		if fee > (1+maxFenceBumps)*step {
-			return nil, nil, 0, fmt.Errorf("the pending fence was replaced %d times already: wait for it", maxFenceBumps)
+		// One more fence fee each time: what bounds the series is the
+		// signer's half-surplus share (feeRoom), checked on every one.
+		size, err := b.fenceSizeOf(s, chain, inputs)
+		if err != nil {
+			return nil, nil, 0, err
 		}
+		fee := fenceFeeOf(s, chain, pending.tx) + fenceFee(chain, base, size)
 		tx, err := b.buildFence(chain, inputs, fee)
 		return tx, inputs, fee, err
 	}
@@ -579,17 +611,32 @@ func (b *bridge) nextFence(s *pegState, chain string, recorded map[wire.OutPoint
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	fee := fenceFee(base, len(inputs))
+	size, err := b.fenceSizeOf(s, chain, inputs)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	fee := fenceFee(chain, base, size)
 	tx, err := b.buildFence(chain, inputs, fee)
 	return tx, inputs, fee, err
 }
 
+// fenceSizeOf is the signed size of a fence spending inputs on chain.
+func (b *bridge) fenceSizeOf(s *pegState, chain string, inputs []utxo) (int64, error) {
+	redeems, _, err := b.fenceRedeems(s, chain, inputs)
+	if err != nil {
+		return 0, err
+	}
+	return fenceSize(redeems, b.signers.Required), nil
+}
+
 // signersCutover asks the remote signers for the coins their cutovers
-// still record on chain, and returns the list at least Required of them
-// share: a fence built from any other list is refused by too many.
+// still record on chain and returns their union. Fence inputs come from
+// the chain, so signers whose records differ (one began before a deposit
+// arrived, one after) still build the same fence; the union only says
+// whether any of them still needs one (Round 6, V5).
 func (b *bridge) signersCutover(chain string) (map[wire.OutPoint]bool, error) {
-	counts := map[string]int{}
-	lists := map[string][]string{}
+	union := map[wire.OutPoint]bool{}
+	reporting := 0
 	var failures []string
 	for _, r := range b.cosigners {
 		var st struct {
@@ -603,27 +650,18 @@ func (b *bridge) signersCutover(chain string) (map[wire.OutPoint]bool, error) {
 		if !in {
 			continue
 		}
-		sort.Strings(coins)
-		key := strings.Join(coins, ",")
-		counts[key]++
-		lists[key] = coins
-	}
-	best, most := "", 0
-	for key, n := range counts {
-		if n > most || n == most && key < best {
-			best, most = key, n
+		reporting++
+		for op := range recordedSet(coins) {
+			union[op] = true
 		}
 	}
-	if most == 0 {
+	if reporting == 0 {
 		if len(failures) > 0 {
 			return nil, fmt.Errorf("no signer reports a cutover on %s (%s)", chain, strings.Join(failures, "; "))
 		}
 		return nil, fmt.Errorf("no signer is in a cutover on %s: no fence is needed there", chain)
 	}
-	if most < b.signers.Required {
-		return nil, fmt.Errorf("only %d signer(s) record the same coins on %s, %d needed: compare their signer-log status", most, chain, b.signers.Required)
-	}
-	return recordedSet(lists[best]), nil
+	return union, nil
 }
 
 // proposeFence proposes and sends the next fence on chain (or the
