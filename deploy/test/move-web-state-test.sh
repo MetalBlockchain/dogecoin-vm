@@ -21,6 +21,7 @@ setup() {
   [[ ${1:-} == secrets ]] && idx=$STATE/secrets/dogeindex
   mkdir -p "$STATE/secrets" "$idx" "$UNITDIR" "$T/bin" "$T/active"
   echo '["aa"]' >"$STATE/secrets/deposits.json"
+  echo '{"unsettled":1}' >"$STATE/secrets/dogecoin-unsettled.json"
   echo '{}' >"$(dirname "$idx")/finality.json"
   echo db >"$idx/CURRENT"
   local reg="-deposits $STATE/secrets/deposits.json -confirmations 20"
@@ -65,6 +66,7 @@ expect 'grep -q -- "-deposits $(W)/deposits.json -confirmations" "$UNITDIR/dogev
 expect 'grep -q -- "-doge-index $(W)/dogeindex -listen" "$UNITDIR/dogevm-web-main.service"' "web unit's index updated"
 expect 'grep -q -- "-finality $(W)/finality.json" "$UNITDIR/dogevm-web-main.service"' "web unit's finality set"
 expect '! grep -q secrets/deposits "$UNITDIR"/*.service' "no unit names the old registry"
+expect '[[ -f $(W)/dogecoin-unsettled.json && ! -e $STATE/secrets/dogecoin-unsettled.json ]]' "the unsettled-transaction record moves with the registry (round 6, V2)"
 code=$(run)
 expect '[[ $code == 0 ]] && grep -q "already done" "$T/out"' "running it again changes nothing"
 
