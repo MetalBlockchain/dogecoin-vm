@@ -81,8 +81,8 @@ func fenceSize(redeems [][]byte, required int) int64 {
 		script := 1 + required*(1+73) + pushLen(len(redeem)) + len(redeem)
 		size += int64(36 + varIntLen(script) + script + 4)
 	}
-	size += 8 + 1 + 23            // to the set's P2SH script
-	size += 8 + 1 + 2 + 4 + 36    // OP_RETURN with the tag and an outpoint
+	size += 8 + 1 + 23         // to the set's P2SH script
+	size += 8 + 1 + 2 + 4 + 36 // OP_RETURN with the tag and an outpoint
 	return size
 }
 
