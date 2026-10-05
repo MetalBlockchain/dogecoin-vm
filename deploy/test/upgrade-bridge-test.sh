@@ -198,7 +198,7 @@ expect 'grep -q ANCHORS "$VARLIB/dogevm-signer-3/signing-log.json"' "a log made 
 echo "4. a failure before the signers run rolls back; a log it made, unchanged since, goes"
 setup
 rm "$VARLIB/dogevm-signer-3/signing-log.json"
-code=$(INIT_LOGS=dogevm-signer-3 FAIL_START=dogevm-signer-1 run)
+code=$(INIT_LOGS=dogevm-signer-3 TIPS_dogevm_signer_2='{"dogecoin":"ff:0","dogecoinvm":"bb:1"}' run)
 expect '[[ $code != 0 ]]' "fails"
 expect '[[ $(version) == old ]]' "old binary back"
 expect '[[ ! -f $VARLIB/dogevm-signer-3/signing-log.json ]]' "the log it made is removed"
@@ -242,10 +242,12 @@ echo '[{"url":"http://127.0.0.1:9701","publicKey":"02ff"}]' >"$(dirname "$SET")/
 code=$(run)
 expect '[[ $code != 0 ]] && grep -q "not in the signer set" "$T/out"' "fails, says why"
 
-echo "10. a signer that won't start rolls back"
+echo "10. a signer that won't start: nothing rolls back (round 7, W2), everything paused, the bridge stopped"
 setup
 code=$(FAIL_START=dogevm-signer-2 run)
-expect '[[ $code != 0 && $(version) == old ]] && paused && all_signers_paused' "fails, old binary back, paused"
+expect '[[ $code != 0 && $(version) == new && $("$SIGNER_BIN" version) == new ]]' "fails, the new binaries stay"
+expect 'paused && all_signers_paused' "bridge and signers paused"
+expect 'grep -q "nothing is rolled back" "$T/out"' "says so"
 
 echo "11. a signer that won't stop: nothing is installed or backed up"
 setup
@@ -254,12 +256,13 @@ expect '[[ $code != 0 && $(version) == old ]]' "fails, old binary kept"
 expect 'paused && all_signers_paused' "bridge and signers paused"
 expect '[[ -z $(ls "$BACKUPS"/*/coordinator 2>/dev/null) ]]' "no backup taken while a signer could sign"
 
-echo "12. a log that changes after the backup is never rolled back"
+echo "12. partial start: signer 2 runs and signs, signer 1 won't start; nothing rolls back (round 7, W2)"
 setup
 code=$(LATE_WRITE=dogevm-signer-2 FAIL_START=dogevm-signer-1 run)
 expect '[[ $code != 0 ]]' "fails"
-expect 'grep -q SIGNED-LATE "$VARLIB/dogevm-signer-2/signing-log.json"' "the newer log is kept"
-expect 'grep -q "kept as it is" "$T/out"' "and flagged"
+expect 'grep -q SIGNED-LATE "$VARLIB/dogevm-signer-2/signing-log.json"' "the log signer 2 wrote is kept"
+expect '[[ $(version) == new && $("$SIGNER_BIN" version) == new ]]' "the new binaries stay: the old one must never follow a signature the new one gave"
+expect 'paused && all_signers_paused' "bridge and signers paused"
 
 echo "13. a signer whose nodes see another anchor line stops it"
 setup
@@ -278,7 +281,7 @@ expect 'grep -qx "$c" "$VARLIB/dogevm-signer-1/contributions.txt" && grep -qx "$
 setup
 echo "$c" >"$(dirname "$SET")/contributions.txt"
 echo "$(printf '%064d' 9):0" >"$VARLIB/dogevm-signer-1/contributions.txt"
-code=$(FAIL_START=dogevm-signer-1 run)
+code=$(TIPS_dogevm_signer_2='{"dogecoin":"ff:0","dogecoinvm":"bb:1"}' run)
 expect '[[ $code != 0 ]] && grep -q "$(printf "%064d" 9):0" "$VARLIB/dogevm-signer-1/contributions.txt"' "signer 1's own list back after a failure"
 expect '[[ ! -f $VARLIB/dogevm-signer-2/contributions.txt ]]' "and none where there was none"
 

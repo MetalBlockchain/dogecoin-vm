@@ -361,9 +361,26 @@ os.replace(tmp, path)
 PY
 fi
 
+# The point of no return comes before any signer starts (round 7, W2):
+# signers start one by one, and the first may sign a fence before a later
+# one fails, which the old binary, knowing nothing of the cutover gate,
+# must never take over from. So from here a failure rolls nothing back:
+# the new binaries and every log stay, the bridge stays stopped and every
+# signer paused, for the operator.
+ok=1
+trap - EXIT
+forward_failure() {
+  local code=$?
+  [[ $code == 0 || ${DONE:-0} == 1 ]] && return
+  echo "upgrade-bridge: failed after the point of no return: nothing is rolled back (the new binaries and every signing log stay)." >&2
+  echo "upgrade-bridge: the bridge is stopped and every signer stays paused. Fix the cause and carry on by hand (RUNBOOK.md, \"Upgrading the bridge software\"); backups are in $WORK" >&2
+  systemctl stop "$CHAIN-bridge-main" 2>/dev/null || true
+  paused_at "$SET" || as_user "$HOME_DIR/bin/$CHAIN" pause -signers "$SET" -reason "$REASON" || true
+}
+trap forward_failure EXIT
 log "starting the signers (paused)"
 since=$(date '+%Y-%m-%d %H:%M:%S')
-systemctl start "${SIGNERS[@]}" || die "couldn't start the signers"
+systemctl start "${SIGNERS[@]}" || die "couldn't start every signer"
 sleep 5
 for unit in "${SIGNERS[@]}"; do
   systemctl is-active --quiet "$unit" || die "$unit didn't start: journalctl -u $unit"
@@ -371,11 +388,6 @@ for unit in "${SIGNERS[@]}"; do
     die "$unit reports a quarantine: journalctl -u $unit"
   fi
 done
-# From here on nothing goes back: the new signers may sign a fence, and the
-# old binary knows nothing of the cutover gate. A failure leaves everything
-# paused, the bridge stopped, for the operator.
-ok=1
-trap - EXIT
 
 # The web wallet and monitor run (the site shows the pause); the bridge
 # stays stopped until every cutover is done.
@@ -450,6 +462,7 @@ if [[ -n $left ]]; then
   done
   echo "Only then start the bridge (systemctl start $CHAIN-bridge-main), read the checks and resume (RUNBOOK.md, \"Upgrading the bridge software\")."
   echo "Backups (old binaries, logs, cosigners.json, contribution lists) are in $WORK."
+  DONE=1 # an expected stop, not a failure: everything stays as it is
   exit 1
 fi
 log "every current-set signer is done with its cutover"
@@ -494,3 +507,4 @@ else
   resume_cmds
 fi
 echo "Backups (old binaries, logs, cosigners.json, contribution lists) are in $WORK."
+DONE=1
