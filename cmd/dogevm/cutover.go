@@ -71,6 +71,31 @@ func maxFenceInputs(chain string) int {
 	return 400
 }
 
+// maxFenceBytes bounds a fence's signed size (Round 7, W4). Both chains
+// refuse to relay a transaction over 100,000 bytes (400,000 weight, with no
+// witness data): a fence of 400 deposit inputs is over it, and no fee gets
+// it relayed. fenceSize already counts every signature at its largest; the
+// rest is margin.
+const maxFenceBytes = 90_000
+
+// trimToSize drops inputs from the end until the fence's signed size is
+// within maxFenceBytes (the anchor, first, always stays).
+func (b *bridge) trimToSize(s *pegState, chain string, inputs []utxo) ([]utxo, error) {
+	for len(inputs) > 1 {
+		size, err := b.fenceSizeOf(s, chain, inputs)
+		if err != nil {
+			return nil, err
+		}
+		if size <= maxFenceBytes {
+			break
+		}
+		// Shrink in proportion, then one at a time near the limit.
+		n := int(int64(len(inputs)) * maxFenceBytes / size)
+		inputs = inputs[:max(1, min(n, len(inputs)-1))]
+	}
+	return inputs, nil
+}
+
 // fenceSize is a fence's size in bytes once signed, from the redeem script
 // of each input and the number of signatures each needs: P2SH multisig
 // inputs (OP_0, the signatures, the redeem script), one output to the set's
@@ -437,6 +462,16 @@ func coinValue(s *pegState, chain string, op wire.OutPoint) (int64, bool) {
 	return t.tx.TxOut[op.Index].Value, true
 }
 
+// spendsRecorded reports whether any of inputs is in recorded.
+func spendsRecorded(inputs []utxo, recorded map[wire.OutPoint]bool) bool {
+	for _, u := range inputs {
+		if recorded[u.outPoint] {
+			return true
+		}
+	}
+	return false
+}
+
 // recordedSet is coins as a set.
 func recordedSet(coins []string) map[wire.OutPoint]bool {
 	set := map[wire.OutPoint]bool{}
@@ -614,6 +649,12 @@ func (b *bridge) nextFence(s *pegState, chain string, recorded map[wire.OutPoint
 	inputs, err := s.fenceInputs(chain, recorded)
 	if err != nil {
 		return nil, nil, 0, err
+	}
+	if inputs, err = b.trimToSize(s, chain, inputs); err != nil {
+		return nil, nil, 0, err
+	}
+	if !spendsRecorded(inputs, recorded) {
+		return nil, nil, 0, fmt.Errorf("the next %s fence (as large as relay allows) spends none of this signer's recorded coins; a later one will", chain)
 	}
 	size, err := b.fenceSizeOf(s, chain, inputs)
 	if err != nil {

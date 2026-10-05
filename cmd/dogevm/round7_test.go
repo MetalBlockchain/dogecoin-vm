@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/mempool"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/txscript"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -76,4 +82,49 @@ func TestShallowCheapFenceKeepsTheCostlierFeeReserved(t *testing.T) {
 	log.Actions["fence:dogecoin:1"].Txs[0].Chain = chainDogecoinVM
 	log.Actions["fence:dogecoin:1"].Txs[1].Chain = chainDogecoinVM
 	require.Zero(log.unseenFees(nil, vm, none, ""), "a DogecoinVM block is final")
+}
+
+// TestVMFenceStaysRelayable (W4, Codex r7 #4): a fence's signed size is
+// bounded so DogecoinVM's mempool (btcd's standardness, 400,000 weight)
+// takes it. A full 400-input fence of the reserve's 2-of-3 coins, signed,
+// is refused; trimToSize keeps the next one under the limit, and that one
+// passes the plugin's own policy check with real-size signatures.
+func TestVMFenceStaysRelayable(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	b := h.b
+	coins := make([]utxo, 400)
+	for i := range coins {
+		coins[i] = utxo{outPoint: wire.OutPoint{Hash: chainhash.Hash{byte(i), byte(i >> 8), 7}, Index: uint32(i)},
+			value: doge, pkScript: b.signers.pkScript()}
+	}
+	s := &pegState{}
+	signed := func(inputs []utxo) *btcutil.Tx {
+		size, err := b.fenceSizeOf(s, chainDogecoinVM, inputs)
+		require.NoError(err)
+		tx, err := b.buildFence(chainDogecoinVM, inputs, fenceFee(chainDogecoinVM, b.vmFee, size))
+		require.NoError(err)
+		sig := bytes.Repeat([]byte{0x30}, 72) // a DER signature's size with its hash type
+		for _, in := range tx.TxIn {
+			sb := txscript.NewScriptBuilder().AddOp(txscript.OP_0)
+			for range b.signers.Required {
+				sb.AddData(sig)
+			}
+			in.SignatureScript, err = sb.AddData(b.signers.redeemScript).Script()
+			require.NoError(err)
+		}
+		require.LessOrEqual(int64(tx.SerializeSize()), size, "the estimate covers the signed size")
+		return btcutil.NewTx(tx)
+	}
+	check := func(tx *btcutil.Tx) error {
+		return mempool.CheckTransactionStandard(tx, 1, time.Now(), 0, wire.TxVersion)
+	}
+	require.ErrorContains(check(signed(coins)), "weight", "400 inputs: over the limit, whatever the fee")
+
+	trimmed, err := b.trimToSize(s, chainDogecoinVM, coins)
+	require.NoError(err)
+	require.Less(len(trimmed), len(coins))
+	require.Equal(coins[0].outPoint, trimmed[0].outPoint, "the anchor stays first")
+	require.NoError(check(signed(trimmed)), "%d inputs", len(trimmed))
+	require.Error(check(signed(coins[:len(trimmed)+40])), "well past the trimmed size is refused")
 }
