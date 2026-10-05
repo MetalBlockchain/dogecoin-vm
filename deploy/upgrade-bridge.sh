@@ -47,7 +47,7 @@
 #      bridge unit's own flags (signers sign them while paused, and nothing
 #      else), every FENCE_WAIT_POLL seconds (default 60), for up to
 #      FENCE_WAIT minutes (default 360; 0: one round). If that time runs
-#      out, stop with the bridge stopped and everything paused (exit 1);
+#      out, stop with the bridge stopped and everything paused (exit 4);
 #  11. start the bridge, take fresh health, and check the peg is solvent.
 #
 # It resumes only if every cutover is done, RESUME=1, the bridge wasn't
@@ -56,9 +56,18 @@
 # paused. Otherwise read the checks, then resume the bridge and each signer
 # (the commands are printed).
 #
-# On any failure after step 2 and before step 9, the previous binaries, cosigners.json and
-# contribution lists go back, everything is started again, and the bridge
-# and signers stay paused. Signing logs never go back: a log only grows,
+# Exit status (round 8, X5): 0 done; 2 a node's coverage (or a signer's
+# recorded cutover) differs from the coordinator's; 3 not ready to adopt
+# (dogevm inventory: a coin not rootDepth deep, a conflicted transaction of
+# the set, too little surplus); 4 the cutover didn't finish within
+# FENCE_WAIT (expected; carry on with the printed fence commands); 1
+# anything else.
+#
+# On any failure after step 2 and before step 9 (exits 1-3), the previous
+# binaries, cosigners.json and contribution lists go back, and the old
+# signers and coordinator units are started again, still paused (the pause
+# files stay): the old software runs, signing nothing. Logs this run made
+# are removed if nothing changed them. Signing logs never go back: a log only grows,
 # and an older copy over a newer one would forget a signature. A log this
 # run created is removed only if nothing changed it since; any other log is
 # left as it is.
@@ -81,6 +90,10 @@ REASON=${REASON:-"Upgrading the bridge software. Funds are safe; deposits and wi
 
 log() { printf '\n== %s\n' "$*"; }
 die() { echo "upgrade-bridge: $*" >&2; exit 1; }
+# die_code CODE MESSAGE: as die, with an exit status that says which stop
+# it was (round 8, X5): 2 coverage differs, 3 not ready to adopt
+# (inventory), 4 a cutover didn't finish in FENCE_WAIT. Anything else is 1.
+die_code() { local code=$1; shift; echo "upgrade-bridge: $*" >&2; exit "$code"; }
 as_user() { runuser -u "$CHAIN" -- env HOME="$HOME_DIR" PATH="/usr/local/go/bin:$PATH" GOTOOLCHAIN=local "$@"; }
 # as_signer UNIT CMD...: runs CMD as a signer's user, with its node settings.
 as_signer() {
@@ -272,9 +285,20 @@ for chain in sorted(set(want["coins"]) | set(got["coins"])):
 print("; ".join(out))
 PY
 )
-  [[ -z $diff ]] || die "$unit doesn't cover what the coordinator covers: $diff. Make every registry and wallet the same (register the same addresses, rescan) and run again; nothing was started (RUNBOOK.md, \"First upgrade of the live bridge\")"
+  [[ -z $diff ]] || die_code 2 "$unit doesn't cover what the coordinator covers: $diff. Make every registry and wallet the same (register the same addresses, rescan) and run again; the previous binaries are back, paused (RUNBOOK.md, \"First upgrade of the live bridge\")"
   echo "$unit: same coverage"
 done
+
+log "inventory"
+# Nothing is adopted while a coin of the set isn't rootDepth deep, a set
+# transaction is conflicted short of rootDepth (its outputs could come
+# back), or the surplus doesn't cover twice the fences' fees and headroom
+# (round 8, X5; RUNBOOK.md, "First upgrade of the live bridge").
+inv=$(as_coordinator "$HOME_DIR/bin/$CHAIN" inventory -require-ready -signers "$SET" ${COORD_DEPOSITS:+-deposits "$COORD_DEPOSITS"} 2>&1) ||
+  die_code 3 "not ready to adopt: $(python3 -c 'import json,sys
+try: print("; ".join(json.loads(sys.argv[1][:sys.argv[1].rindex("}")+1])["problems"]))
+except Exception: print(sys.argv[1])' "$inv"). The previous binaries are back, paused"
+echo "inventory: ready ($(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print({c: len(v["coins"]) for c, v in d["chains"].items()}, "coins; surplus", d["surplus"], "of", d["needed"], "needed")' "$inv"))"
 
 log "signing logs"
 for unit in "${SIGNERS[@]}"; do
@@ -349,6 +373,28 @@ print(f"{unit}: anchors lead to the coordinator's tips")
 PY
   fi
   LOG_MADE[$unit]=$(hash_of "${SLOG[$unit]}") # as this run left it
+done
+
+# Right after the cutovers started (round 8, X5): every signer in a cutover
+# must have recorded exactly what the coordinator covers now; a payment one
+# wallet saw in between, or a difference coverage missed, stops here.
+now=$(as_coordinator "$HOME_DIR/bin/$CHAIN" coverage -signers "$SET" ${COORD_DEPOSITS:+-deposits "$COORD_DEPOSITS"}) || die "coverage on the coordinator failed"
+for unit in "${SIGNERS[@]}"; do
+  st=$(signer_log "$unit" status)
+  in_cutover "$st" || continue
+  diff=$(python3 - "$now" "$st" <<'PY'
+import json, sys
+want, st = json.loads(sys.argv[1])["coins"], json.loads(sys.argv[2]).get("cutoverLeft") or {}
+out = []
+for chain in sorted(set(want) | set(st)):
+    w, g = set(want.get(chain) or []), set(st.get(chain) or [])
+    if g - w: out.append(f"{chain}: recorded only here: {sorted(g - w)[:5]}")
+    if w - g: out.append(f"{chain}: not recorded here: {sorted(w - g)[:5]}")
+print("; ".join(out))
+PY
+)
+  [[ -z $diff ]] || die_code 2 "$unit's cutover recorded something other than what the coordinator covers: $diff; stopped before any signer started (RUNBOOK.md, \"First upgrade of the live bridge\")"
+  echo "$unit: recorded what the coordinator covers"
 done
 
 log "cosigners.json"
@@ -508,7 +554,7 @@ if [[ -n $left ]]; then
   echo "Only then start the bridge (systemctl start $CHAIN-bridge-main), read the checks and resume (RUNBOOK.md, \"Upgrading the bridge software\")."
   echo "Backups (old binaries, logs, cosigners.json, contribution lists) are in $WORK."
   DONE=1 # an expected stop, not a failure: everything stays as it is
-  exit 1
+  exit 4
 fi
 log "every current-set signer is done with its cutover"
 

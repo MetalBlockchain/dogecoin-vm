@@ -36,6 +36,8 @@ case \$cmd in
   version) echo "$2" ;;
   coverage) set=\$(arg -signers "\$@"); u=\$(unit_of "\$set"); v=COVERAGE_\${u//-/_}
     d='{"registry":"r1","registered":2,"coins":{"dogecoin":["aa:0"],"dogecoinvm":["bb:1"]}}'; echo "\${!v:-\$d}" ;;
+  inventory) if [[ -n \${INVENTORY_PROBLEM:-} ]]; then echo "{\"problems\":[\"\$INVENTORY_PROBLEM\"],\"ready\":false}"; echo "not ready" >&2; exit 1; fi
+    echo '{"chains":{"dogecoin":{"coins":[{"outpoint":"aa:0"}]},"dogecoinvm":{"coins":[{"outpoint":"bb:1"}]}},"surplus":"9.00000000","needed":"2.00000000","problems":[],"ready":true}' ;;
   pause) set=\$(arg -signers "\$@"); [[ -n \${FAIL_PAUSE:-} && \$set == *\$FAIL_PAUSE* && -f "\$(dirname "\$set")/resumed-once" ]] && exit 1
     echo '{"reason":"x"}' >"\$(dirname "\$set")/paused.json"; echo "pause \$(dirname "\$set")" >>"\$EVENTS" ;;
   resume) set=\$(arg -signers "\$@"); [[ -n \${FAIL_RESUME:-} && \$set == *\$FAIL_RESUME* ]] && exit 1
@@ -52,7 +54,7 @@ case \$cmd in
         unproven=\${NEEDS_FENCE:-}; grep -q UNPROVEN "\$log" && unproven=1
         sent=\$(grep -c '^fence' "\$EVENTS" || true)
         if [[ -n \$unproven ]] && grep -q CUTOVER "\$log" && (( sent < \${FENCES_NEEDED:-2} )); then
-          echo "{\\"history\\":\\"\\",\\"cutoverEpoch\\":1,\\"cutoverLeft\\":{\\"dogecoin\\":[\\"cc:0\\"]},\\"lineageTips\\":\$tips}"
+          left=\${CUTOVER_LEFT:-'{"dogecoin":["aa:0"],"dogecoinvm":["bb:1"]}'}; echo "{\\"history\\":\\"\\",\\"cutoverEpoch\\":1,\\"cutoverLeft\\":\$left,\\"lineageTips\\":\$tips}"
         elif [[ -n \$unproven ]] && ! grep -q CUTOVER "\$log"; then
           echo "{\\"history\\":\\"\\",\\"cutoverLeft\\":{},\\"lineageTips\\":\$tips}"
         else
@@ -378,6 +380,24 @@ setup
 code=$(FAIL_RESUME=dogevm-signer-2 FAIL_PAUSE=dogevm-signer-1 RESUME=1 run)
 expect '[[ $code != 0 && ! -f $T/active/dogevm-signer-1 ]]' "signer 1, resumed and unpausable, is stopped"
 expect 'grep -q "stopped: dogevm-signer-1" "$T/out"' "says so"
+
+echo "28. not ready to adopt (inventory): stops with exit 3, before any log is adopted (round 8, X5)"
+setup
+rm "$VARLIB/dogevm-signer-3/signing-log.json"
+code=$(INVENTORY_PROBLEM="dogecoin: aa:0 has 3 of 20 confirmations" ADOPT_LOGS="dogevm-signer-3" run)
+expect '[[ $code == 3 ]] && grep -q "not ready to adopt: dogecoin: aa:0 has 3 of 20" "$T/out"' "exit 3, says why"
+expect '[[ ! -f $VARLIB/dogevm-signer-3/signing-log.json && $(version) == old ]] && paused' "nothing adopted, old binary back, paused"
+
+echo "29. a signer whose cutover recorded something else stops it with exit 2, before any signer starts (round 8, X5)"
+setup
+code=$(NEEDS_FENCE=1 CUTOVER_LEFT='{"dogecoin":["aa:0","zz:5"],"dogecoinvm":["bb:1"]}' run)
+expect '[[ $code == 2 ]] && grep -q "recorded only here" "$T/out"' "exit 2, says what differs"
+expect '[[ $(version) == old ]] && paused && all_signers_paused' "old binary back, everything paused"
+
+echo "30. a coverage difference before adopting is exit 2 too (round 8, X5)"
+setup
+code=$(COVERAGE_dogevm_signer_1='{"registry":"r2","registered":2,"coins":{"dogecoin":["aa:0"],"dogecoinvm":["bb:1"]}}' run)
+expect '[[ $code == 2 ]]' "exit 2"
 
 echo
 echo "$pass passed, $fail failed"
