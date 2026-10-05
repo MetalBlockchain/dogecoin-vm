@@ -221,7 +221,11 @@ running. It:
 4. installs the new binary;
 5. copies the coordinator's `contributions.txt` beside every signer's set,
    and checks they match;
-6. checks each signer's signing log;
+6. compares coverage: `dogevm coverage` on the coordinator and on every
+   signer (the registry's hash, and every unsettled coin of the set on both
+   chains) must match, or it stops here with nothing started (a cutover
+   records only what its node sees); then checks each signer's signing
+   log;
 7. starts a cutover (see "Cutover") for every signer whose log is
    unproven: adopted, or written by software from before the cutover rule,
    whatever its anchors; and checks its nodes see the coordinator's tips.
@@ -230,21 +234,28 @@ running. It:
    those tips (see "Anchor lineage");
 8. fills in each signer's public key in `cosigners.json` from its
    `card.json` if missing, checking every key is in the signer set;
-9. starts the signers, still paused, and the web wallet and monitor (the
-   site shows the pause); the bridge stays stopped. **From here nothing is
-   rolled back**: the new signers may sign a fence, and the old binary
-   knows nothing of the cutover gate. A failure from here on leaves the
-   bridge stopped or paused and every signer paused, for you;
+9. crosses the point of no return, **then** starts the signers, still
+   paused, and the web wallet and monitor (the site shows the pause); the
+   bridge stays stopped. **From here nothing is rolled back**, a signer
+   that won't start included: signers start one by one, the first may sign
+   a fence before a later one fails, and the old binary knows nothing of
+   the cutover gate. A failure from here on keeps the new binaries and
+   every log, leaves the bridge stopped and every signer paused, and says
+   so;
 10. while any current-set signer is unproven or has coins left in a
     cutover (see "Cutover"; later epochs included), sends fences on both
     chains with the bridge unit's own command line plus `-fence` (signers
     sign fences while paused, and nothing else), every `FENCE_WAIT_POLL`
     seconds (default 60), for up to `FENCE_WAIT` minutes (default 360;
-    `0`: one round). A signer is done when its `cutoverLeft` is `{}` and
-    its `history` is `fenced` (or `new`: a key that never signed). If time
-    runs out it stops with exit status 1, the bridge stopped, everything
-    paused, and prints the commands to send more fences and read each
-    signer's `signer-log status`;
+    `0`: one round). Each round first sends the set's pending
+    transactions out again (a node that dropped a fence from its mempool
+    gets it back). A signer is done when its `cutoverLeft` is `{}` and its
+    `history` is `fenced` (or `new`: a key that never signed); `signer-log
+    status` on a stopped signer finishes a cutover whose coins are all
+    cleared. If time runs out it stops with exit status 1, the bridge
+    stopped, everything paused, and prints each unfinished signer's
+    `history` and `cutoverLeft`, the commands to send more fences, and how
+    to read each signer's `signer-log status`;
 11. when every signer is done, starts the bridge, takes fresh health
     (`/api/health`: every expected check present: pause, peg, bridge,
     dogecoin, dogecoinvm) and checks the peg is solvent.
@@ -274,8 +285,9 @@ so the first upgrade adopts them, and then fences both chains: adoption
 sees only what reached a chain, not a signature kept back. Follow "First
 upgrade of the live bridge" below, step by step.
 
-After an upgrade to this version, move the web server's files out of the
-secrets directory once, then sandbox the services:
+After an upgrade to this version, while the bridge is still paused, move
+the web server's files out of the secrets directory once, then sandbox the
+services, before resuming:
 
     deploy/move-web-state.sh     # the registry, finality samples and coin index, to /var/lib/metal-main/web
     deploy/sandbox-units.sh
@@ -304,66 +316,102 @@ The live DogecoinVM bridge (Metal mainnet, Dogecoin mainnet) runs software
 from before the cutover rule; its three signers kept no logs. Its first
 upgrade adopts their logs from the chains and fences both chains before
 anything else is signed. Do these in order, as root on the bridge's host;
-stop at the first surprise. Nothing here touches the VM plugin (the Metal
-node keeps running it); that is upgraded separately.
+stop at the first surprise, and stay paused until the last step. Nothing
+here touches the VM plugin (the Metal node keeps running it); that is
+upgraded separately.
+
+Every command uses the files the bridge unit itself runs with, never a
+guessed path:
+
+    eval "$(deploy/bridge-paths.sh)"   # SET, REG, COS from dogevm-bridge-main's command line
+    audit() { dv audit -signers "$SET" -deposits "$REG"; }
+
+Read them again after step 9 (`move-web-state.sh` moves the registry).
 
 1. **Pin the code.** Choose the commit, run on a workstation
    `go test ./cmd/dogevm/ ./vm/...` with Dogecoin Core actually running
-   (`DOGECOIND_DOCKER=...`: the Core tests must run, a skip fails this
-   step) and `deploy/test/*.sh` under bash 5. Push the branch to `origin`
-   (an operator's decision) and record the commit hash.
-2. **Operating capital.** `dv audit -signers $S/separate-signers/signers.json` (or `/api/audit`) must show surplus
-   and circulating at least zero. Contribute 2 DOGE to the peg address
-   with the `DVMC` tag (see "Operating capital") and wait for 6
-   confirmations: each signer promises at most half the surplus, and the
-   cutover's fences, any replacement and a cancellation are paid from it.
-3. **Coverage.** The cutover covers what the wallet and each signer's
-   registry show. Compare the registries (each line sorted):
-
-       for f in /var/lib/metal-main/secrets/deposits.json /var/lib/dogevm-signer-*/deposits.json; do
-         echo "$f $(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$f") $(python3 -c 'import json,sys,hashlib; print(hashlib.sha256(json.dumps(sorted(json.load(open(sys.argv[1])))).encode()).hexdigest()[:16])' "$f")"
-       done
-
-   A signer holding an address the coordinator lacks: register it with the
-   coordinator (`dv deposit-address -signers $S/separate-signers/signers.json ...`) first. The coordinator holding more
-   is fine: fence proposals register them on the signers. Check Dogecoin
-   Core's wallet isn't missing history (`getwalletinfo` `txcount` against
-   the explorer's count for the peg address); rescan if it is.
-4. **Backup.** `dogevm-backup run`, then copy it off the host
+   (`DOGECOIND_DOCKER=...`: the Core tests must run; a skip fails this
+   step) and every `deploy/test/*.sh` under bash 5. Push the branch to
+   `origin` (an operator's decision) and record the commit hash.
+2. **Pause first.** `dv pause -signers "$SET" -reason "Upgrading."`: from
+   here the coordinator proposes nothing, so nothing is credited, paid or
+   refunded (the upgrade keeps this pause).
+3. **Operating capital, sized to the fences.** The fences, any
+   replacement and a cancellation are paid from the surplus, and each
+   signer promises at most half of it. A Dogecoin fence pays `-doge-fee`
+   (live: 0.1 DOGE) per started 10 kB, and a deposit input is about 330
+   bytes, so a fence of n coins costs 0.1 × ⌈n × 330 / 10,000⌉ DOGE; each
+   replacement adds that again. Budget twice five tries (a fence and four
+   replacements), plus a DogecoinVM fence: the live peg's few coins fit in
+   10 kB, so 2 × 5 × 0.1 = 1 DOGE, and contributing 2 DOGE leaves room;
+   count the coins with `audit` and send more for a bigger peg. Contribute
+   with the `DVMC` tag ("Operating capital") and **wait for 20
+   confirmations** (rootDepth), not 6: a shallower reorganisation could
+   take it away mid-cutover. Only the new software reads `DVMC` as
+   surplus (step 8 checks it does); the old one, still running, treats it
+   as a held payment, which is why the bridge is paused first.
+4. **Every set output deep, nothing pending.** In `audit`, and on a
+   Dogecoin explorer: every output at the peg address and the personal
+   deposit addresses has at least 20 confirmations, and no mempool
+   transaction spends one. Wait if not.
+5. **Coverage.** Every node must cover the same coins: the same registry
+   and the same wallet history. On each signer, register every address the
+   coordinator's registry has (`dogevm deposit-address -signers <its
+   signers.json> -deposits <its deposits.json> ...` as that signer's user,
+   or copy `$REG` there while it is stopped), and rescan any wallet short
+   of the others (`getwalletinfo` `txcount`). The upgrade compares them
+   itself (`dogevm coverage` on the coordinator and every signer: the
+   registry's hash and every unsettled coin of the set on both chains) and
+   stops, with nothing started, on any difference. Don't work around that
+   stop: a coin one signer can't see is a coin its cutover won't record.
+6. **Backup.** `dogevm-backup run`, then copy it off the host
    (`scripts/pull-backups.sh`).
-5. **Upgrade, adopt, fence.** Without `RESUME`, so you resume by hand:
+7. **Upgrade, adopt, fence.** Without `RESUME`, so you resume by hand, and
+   with every signer adopted (none of these keys may use `INIT_LOGS`:
+   they have signed):
 
        BRANCH=<the pushed branch> ADOPT_LOGS="dogevm-signer-1 dogevm-signer-2 dogevm-signer-3" \
          deploy/upgrade-bridge.sh <commit>
 
-   It runs steps 1–11 of "Upgrading the bridge software": the three logs
-   are adopted and cut over, the bridge stays stopped, and fences go out on
-   both chains until every signer is done (a Dogecoin fence needs 20
+   It runs "Upgrading the bridge software": coverage compared, the three
+   logs adopted and cut over, the point of no return crossed **before any
+   signer starts**, the bridge left stopped, and fences sent on both
+   chains until every signer is done (a Dogecoin fence needs 20
    confirmations, about 20 minutes; more coins than one fence holds means
-   more rounds). Exit status 1 means the cutover isn't finished yet: run
-   the fence commands it printed until every signer's `signer-log status`
-   shows `cutoverLeft` `{}` and `history` `"fenced"`, then
-   `systemctl start dogevm-bridge-main`.
-6. **Check before resuming.** `curl -s http://127.0.0.1:8081/api/health`
-   (every check present, only the pause failing), `dv audit -signers $S/separate-signers/signers.json` solvent, each
-   signer's `signer-log status` fenced with anchors equal to the
-   coordinator's `lineageTips`, and no "quarantin" in
-   `journalctl -u dogevm-signer-N`. Then resume each signer and the bridge
-   with the commands the script printed.
-7. **Web state and sandbox.** `deploy/move-web-state.sh`, then
-   `deploy/sandbox-units.sh`. Open the site, make a deposit address, and
-   check `/api/health` again.
-8. **Smoke test, small amounts.** One deposit (a few DOGE) to a personal
-   deposit address and its credit; one withdrawal and its payout; restart
-   one signer (`systemctl restart dogevm-signer-2`) and check it comes back
-   fenced; `dv audit -signers $S/separate-signers/signers.json` after each.
-9. **Backup again** (`dogevm-backup run`) and copy it off the host: the
-   signers' new logs and `dogecoin-unsettled.json` are now worth keeping.
+   more rounds). Exit status 1 means the cutover isn't finished: run the
+   fence commands it printed until **every** signer's `signer-log status`
+   shows `cutoverLeft` `{}` **and** `history` `"fenced"`. If one signer is
+   still gated, don't resume the others: find the coin it waits for
+   (`dogevm unsettled list`, "Cutover").
+8. **Check while still paused.** On a block explorer, every coin a
+   signer recorded is spent, or its transaction conflicted, at least 20
+   confirmations deep (DogecoinVM: in a block). Each signer's
+   `signer-log status`: fenced, `anchors` equal to the coordinator's
+   `lineageTips` (`dogevm signer-log anchors -signers "$SET"` as the bridge
+   user). No "quarantin" in `journalctl -u dogevm-signer-N`. Then
+   `systemctl start dogevm-bridge-main`; `curl -s
+   http://127.0.0.1:8081/api/health` has the `pause`, `peg`, `bridge`,
+   `dogecoin` and `dogecoinvm` checks, only the pause failing; `audit` is
+   solvent, the surplus lower only by the fence fees you expected, and the
+   contribution counted as surplus, not as held.
+9. **Web state and sandbox, still paused.** `deploy/move-web-state.sh`,
+   then `deploy/sandbox-units.sh`. Then `eval "$(deploy/bridge-paths.sh)"`
+   again (the registry moved), open the site, make a deposit address, and
+   check `/api/health` again: still only the pause failing.
+10. **Resume**, with the commands the upgrade printed: each signer, then
+    the bridge.
+11. **Smoke test, small amounts.** One deposit (a few DOGE) to a personal
+    deposit address and its credit; one withdrawal and its payout; restart
+    one signer (`systemctl restart dogevm-signer-2`) and check it comes
+    back fenced; `audit` after each.
+12. **Backup again** (`dogevm-backup run`) and copy it off the host: the
+    signers' new logs and each node's `dogecoin-unsettled.json` are now
+    worth keeping.
 
-If anything fails after the signers have started (step 5's step 9),
-nothing rolls back: the bridge stays stopped or paused and every signer
-paused. Read the error, and `signer-log status` on each signer, before
-doing anything else.
+If anything fails once the upgrade has crossed its point of no return
+(just before the signers start), nothing rolls back: the new binaries and
+every log stay, the bridge stays stopped, and every signer paused. Read the
+error, and `signer-log status` on each signer, before doing anything else.
 
 ## Anchor lineage
 
@@ -506,11 +554,24 @@ There is **no waiver**: a transaction's absence from the blocks or from a
 mempool proves nothing, since anyone holding it can still have it mined
 (round 6). Such a coin keeps the cutover gated, which is safe: the signer
 signs nothing but fences. Recover by finding out what the transaction was
-(`signer-log status` lists the coin; the signer's
-`dogecoin-unsettled.json` holds its body), then get it, or a conflicting
-spend of its inputs, into a block: once that is full confirmations deep
-the coin clears by the normal rule. An old log's `cutoverWaived` entry,
-from software that had a waiver, is ignored.
+(`signer-log status` lists the coin; `dogevm unsettled list -signers <the
+node's signers.json>` shows each unsettled transaction and its evidence),
+then get it, or a conflicting spend of its inputs, into a block. Once that
+is full confirmations deep (20) the coin clears by the normal rule:
+
+- if the wallet lists the conflicting spend (it pays the set), on its own;
+- if it doesn't (a payer double-spent a deposit to themselves), record
+  the spend on **every** node that holds the dropped transaction:
+  `dogevm unsettled prove -signers <its signers.json> -txid <the dropped
+  transaction> -spender <the spending transaction's hex> -block <the hash
+  of its block>`, as that node's user. Nothing in a proof is trusted: each
+  node checks, on every read, that the spender spends one of the dropped
+  transaction's inputs and that its own chain holds it in that block, and
+  how deep. A wrong proof clears nothing.
+
+An old log's `cutoverWaived` coins (software that had a waiver) go back
+into its cutover when it loads, even a log that had finished: they clear
+only the normal way.
 
 Every Dogecoin wallet transaction that isn't settled yet (not in a block
 with full confirmations, nor conflicted by one that deep) is kept, body and
@@ -521,8 +582,10 @@ it; the web server and the monitor can only read it
 (`deploy/sandbox-units.sh` makes it read-only for them, and refuses a web
 directory that would contain it). Dogecoin Core 1.14 doesn't report what a
 reorganisation removed, and rereads the whole wallet after one; a
-transaction the wallet stops listing is put back, as conflicted with no
-known depth, so the cutover still covers its coins, across restarts too.
+transaction the wallet stops listing is put back, as conflicted at the
+depth of the best current evidence it can never be mined (a spend of one of
+its inputs, read fresh each time), so the cutover still covers its coins,
+across restarts too, until that evidence is 20 deep.
 The daily backup includes it (it backs up the secrets directory and every
 signer's directory); don't delete it.
 
@@ -531,9 +594,9 @@ only by them, and the fences, built from the coordinator's view, don't
 spend it: those signers stay in their cutover (fail closed). Register the
 address with the coordinator (`dv deposit-address`), then start a new
 epoch (`signer-log cutover`) on the signers that finished, so they sign the
-fence that spends it. Before a cutover, compare every signer's registry
-with the coordinator's and rescan any wallet missing history: that is what
-the cutover's coverage rests on.
+fence that spends it. Before a cutover, `dogevm coverage` on every node
+must match (the upgrade checks it and stops otherwise): that is what the
+cutover's coverage rests on.
 
 If a signer is quarantined during the cutover (the chains show a
 transaction it signed that its new log lacks), someone sent a kept-back
