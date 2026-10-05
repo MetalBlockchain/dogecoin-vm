@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/txscript"
 )
 
 // Inventory before a cutover (Round 8, X5).
@@ -41,7 +43,11 @@ type inventoryChain struct {
 
 // inventory is a node's view of the set before a cutover.
 type inventory struct {
-	RootDepth int64                     `json:"rootDepth"`
+	RootDepth int64 `json:"rootDepth"`
+	// Addresses are the set's Dogecoin addresses: the peg address and every
+	// registered personal deposit address, to reconcile against a full node
+	// or explorer outpoint by outpoint before adopting (RUNBOOK.md).
+	Addresses []string                  `json:"addresses"`
 	Chains    map[string]inventoryChain `json:"chains"`
 	// Conflicted are transactions of the set the wallet sees conflicted
 	// short of rootDepth.
@@ -59,7 +65,13 @@ type inventory struct {
 const fenceReplacements = 4
 
 func nodeInventory(b *bridge, s *pegState) (inventory, error) {
-	inv := inventory{RootDepth: s.view(chainDogecoin).depth, Chains: map[string]inventoryChain{}, Conflicted: []string{}, Problems: []string{}}
+	inv := inventory{RootDepth: s.view(chainDogecoin).depth, Chains: map[string]inventoryChain{}, Conflicted: []string{}, Problems: []string{}, Addresses: []string{}}
+	for script := range s.redeemFor {
+		if _, addrs, _, err := txscript.ExtractPkScriptAddrs([]byte(script), b.dogeParams); err == nil && len(addrs) == 1 {
+			inv.Addresses = append(inv.Addresses, addrs[0].EncodeAddress())
+		}
+	}
+	sort.Strings(inv.Addresses)
 	var needed int64
 	for _, chain := range cutoverChains {
 		var coins []utxo

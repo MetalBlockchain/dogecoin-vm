@@ -200,6 +200,9 @@ func TestInventoryGatesAdoption(t *testing.T) {
 	got = inv()
 	require.True(got.Ready, "%v", got.Problems)
 	require.Len(got.Chains[chainDogecoin].Coins, 2)
+	peg, err := h.b.signers.address(h.b.dogeParams)
+	require.NoError(err)
+	require.Contains(got.Addresses, peg.EncodeAddress(), "the peg address, to reconcile against a full node")
 
 	shallow := h.contribute(doge, 2)
 	got = inv()
