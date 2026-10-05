@@ -164,3 +164,35 @@ func TestFenceCommandRebroadcasts(t *testing.T) {
 	}
 	require.True(found, "the pending fence was sent again")
 }
+
+// TestCoverageShowsARegistryDifference (W7, Codex r7 #7 / Grok r7 #3): before
+// a cutover each node prints what it would record. A deposit address one
+// signer registered and the others didn't shows in both the registry hash and
+// the coins, so the upgrade can stop before any snapshot is taken.
+func TestCoverageShowsARegistryDifference(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	h.inUse()
+	a, b := h.signers[0], h.signers[1]
+	cover := func(c *cosigner) coverage {
+		s, err := c.b.load()
+		require.NoError(err)
+		got, err := nodeCoverage(c.b, s)
+		require.NoError(err)
+		return got
+	}
+	require.Equal(cover(a), cover(b), "same registry, same chains: same coverage")
+
+	carol := h.user(7)
+	_, err := registerDeposit(a.b, carol)
+	require.NoError(err)
+	dep := h.personalDeposit(2*doge, carol, 30)
+	ca, cb := cover(a), cover(b)
+	require.NotEqual(ca.Registry, cb.Registry, "the registries differ")
+	require.Contains(ca.Coins[chainDogecoin], wire.OutPoint{Hash: dep.TxHash()}.String())
+	require.NotContains(cb.Coins[chainDogecoin], wire.OutPoint{Hash: dep.TxHash()}.String())
+
+	_, err = registerDeposit(b.b, carol)
+	require.NoError(err)
+	require.Equal(cover(a), cover(b), "registered on both: the same again")
+}

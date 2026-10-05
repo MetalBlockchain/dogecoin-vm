@@ -20,7 +20,10 @@
 #   5. give every signer the coordinator's contributions.txt (outputs,
 #      TXID:VOUT), next to the signer set it runs with, and check they all
 #      read the same list;
-#   6. check every signer's signing log (it must exist, match the chains,
+#   6. compare coverage: the coordinator and every signer must have the same
+#      registry and see the same unsettled coins of the set on both chains,
+#      or nothing goes further (a cutover records only what its node sees);
+#      then check every signer's signing log (it must exist, match the chains,
 #      and not be quarantined). A missing log stops the upgrade: a signer
 #      that has signed must have its log restored from a backup. Only a
 #      signer named in INIT_LOGS (its key never signed) gets a new empty
@@ -241,6 +244,36 @@ for unit in "${SIGNERS[@]}"; do
   fi
   [[ $(outputs_of "$dest") == "$want" ]] || die "$unit's contribution list differs from the coordinator's"
   echo "$unit: $(grep -c . <<<"$want" || true) output(s) listed"
+done
+
+log "coverage"
+# Before any log is adopted or a cutover records anything (round 7, W7):
+# every node must cover the same coins. A cutover records what its own
+# wallet and registry list, so a deposit address one signer never
+# registered, or a payment one wallet never saw, would go unrecorded there,
+# and a signature given before the upgrade could spend it beside a new one.
+# The coordinator and every signer print their coverage (registry hash and
+# the set's unsettled coins on both chains); any difference stops here,
+# with nothing started (RUNBOOK.md, "First upgrade of the live bridge").
+want=$(as_coordinator "$HOME_DIR/bin/$CHAIN" coverage -signers "$SET" ${COORD_DEPOSITS:+-deposits "$COORD_DEPOSITS"}) || die "coverage on the coordinator failed"
+echo "coordinator: $(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d["registered"], "registered,", {c: len(v) for c, v in d["coins"].items()}, "coins")' "$want")"
+for unit in "${SIGNERS[@]}"; do
+  got=$(as_signer "$unit" "$SIGNER_BIN" coverage -signers "${SSET[$unit]}" ${SDEPOSITS[$unit]:+-deposits "${SDEPOSITS[$unit]}"}) || die "coverage on $unit failed"
+  diff=$(python3 - "$want" "$got" <<'PY'
+import json, sys
+want, got = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+out = []
+if want["registry"] != got["registry"]:
+    out.append(f"registry differs ({got['registered']} registered vs the coordinator's {want['registered']})")
+for chain in sorted(set(want["coins"]) | set(got["coins"])):
+    w, g = set(want["coins"].get(chain) or []), set(got["coins"].get(chain) or [])
+    if g - w: out.append(f"{chain}: only here: {sorted(g - w)[:5]}")
+    if w - g: out.append(f"{chain}: missing here: {sorted(w - g)[:5]}")
+print("; ".join(out))
+PY
+)
+  [[ -z $diff ]] || die "$unit doesn't cover what the coordinator covers: $diff. Make every registry and wallet the same (register the same addresses, rescan) and run again; nothing was started (RUNBOOK.md, \"First upgrade of the live bridge\")"
+  echo "$unit: same coverage"
 done
 
 log "signing logs"

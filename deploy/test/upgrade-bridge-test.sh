@@ -34,6 +34,8 @@ has() { local want=\$1; shift; for a in "\$@"; do [[ \$a == \$want ]] && return 
 unit_of() { basename "\$(dirname "\$1")"; }
 case \$cmd in
   version) echo "$2" ;;
+  coverage) set=\$(arg -signers "\$@"); u=\$(unit_of "\$set"); v=COVERAGE_\${u//-/_}
+    d='{"registry":"r1","registered":2,"coins":{"dogecoin":["aa:0"],"dogecoinvm":["bb:1"]}}'; echo "\${!v:-\$d}" ;;
   pause) set=\$(arg -signers "\$@"); echo '{"reason":"x"}' >"\$(dirname "\$set")/paused.json"; echo "pause \$(dirname "\$set")" >>"\$EVENTS" ;;
   resume) set=\$(arg -signers "\$@"); rm -f "\$(dirname "\$set")/paused.json"; echo "resume \$(dirname "\$set")" >>"\$EVENTS" ;;
   signer-log)
@@ -344,6 +346,17 @@ setup
 code=$(NEEDS_FENCE=1 RESUME=1 HEALTH='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoinvm","ok":true}]}' run)
 expect '[[ $code == 0 ]] && grep -q "not resuming: failing checks: dogecoin: missing" "$T/out"' "says the dogecoin check is missing"
 expect 'paused && all_signers_paused' "nothing resumed"
+
+echo "24. a signer whose registry or coins differ from the coordinator's stops it before anything is adopted (round 7, W7)"
+setup
+rm "$VARLIB/dogevm-signer-3/signing-log.json"
+code=$(ADOPT_LOGS=dogevm-signer-3 COVERAGE_dogevm_signer_2='{"registry":"r2","registered":1,"coins":{"dogecoin":["aa:0"],"dogecoinvm":["bb:1"]}}' run)
+expect '[[ $code != 0 && $(version) == old ]]' "fails, old binary back"
+expect 'grep -q "dogevm-signer-2 doesn.t cover what the coordinator covers: registry differs" "$T/out"' "says which and why"
+expect '[[ ! -f $VARLIB/dogevm-signer-3/signing-log.json ]]' "nothing adopted"
+setup
+code=$(COVERAGE_dogevm_signer_1='{"registry":"r1","registered":2,"coins":{"dogecoin":["aa:0","cc:2"],"dogecoinvm":["bb:1"]}}' run)
+expect '[[ $code != 0 ]] && grep -q "only here" "$T/out"' "a coin only one signer sees stops it too"
 
 echo "23. once the signers run, nothing rolls back: a bridge that won't start leaves the new binary, everything paused"
 setup
