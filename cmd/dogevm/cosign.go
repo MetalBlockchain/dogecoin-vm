@@ -846,7 +846,11 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		for range inputs {
 			redeems = append(redeems, b.signers.redeemScript)
 		}
-		// The fee leaves the reserve and circulates: it needs the surplus.
+		// The fee leaves the reserve and circulates: it needs the surplus,
+		// and no Dogecoin fence may be pending (Round 8, X2).
+		if err := waitForDogeFence(s); err != nil {
+			return nil, nil, 0, err
+		}
 		if err := c.feeRoom(b.audit(s), b.vmFee, unseen); err != nil {
 			return nil, nil, 0, err
 		}
@@ -866,6 +870,15 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		}
 		if req.Action.Deposit != want.TxIn[0].PreviousOutPoint.String() {
 			return nil, nil, 0, errors.New("a fence names the coin it spends first")
+		}
+		// A DogecoinVM fence waits for every Dogecoin fence to be deep
+		// (Round 8, X2). A Dogecoin fence is itself that fence, or a
+		// replacement of it: nextFence only builds one when none is in a
+		// block short of depth.
+		if req.Chain == chainDogecoinVM {
+			if err := waitForDogeFence(s); err != nil {
+				return nil, nil, 0, err
+			}
 		}
 		if err := c.feeRoom(b.audit(s), fee, unseen); err != nil {
 			return nil, nil, 0, err
@@ -1477,10 +1490,14 @@ actions:
 			if t.Fee <= 0 || t.Fee <= most {
 				continue
 			}
+			// An input gone from this view and the node's UTXO set makes the
+			// transaction dead only if a deep spend of it says so (Round 8,
+			// X2): a shallow one can be undone, and the input come back.
 			live := true
 			for _, in := range t.Inputs {
 				op, err := parseOutPoint(in)
-				live = live && err == nil && (known[op] || inChain != nil && inChain(t.Chain, op))
+				here := err == nil && (known[op] || inChain != nil && inChain(t.Chain, op))
+				live = live && err == nil && (here || ev == nil || !ev.spentDeep(t.Chain, t, op))
 			}
 			if live {
 				most = t.Fee

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -103,4 +105,74 @@ func TestCoinbasesAreNotConflictEvidence(t *testing.T) {
 		return tx
 	}
 	require.False(spendsInputOf(coinbase(1), coinbase(2)))
+}
+
+// TestDogeFenceFreezesOtherSurplusSpendsAcrossQuorums (X2, both r8
+// reviews): A and B sign a Dogecoin fence while C is down, so only their
+// logs hold it (and any costlier replacement of it). While it is shallower
+// than rootDepth, a reorganisation could mine a costlier alternative in its
+// place. The coordinator then turns to B and C for a DogecoinVM fence: C
+// never signed anything on Dogecoin, so its own reservations are empty, and
+// in round 7 it signed, letting fees add up past the surplus. Now every
+// signer that sees a Dogecoin fence short of rootDepth refuses every other
+// surplus spend, whoever signed the fence; once it is deep, B and C fence
+// DogecoinVM.
+func TestDogeFenceFreezesOtherSurplusSpendsAcrossQuorums(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	_, _, _, _ = h.inUse()
+	h.rebuildLogs()
+	down := func(i int) {
+		h.servers[i].Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+		})
+	}
+	up := func(i int) { h.servers[i].Config.Handler = h.signers[i].handler() }
+	a, c := 0, 2
+
+	down(c)
+	_, err := h.b.proposeFence(chainDogecoin)
+	require.NoError(err, "A and B sign the Dogecoin fence")
+	h.doge.mine() // in a block, one deep
+	for key := range h.signers[c].log.Actions {
+		require.False(strings.HasPrefix(key, actionFence+":") && strings.Contains(key, chainDogecoin+":"), "C never signed it: %s", key)
+	}
+
+	up(c)
+	down(a)
+	_, err = h.b.proposeFence(chainDogecoinVM)
+	require.ErrorContains(err, h.servers[c].URL+": a Dogecoin fence", "C refuses, though its own log reserves nothing")
+	require.ErrorContains(err, "no other fee is paid from the surplus")
+
+	s, err := h.signers[c].b.load()
+	require.NoError(err)
+	for range s.pegLine.rootDepth {
+		h.doge.mine()
+	}
+	_, err = h.b.proposeFence(chainDogecoinVM)
+	require.NoError(err, "the Dogecoin fence is deep: B and C fence DogecoinVM")
+}
+
+// TestGoneInputIsDeadOnlyWhenSpentDeep (X2, Codex r8 #1): a signed fence
+// whose input is missing from this signer's view and its node's UTXO set
+// was taken as dead, freeing its fee, even when what spent the input was a
+// Dogecoin transaction a reorganisation could still undo. Now only a spend
+// rootDepth deep frees it.
+func TestGoneInputIsDeadOnlyWhenSpentDeep(t *testing.T) {
+	require := require.New(t)
+	in := wire.OutPoint{Hash: chainhash.Hash{0x22}, Index: 0}
+	log := &signingLog{Actions: map[string]*loggedAction{
+		"fence:dogecoin:x": {Txs: []loggedTx{{Txid: "3333333333333333333333333333333333333333333333333333333333333333", Chain: chainDogecoin, Fee: 200_000_000, Inputs: []string{in.String()}}}},
+	}}
+	spender := wire.NewMsgTx(1)
+	spender.AddTxIn(wire.NewTxIn(&in, nil, nil))
+	ev := func(confs int64) *chainEvidence {
+		return &chainEvidence{deep: 20, listed: map[string]map[string]chainTx{
+			chainDogecoin: {unsignedHash(spender).String(): {tx: spender, confirmations: confs}},
+		}}
+	}
+	gone := func(string, wire.OutPoint) bool { return false }
+	require.EqualValues(200_000_000, log.unseenFees(nil, ev(3), gone, ""), "spent 3 deep: still reserved")
+	require.EqualValues(200_000_000, log.unseenFees(nil, &chainEvidence{deep: 20}, gone, ""), "spent by nothing it can see: still reserved")
+	require.Zero(log.unseenFees(nil, ev(20), gone, ""), "spent rootDepth deep: dead")
 }

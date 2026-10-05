@@ -436,6 +436,49 @@ func fenceState(s *pegState, chain string, recorded map[wire.OutPoint]bool) (pen
 	return pending, shallow
 }
 
+// unsettledDogeFence is a Dogecoin fence of the set (tagged, spending one
+// of its coins) that isn't yet rootDepth deep, unconfirmed or in a block;
+// nil if there is none (Round 8, X2).
+//
+// A fence's fee comes from the surplus, and while it isn't deep a
+// costlier alternative some signers signed could still be mined in its
+// place. Only those signers know about the alternative, and with one
+// dishonest signer the coordinator can send every other surplus spend to
+// the honest signer who doesn't. So every signer refuses every other
+// surplus spend (a DogecoinVM fence, a cancellation) while it sees such a
+// fence, whoever signed it: the fees can then never add up past the
+// surplus, whatever the logs hold.
+func unsettledDogeFence(s *pegState) *chainTx {
+	v := s.view(chainDogecoin)
+	for i := range v.txs {
+		t := v.txs[i]
+		if t.confirmations >= v.depth {
+			continue
+		}
+		if _, ok := parseFence(t.tx); !ok {
+			continue
+		}
+		for _, in := range t.tx.TxIn {
+			f, ok := v.funding[in.PreviousOutPoint.Hash]
+			if ok && int(in.PreviousOutPoint.Index) < len(f.tx.TxOut) && v.isCoin(f.tx.TxOut[in.PreviousOutPoint.Index]) {
+				return &t
+			}
+		}
+	}
+	return nil
+}
+
+// waitForDogeFence refuses a surplus spend while a Dogecoin fence isn't
+// deep (unsettledDogeFence).
+func waitForDogeFence(s *pegState) error {
+	t := unsettledDogeFence(s)
+	if t == nil {
+		return nil
+	}
+	return fmt.Errorf("a Dogecoin fence (%v) has %d of %d confirmations; until it is deep, a costlier alternative could still be mined, so no other fee is paid from the surplus",
+		t.tx.TxHash(), max(t.confirmations, 0), s.view(chainDogecoin).depth)
+}
+
 // fenceFeeOf is what a fence pays: its inputs, as s knows them, less its
 // outputs; -1 if an input is unknown.
 func fenceFeeOf(s *pegState, chain string, tx *wire.MsgTx) int64 {

@@ -63,14 +63,35 @@ func (e *chainEvidence) confirmed(chain string, t loggedTx) bool {
 // shallow reports whether t, confirmed on chain, could still be taken out of
 // its block by a reorganisation: a Dogecoin transaction listed fewer than
 // deep blocks down. DogecoinVM blocks are final. One the node says is in a
-// block but the wallet doesn't list is taken as deep, as before: the depth
-// can't be read.
+// block but the wallet doesn't list has a depth this signer can't read, so
+// it counts as shallow (Round 8, X2): unknown is never final.
 func (e *chainEvidence) shallow(chain string, t loggedTx) bool {
 	if chain != chainDogecoin || e.deep <= 1 {
 		return false
 	}
 	lt, ok := e.listed[chain][t.Txid]
-	return ok && lt.confirmations > 0 && lt.confirmations < e.deep
+	return !ok || lt.confirmations < e.deep
+}
+
+// spentDeep reports whether a transaction other than t, listed in a block at
+// least deep blocks down (any block on DogecoinVM), spends op: only that
+// makes t's use of op impossible for good (Round 8, X2).
+func (e *chainEvidence) spentDeep(chain string, t loggedTx, op wire.OutPoint) bool {
+	need := int64(1)
+	if chain == chainDogecoin && e.deep > 1 {
+		need = e.deep
+	}
+	for id, lt := range e.listed[chain] {
+		if id == t.Txid || lt.confirmations < need {
+			continue
+		}
+		for _, in := range lt.tx.TxIn {
+			if in.PreviousOutPoint == op {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // spentElsewhere reports whether a confirmed transaction other than t (by

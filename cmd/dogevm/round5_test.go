@@ -145,11 +145,11 @@ func TestFenceKillsKeptBackSignatures(t *testing.T) {
 	_, err = h.b.proposeFence(chainDogecoin)
 	require.NoError(err)
 	_, err = h.b.proposeFence(chainDogecoinVM)
-	require.NoError(err)
+	require.ErrorContains(err, "no other fee is paid from the surplus", "round 8, X2: the DogecoinVM fence waits for Dogecoin's to be deep")
 	h.vm.mine()
 	h.doge.mine()
 	require.ErrorContains(h.releaseErr(h.signers[2], dep2, alice), "in a cutover", "Dogecoin's fence must be deep first")
-	h.fenceUntilDone(10)
+	h.fenceUntilDone(20)
 
 	_, err = h.doge.send(payout)
 	require.ErrorContains(err, "missing or spent", "the kept-back payout's coin is spent")
