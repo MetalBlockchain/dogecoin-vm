@@ -25,6 +25,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1287,7 +1289,8 @@ type signingLog struct {
 	CutoverEpoch   int   `json:"cutoverEpoch,omitempty"`
 	CutoverStarted int64 `json:"cutoverStarted,omitempty"`
 	// An old log's "cutoverWaived" (round 5's operator waiver, since
-	// removed) is not read: it never discharges anything.
+	// removed) discharges nothing: openSigningLog puts its coins back into
+	// Cutover (restoreWaived), so they clear only the normal way.
 }
 
 // History values (signingLog.History).
@@ -1339,10 +1342,55 @@ func openSigningLog(path string) (*signingLog, error) {
 	if l.Actions == nil {
 		l.Actions = map[string]*loggedAction{}
 	}
+	if err := l.restoreWaived(raw); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	if err := l.normalizeKeys(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return l, nil
+}
+
+// restoreWaived puts back into Cutover the coins an old log's round-5
+// waiver took out of it (Round 7, W3). That waiver deleted a coin from the
+// record on nothing more than its absence from blocks and a mempool, which
+// never proves it dead: a signature kept back could still spend it. Put back
+// in the record, the coin keeps the log in a cutover (signing nothing but
+// fences, on both chains) until it is spent, or its transaction conflicted,
+// rootDepth deep, even if the log had already finished its cutover. Done on
+// every load, so it holds until the log is next written without the field.
+func (l *signingLog) restoreWaived(raw []byte) error {
+	var legacy struct {
+		CutoverWaived map[string][]string `json:"cutoverWaived"`
+	}
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return err
+	}
+	for chain, coins := range legacy.CutoverWaived {
+		if len(coins) == 0 {
+			continue
+		}
+		if !slices.Contains(cutoverChains, chain) {
+			return fmt.Errorf("cutoverWaived names unknown chain %q", chain)
+		}
+		if l.Cutover == nil {
+			l.Cutover = map[string][]string{}
+		}
+		set := map[string]bool{}
+		for _, op := range append(l.Cutover[chain], coins...) {
+			if _, err := parseOutPoint(op); err != nil {
+				return fmt.Errorf("cutoverWaived %s: %w", op, err)
+			}
+			set[op] = true
+		}
+		list := make([]string, 0, len(set))
+		for op := range set {
+			list = append(list, op)
+		}
+		sort.Strings(list)
+		l.Cutover[chain] = list
+	}
+	return nil
 }
 
 // normalizeKeys upgrades logs written before action keys were canonical. It
