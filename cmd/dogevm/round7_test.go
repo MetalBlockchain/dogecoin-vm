@@ -128,3 +128,39 @@ func TestVMFenceStaysRelayable(t *testing.T) {
 	require.NoError(check(signed(trimmed)), "%d inputs", len(trimmed))
 	require.Error(check(signed(coins[:len(trimmed)+40])), "well past the trimmed size is refused")
 }
+
+// resendCounter is a chain that records what is resent to it.
+type resendCounter struct {
+	chain
+	resent []chainhash.Hash
+}
+
+func (r *resendCounter) resend(tx *wire.MsgTx) error {
+	r.resent = append(r.resent, tx.TxHash())
+	return nil
+}
+
+// TestFenceCommandRebroadcasts (W5, Codex r7 #5): during a cutover the bridge
+// loop is stopped, so `bridge -fence` itself sends a pending fence out again
+// (a node that dropped it from its mempool gets it back) before deciding to
+// wait or replace.
+func TestFenceCommandRebroadcasts(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	h.inUse()
+	h.rebuildLogs()
+	fence, err := h.b.proposeFence(chainDogecoin)
+	require.NoError(err)
+
+	counter := &resendCounter{chain: h.b.doge}
+	h.b.doge = counter
+	h.b.resent = nil
+	_, err = h.b.proposeFence(chainDogecoin)
+	require.Error(err, "the first fence is still pending: wait for it")
+	require.NotEmpty(counter.resent)
+	found := false
+	for _, id := range counter.resent {
+		found = found || id == fence
+	}
+	require.True(found, "the pending fence was sent again")
+}

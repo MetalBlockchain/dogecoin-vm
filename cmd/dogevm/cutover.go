@@ -729,6 +729,11 @@ func (b *bridge) sendFence(chain string, recorded map[wire.OutPoint]bool) (chain
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
+	// Round 7, W5: during a cutover the bridge loop (which rebroadcasts) is
+	// stopped, so this does it: a fence a node's mempool dropped (a restart,
+	// an eviction) goes back out before deciding whether to wait for it or
+	// replace it.
+	b.rebroadcast(s)
 	tx, inputs, _, err := b.nextFence(s, chain, recorded, b.fenceBumpAfter)
 	if err != nil {
 		return chainhash.Hash{}, err
