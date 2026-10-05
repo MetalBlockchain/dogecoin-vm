@@ -428,6 +428,20 @@ func cmdSignerLog(args []string) error {
 	if *logPath == "" {
 		*logPath = filepath.Join(filepath.Dir(*keyFile), "signing-log.json")
 	}
+	// status writes only when it can have the log to itself: with the
+	// signer running, the signer finishes its own cutover (on its next
+	// request or HTTP /status), and status just reads.
+	canAdvance := false
+	if step == "status" {
+		lock, err := lockSigningLog(*logPath)
+		switch {
+		case err == nil:
+			defer lock.Close()
+			canAdvance = true
+		case !errors.Is(err, errSignerRunning):
+			return err
+		}
+	}
 	if step == "init" || step == "adopt" || step == "cutover" || step == "anchors" && *setAnchors {
 		// These write the log: the signer must be stopped, or one of its
 		// signatures could be written over (lockSigningLog). Taken before
@@ -500,6 +514,13 @@ func cmdSignerLog(args []string) error {
 		switch {
 		case step == "cutover":
 			if err := c.startCutover(state); err != nil {
+				return err
+			}
+		case step == "status" && canAdvance:
+			// Round 7, W10: a cutover whose every coin is cleared is
+			// finished here too (history "fenced"), not only on the
+			// signer's next request; so status shows where it stands.
+			if _, err := c.advanceCutover(state); err != nil {
 				return err
 			}
 		}

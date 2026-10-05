@@ -413,7 +413,7 @@ cutover_left() {
   for unit in "${SIGNERS[@]}"; do
     st=$(signer_log "$unit" status) || { echo "$unit: status failed"; continue; }
     if in_cutover "$st"; then
-      echo "$unit: $(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print({c: len(v) for c, v in (d.get("cutoverLeft") or {}).items()} or "starting")' "$st")"
+      echo "$unit: $(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print("history=%r cutoverLeft=%s" % (d.get("history") or "", {c: len(v) for c, v in (d.get("cutoverLeft") or {}).items()}))' "$st")"
     fi
   done
 }
@@ -442,7 +442,7 @@ if [[ -n $left ]]; then
   echo
   echo "upgrade-bridge: the cutover isn't finished. The bridge is stopped and every signer stays paused:"
   echo "$left"
-  echo "Keep sending fences until every signer's cutoverLeft is {} (RUNBOOK.md, \"Cutover\"):"
+  echo "Keep sending fences until every signer shows cutoverLeft {} AND history \"fenced\" (RUNBOOK.md, \"Cutover\"):"
   fence_cmds
   echo "check each signer with:"
   for unit in "${SIGNERS[@]}"; do
