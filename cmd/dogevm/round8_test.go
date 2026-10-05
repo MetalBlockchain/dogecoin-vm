@@ -176,3 +176,33 @@ func TestGoneInputIsDeadOnlyWhenSpentDeep(t *testing.T) {
 	require.EqualValues(200_000_000, log.unseenFees(nil, &chainEvidence{deep: 20}, gone, ""), "spent by nothing it can see: still reserved")
 	require.Zero(log.unseenFees(nil, ev(20), gone, ""), "spent rootDepth deep: dead")
 }
+
+// TestInventoryGatesAdoption (X5, both r8 reviews): before adopting, the
+// operator sees every coin with its depth, the fences they take and what
+// they cost, and the surplus they need; it is ready only when every coin is
+// rootDepth deep and the surplus covers twice the fences' fees and headroom.
+func TestInventoryGatesAdoption(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	inv := func() inventory {
+		s, err := h.b.load()
+		require.NoError(err)
+		inv, err := nodeInventory(h.b, s)
+		require.NoError(err)
+		return inv
+	}
+	got := inv()
+	require.False(got.Ready)
+	require.Equal(1, got.Chains[chainDogecoin].Batches)
+	require.Contains(strings.Join(got.Problems, "\n"), "contribute (DVMC) first", "1 DOGE of surplus doesn't cover the fences")
+
+	h.contribute(20*doge, 100)
+	got = inv()
+	require.True(got.Ready, "%v", got.Problems)
+	require.Len(got.Chains[chainDogecoin].Coins, 2)
+
+	shallow := h.contribute(doge, 2)
+	got = inv()
+	require.False(got.Ready)
+	require.Contains(strings.Join(got.Problems, "\n"), shallow.TxHash().String()+":0 has 2 of")
+}

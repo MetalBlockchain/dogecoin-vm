@@ -70,6 +70,8 @@ Bridge (peg signers):
                                               log of a key that has never signed, or run a cutover
   dogevm coverage -signers FILE               what a cutover on this node would record (registry hash,
                                               unsettled coins); compare across nodes before a cutover
+  dogevm inventory -signers FILE              every coin of the set on both chains, the fences and their
+                                              fees, the surplus they need; -require-ready before adopting
   dogevm unsettled list|prove -signers FILE   a node's unsettled Dogecoin transactions; record proof a
                                               dropped one can never be mined (RUNBOOK, "Cutover")
 
@@ -146,6 +148,7 @@ func main() {
 		"signer-log":      cmdSignerLog,
 		"unsettled":       cmdUnsettled,
 		"coverage":        cmdCoverage,
+		"inventory":       cmdInventory,
 		"signer-setup":    cmdSignerSetup,
 		"signers-check":   cmdSignersCheck,
 		"pause":           cmdPause,
