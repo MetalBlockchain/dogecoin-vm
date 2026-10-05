@@ -15,15 +15,17 @@ import (
 // including the outputs of a transaction a reorganisation took out of its
 // block. Dogecoin Core 1.14 has no listsinceblock include_removed, and a
 // wallet that is rebuilt, or a transaction the wallet stops listing, would
-// take that evidence with it. So every wallet transaction that isn't yet
-// settled (not in a block rootDepth deep, nor conflicted by one that deep)
-// is written, body and all, to a file beside the signer set (unsettledFor:
-// a directory the web server can't write), and read
-// back on every history read, full rereads and restarts included. One the
-// wallet no longer lists comes back as conflicted, at the depth of the best
-// current evidence that it can never be mined (deadproof.go): its outputs
-// stay recorded, and a cutover stays gated, until that evidence is rootDepth
-// deep. Disappearing proves nothing: it may still be mined.
+// take that evidence with it. So every wallet transaction that isn't in a
+// block rootDepth deep is written, body and all, to a file beside the
+// signer set (unsettledFor: a directory the web server can't write), and
+// read back on every history read, full rereads and restarts included. One
+// the wallet no longer lists comes back as conflicted, at the depth of the
+// best current evidence that it can never be mined (deadproof.go): its
+// outputs stay recorded, and a cutover stays gated, until that evidence is
+// rootDepth deep. Disappearing proves nothing: it may still be mined. A
+// conflicted transaction stays in the file once its conflict is deep (Round
+// 8, X1): that conflict is what clears its outputs, so its record is kept
+// as a tombstone rather than deleted.
 
 // deadHistoryFile is the file name beside the registry.
 const deadHistoryFile = "dogecoin-unsettled.json"
@@ -37,6 +39,12 @@ type deadRecord struct {
 	// Proof is an operator-recorded spender of one of its inputs, checked
 	// against the chain on every read (deadproof.go).
 	Proof *conflictProof `json:"proof,omitempty"`
+	// Settled is set once the wallet listed it conflicted rootDepth deep: a
+	// reorganisation shallower than that can't undo the conflict, so the
+	// record stays as a tombstone saying so, even if the wallet later
+	// stops listing it and lists nothing that conflicts with it (Round 8,
+	// X1).
+	Settled bool `json:"settled,omitempty"`
 }
 
 // deadHistory is the file and what this process last read of it.
@@ -122,7 +130,11 @@ func (d *deadHistory) sync(tip int64, entries map[string]historyEntry, body func
 	sort.Strings(ids)
 	for _, txid := range ids {
 		e := entries[txid]
-		settled := e.height > 0 && tip-e.height+1 >= d.depth || e.conflicted && e.conflictDepth >= d.depth
+		// Only a transaction in a block rootDepth deep leaves the file: the
+		// wallet keeps listing it. A conflicted one stays (Round 8, X1): its
+		// conflict is what clears its outputs in a cutover, and the wallet
+		// may stop listing it.
+		settled := e.height > 0 && tip-e.height+1 >= d.depth
 		rec, have := records[txid]
 		if settled {
 			if have {
@@ -141,6 +153,10 @@ func (d *deadHistory) sync(tip int64, entries map[string]historyEntry, body func
 		}
 		if e.conflicted && e.conflictDepth > rec.ConflictDepth {
 			rec.ConflictDepth = e.conflictDepth
+			changed = true
+		}
+		if e.conflicted && e.conflictDepth >= d.depth && !rec.Settled {
+			rec.Settled = true
 			changed = true
 		}
 		records[txid] = rec

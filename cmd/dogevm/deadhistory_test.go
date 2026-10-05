@@ -70,7 +70,9 @@ func TestUnsettledTransactionsSurviveTheWallet(t *testing.T) {
 }
 
 // TestDeepConflictSettlesAnUnsettledTransaction: a conflict rootDepth deep
-// settles a transaction for good.
+// settles a transaction for good, and the record stays, marked settled
+// (Round 8, X1): it is the evidence that clears the transaction's outputs,
+// even after the wallet stops listing it.
 func TestDeepConflictSettlesAnUnsettledTransaction(t *testing.T) {
 	require := require.New(t)
 	h := newHarness(t)
@@ -84,7 +86,8 @@ func TestDeepConflictSettlesAnUnsettledTransaction(t *testing.T) {
 	require.NoError(err)
 	gone, err := d.sync(100, map[string]historyEntry{}, body)
 	require.NoError(err)
-	require.Empty(gone)
+	require.Contains(gone, txid, "kept as a tombstone")
+	require.True(gone[txid].Settled)
 }
 
 // stubDogecoinCore answers the wallet calls dogeChain.history makes, from

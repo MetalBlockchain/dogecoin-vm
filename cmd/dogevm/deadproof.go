@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
@@ -41,13 +42,19 @@ type conflictProof struct {
 }
 
 // spendsInputOf reports whether spender spends one of dropped's inputs and
-// is not dropped itself.
+// is not dropped itself. A coinbase's input names no coin (the null
+// outpoint every coinbase shares), so it is never evidence (Round 8, X3):
+// two unrelated coinbases would otherwise "conflict", and a dropped
+// coinbase stays unsettled, failing closed.
 func spendsInputOf(spender, dropped *wire.MsgTx) bool {
 	if spender.TxHash() == dropped.TxHash() {
 		return false
 	}
 	ins := map[wire.OutPoint]bool{}
 	for _, in := range dropped.TxIn {
+		if isNullOutPoint(in.PreviousOutPoint) {
+			continue
+		}
 		ins[in.PreviousOutPoint] = true
 	}
 	for _, in := range spender.TxIn {
@@ -125,26 +132,6 @@ func (c *dogeChain) droppedDepth(tip int64, dropped *wire.MsgTx, entries map[str
 	return depth, nil
 }
 
-// settle removes txids from the file: each has a conflict rootDepth deep.
-func (d *deadHistory) settle(txids []string) error {
-	if len(txids) == 0 {
-		return nil
-	}
-	unlock, err := d.lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	records, err := d.read()
-	if err != nil {
-		return err
-	}
-	for _, txid := range txids {
-		delete(records, txid)
-	}
-	return d.write(records)
-}
-
 // setProof records p for the unsettled transaction txid.
 func (d *deadHistory) setProof(txid string, p conflictProof) error {
 	unlock, err := d.lock()
@@ -163,6 +150,11 @@ func (d *deadHistory) setProof(txid string, p conflictProof) error {
 	rec.Proof = &p
 	records[txid] = rec
 	return d.write(records)
+}
+
+// isNullOutPoint reports whether op is a coinbase input's: no coin at all.
+func isNullOutPoint(op wire.OutPoint) bool {
+	return op.Index == wire.MaxPrevOutIndex && op.Hash == (chainhash.Hash{})
 }
 
 // validHex reports whether s is non-empty hex.

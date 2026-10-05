@@ -460,12 +460,17 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	// A dropped transaction is settled once a spend of one of its inputs is
-	// rootDepth deep (deadproof.go); its depth is read now, not remembered,
-	// as a reorganisation can make it shallower again.
+	// A dropped transaction comes back as conflicted at the current depth of
+	// the best evidence it can never be mined (deadproof.go): a spend of one
+	// of its inputs, from the wallet or an operator's proof, read fresh on
+	// every read, as a reorganisation can make it shallower again. It stays
+	// in the file and in history even once that evidence is rootDepth deep
+	// (Round 8, X1): a cutover clears its recorded outputs only by seeing
+	// that conflict (chainView.cleared), so deleting the record would leave
+	// them owed for good. The file keeps it as a tombstone; a reorganisation
+	// that makes the evidence shallow again shows it as owed again.
 	// Dropped transactions added back below are never in a block, so the
 	// wallet scan in droppedDepth skips them.
-	var settled []string
 	for txid, rec := range gone {
 		tx, err := decodeTx(rec.Hex)
 		if err != nil {
@@ -475,9 +480,9 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 		if err != nil {
 			return 0, nil, fmt.Errorf("unsettled transaction %s: %w", txid, err)
 		}
-		if depth >= c.dead.depth {
-			settled = append(settled, txid)
-			continue
+		if rec.Settled {
+			// The wallet once listed it conflicted rootDepth deep.
+			depth = max(depth, c.dead.depth)
 		}
 		c.mu.Lock()
 		if c.known == nil {
@@ -486,9 +491,6 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 		c.known[txid] = tx
 		c.mu.Unlock()
 		entries[txid] = historyEntry{conflicted: true, conflictDepth: depth, time: rec.Time}
-	}
-	if err := c.dead.settle(settled); err != nil {
-		return 0, nil, err
 	}
 	return tip, entries, nil
 }

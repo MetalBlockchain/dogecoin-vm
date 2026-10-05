@@ -51,13 +51,13 @@ func TestDroppedTransactionClearsOnADeepWalletConflict(t *testing.T) {
 	core.listed[wid] = 20
 	_, entries, err = c.history()
 	require.NoError(err)
-	require.NotContains(entries, id, "settled: its spend is rootDepth deep")
+	require.EqualValues(20, entries[id].conflictDepth, "settled: its spend is rootDepth deep, and history still says so (X1)")
 	records, err := (&deadHistory{path: path}).read()
 	require.NoError(err)
-	require.NotContains(records, id)
+	require.Contains(records, id, "kept: it is the evidence that clears its outputs")
 	_, entries, err = client().history() // a restart
 	require.NoError(err)
-	require.NotContains(entries, id)
+	require.EqualValues(20, entries[id].conflictDepth)
 }
 
 // TestDroppedTransactionClearsOnAProvenConflict (W8): when the winner pays
@@ -105,5 +105,5 @@ func TestDroppedTransactionClearsOnAProvenConflict(t *testing.T) {
 	core.blocks["B"] = stubBlock{confirmations: 20, tx: []string{wid}}
 	_, entries, err = c.history()
 	require.NoError(err)
-	require.NotContains(entries, id, "settled by the proof")
+	require.EqualValues(20, entries[id].conflictDepth, "settled by the proof, and still visible as such (X1)")
 }
