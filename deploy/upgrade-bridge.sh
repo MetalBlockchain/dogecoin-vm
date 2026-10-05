@@ -406,9 +406,21 @@ forward_failure() {
   local code=$?
   [[ $code == 0 || ${DONE:-0} == 1 ]] && return
   echo "upgrade-bridge: failed after the point of no return: nothing is rolled back (the new binaries and every signing log stay)." >&2
-  echo "upgrade-bridge: the bridge is stopped and every signer stays paused. Fix the cause and carry on by hand (RUNBOOK.md, \"Upgrading the bridge software\"); backups are in $WORK" >&2
   systemctl stop "$CHAIN-bridge-main" 2>/dev/null || true
   paused_at "$SET" || as_user "$HOME_DIR/bin/$CHAIN" pause -signers "$SET" -reason "$REASON" || true
+  # A failure part-way through resuming leaves earlier signers resumed
+  # (round 8, X4): pause every signer again, and stop any that can't be
+  # paused, so none answers requests while the operator looks.
+  local unit stopped=()
+  for unit in "${SIGNERS[@]}"; do
+    paused_at "${SSET[$unit]}" && continue
+    as_signer "$unit" "$SIGNER_BIN" pause -signers "${SSET[$unit]}" -reason "$REASON" >/dev/null 2>&1 || true
+    if ! paused_at "${SSET[$unit]}"; then
+      systemctl stop "$unit" 2>/dev/null || true
+      stopped+=("$unit")
+    fi
+  done
+  echo "upgrade-bridge: the bridge is stopped and paused, and every signer is paused${stopped[*]:+ (could not pause, so stopped: ${stopped[*]})}. Fix the cause and carry on by hand (RUNBOOK.md, \"Upgrading the bridge software\"); backups are in $WORK" >&2
 }
 trap forward_failure EXIT
 log "starting the signers (paused)"
@@ -427,11 +439,11 @@ done
 log "starting the web wallet and monitor (the bridge stays stopped)"
 systemctl start "$CHAIN-web-main" "$CHAIN-monitor-main" || die "couldn't start the web wallet or monitor"
 
-resume_cmds() {
-  echo "  runuser -u $CHAIN -- $HOME_DIR/bin/$CHAIN resume -signers $SET"
+resume_cmds() { # the signers first, then the bridge (round 8, X5)
   for unit in "${SIGNERS[@]}"; do
     echo "  runuser -u $unit -- $SIGNER_BIN resume -signers ${SSET[$unit]}"
   done
+  echo "  runuser -u $CHAIN -- $HOME_DIR/bin/$CHAIN resume -signers $SET"
 }
 # The coordinator's fence runs with exactly the bridge unit's own command
 # line (its registry, cosigners, coordinator key and policy flags, which

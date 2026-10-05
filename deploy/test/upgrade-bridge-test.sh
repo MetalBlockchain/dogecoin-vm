@@ -36,8 +36,10 @@ case \$cmd in
   version) echo "$2" ;;
   coverage) set=\$(arg -signers "\$@"); u=\$(unit_of "\$set"); v=COVERAGE_\${u//-/_}
     d='{"registry":"r1","registered":2,"coins":{"dogecoin":["aa:0"],"dogecoinvm":["bb:1"]}}'; echo "\${!v:-\$d}" ;;
-  pause) set=\$(arg -signers "\$@"); echo '{"reason":"x"}' >"\$(dirname "\$set")/paused.json"; echo "pause \$(dirname "\$set")" >>"\$EVENTS" ;;
-  resume) set=\$(arg -signers "\$@"); rm -f "\$(dirname "\$set")/paused.json"; echo "resume \$(dirname "\$set")" >>"\$EVENTS" ;;
+  pause) set=\$(arg -signers "\$@"); [[ -n \${FAIL_PAUSE:-} && \$set == *\$FAIL_PAUSE* && -f "\$(dirname "\$set")/resumed-once" ]] && exit 1
+    echo '{"reason":"x"}' >"\$(dirname "\$set")/paused.json"; echo "pause \$(dirname "\$set")" >>"\$EVENTS" ;;
+  resume) set=\$(arg -signers "\$@"); [[ -n \${FAIL_RESUME:-} && \$set == *\$FAIL_RESUME* ]] && exit 1
+    rm -f "\$(dirname "\$set")/paused.json"; touch "\$(dirname "\$set")/resumed-once"; echo "resume \$(dirname "\$set")" >>"\$EVENTS" ;;
   signer-log)
     step=\$1; shift; log=\$(arg -log "\$@"); set=\$(arg -signers "\$@")
     tips=\${TIPS:-'{"dogecoin":"aa:1","dogecoinvm":"bb:1"}'}
@@ -363,6 +365,19 @@ setup
 code=$(FAIL_START=dogevm-bridge-main RESUME=1 run)
 expect '[[ $code != 0 && $(version) == new ]]' "fails, new binary stays"
 expect 'paused && all_signers_paused' "bridge and signers paused"
+
+echo "26. a resume that fails part-way pauses every signer again (round 8, X4)"
+setup
+code=$(FAIL_RESUME=dogevm-signer-2 RESUME=1 run)
+expect '[[ $code != 0 ]]' "fails"
+expect 'grep -q "^resume .*dogevm-signer-1" "$EVENTS"' "signer 1 had been resumed"
+expect 'all_signers_paused && paused' "every signer, and the bridge, paused again"
+
+echo "27. a signer that can't be paused again is stopped (round 8, X4)"
+setup
+code=$(FAIL_RESUME=dogevm-signer-2 FAIL_PAUSE=dogevm-signer-1 RESUME=1 run)
+expect '[[ $code != 0 && ! -f $T/active/dogevm-signer-1 ]]' "signer 1, resumed and unpausable, is stopped"
+expect 'grep -q "stopped: dogevm-signer-1" "$T/out"' "says so"
 
 echo
 echo "$pass passed, $fail failed"
