@@ -16,6 +16,9 @@ type chainEvidence struct {
 	// listed is, per chain, every transaction s read, by unsigned ID.
 	listed map[string]map[string]chainTx
 	nodes  func(chain string) chain
+	// deep is the Dogecoin depth past which a reorganisation can't take a
+	// block away (rootDepth); 0 treats any block as final (Round 7, W1).
+	deep int64
 }
 
 func newChainEvidence(s *pegState, nodes func(string) chain) *chainEvidence {
@@ -55,6 +58,19 @@ func (e *chainEvidence) confirmed(chain string, t loggedTx) bool {
 		}
 	}
 	return f(t.Txid)
+}
+
+// shallow reports whether t, confirmed on chain, could still be taken out of
+// its block by a reorganisation: a Dogecoin transaction listed fewer than
+// deep blocks down. DogecoinVM blocks are final. One the node says is in a
+// block but the wallet doesn't list is taken as deep, as before: the depth
+// can't be read.
+func (e *chainEvidence) shallow(chain string, t loggedTx) bool {
+	if chain != chainDogecoin || e.deep <= 1 {
+		return false
+	}
+	lt, ok := e.listed[chain][t.Txid]
+	return ok && lt.confirmations > 0 && lt.confirmations < e.deep
 }
 
 // spentElsewhere reports whether a confirmed transaction other than t (by

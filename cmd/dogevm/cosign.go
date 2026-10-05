@@ -670,6 +670,7 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		return b.vm
 	}
 	ev := newChainEvidence(s, chainNamed)
+	ev.deep = max(b.depositConfirmations, b.confFloor, 1)
 	if err := c.learnSigned(ev); err != nil {
 		return nil, nil, 0, fmt.Errorf("writing the signing log: %w", err)
 	}
@@ -1456,6 +1457,19 @@ actions:
 		var most int64
 		for _, t := range a.Txs {
 			if t.Fee > 0 && ev != nil && ev.confirmed(t.Chain, t) {
+				if !ev.shallow(t.Chain, t) {
+					continue actions
+				}
+				// Round 7, W1: one alternative is in a Dogecoin block a
+				// reorganisation could still undo, and a costlier one
+				// this signer signed could be mined in its place. Its fee
+				// is already out of the surplus; keep the difference to
+				// the costliest alternative reserved until it is deep.
+				var worst int64
+				for _, alt := range a.Txs {
+					worst = max(worst, alt.Fee)
+				}
+				total += max(worst-t.Fee, 0)
 				continue actions
 			}
 		}
