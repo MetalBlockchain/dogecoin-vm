@@ -39,6 +39,7 @@ case \$cmd in
   inventory) if [[ -n \${INVENTORY_PROBLEM:-} ]]; then echo "{\"problems\":[\"\$INVENTORY_PROBLEM\"],\"ready\":false}"; echo "not ready" >&2; exit 1; fi
     echo '{"chains":{"dogecoin":{"coins":[{"outpoint":"aa:0"}]},"dogecoinvm":{"coins":[{"outpoint":"bb:1"}]}},"surplus":"9.00000000","needed":"2.00000000","problems":[],"ready":true}' ;;
   pause) set=\$(arg -signers "\$@"); [[ -n \${FAIL_PAUSE:-} && \$set == *\$FAIL_PAUSE* && -f "\$(dirname "\$set")/resumed-once" ]] && exit 1
+    [[ -n \${FAIL_PAUSE_ALWAYS:-} && \$set == *\$FAIL_PAUSE_ALWAYS* ]] && exit 1
     echo '{"reason":"x"}' >"\$(dirname "\$set")/paused.json"; echo "pause \$(dirname "\$set")" >>"\$EVENTS" ;;
   resume) set=\$(arg -signers "\$@"); [[ -n \${FAIL_RESUME:-} && \$set == *\$FAIL_RESUME* ]] && exit 1
     rm -f "\$(dirname "\$set")/paused.json"; touch "\$(dirname "\$set")/resumed-once"; echo "resume \$(dirname "\$set")" >>"\$EVENTS" ;;
@@ -114,6 +115,7 @@ case \$cmd in
   show) unit=\${@: -1}; cat "$T/units/\${unit%.service}" ;;
   stop) for u in "\$@"; do
       [[ \${FAIL_STOP:-} == "\$u" ]] && { echo "stop \$u failed" >>"\$EVENTS"; exit 1; }
+      [[ \${FAIL_STOP_RESUMED:-} == "\$u" && -f "$VARLIB/\$u/resumed-once" ]] && { echo "stop \$u failed" >>"\$EVENTS"; exit 1; }
       rm -f "$T/active/\$u"; echo "stop \$u" >>"\$EVENTS"
     done ;;
   start) for u in "\$@"; do
@@ -123,6 +125,9 @@ case \$cmd in
       if [[ \${LATE_WRITE:-} == "\$u" ]]; then echo SIGNED-LATE >>"$VARLIB/\$u/signing-log.json"; fi
     done ;;
   is-active) unit=\${@: -1}; [[ -f "$T/active/\$unit" ]] ;;
+  kill) u=\${@: -1}
+      [[ \${FAIL_KILL:-} == "\$u" ]] && { echo "kill \$u failed" >>"\$EVENTS"; exit 1; }
+      rm -f "$T/active/\$u"; echo "kill \$u" >>"\$EVENTS" ;;
 esac
 EOF
   cat >"$T/bin/runuser" <<'EOF'
@@ -379,7 +384,7 @@ echo "27. a signer that can't be paused again is stopped (round 8, X4)"
 setup
 code=$(FAIL_RESUME=dogevm-signer-2 FAIL_PAUSE=dogevm-signer-1 RESUME=1 run)
 expect '[[ $code != 0 && ! -f $T/active/dogevm-signer-1 ]]' "signer 1, resumed and unpausable, is stopped"
-expect 'grep -q "stopped: dogevm-signer-1" "$T/out"' "says so"
+expect 'grep -q "dogevm-signer-1: stopped (could not be paused" "$T/out"' "says so"
 
 echo "28. not ready to adopt (inventory): stops with exit 3, before any log is adopted (round 8, X5)"
 setup
@@ -398,6 +403,21 @@ echo "30. a coverage difference before adopting is exit 2 too (round 8, X5)"
 setup
 code=$(COVERAGE_dogevm_signer_1='{"registry":"r2","registered":2,"coins":{"dogecoin":["aa:0"],"dogecoinvm":["bb:1"]}}' run)
 expect '[[ $code == 2 ]]' "exit 2"
+
+echo "31. a pause that fails part-way before the point of no return: only paused signers start again (round 9, Y3)"
+setup
+code=$(FAIL_PAUSE_ALWAYS=dogevm-signer-2 run)
+expect '[[ $code != 0 && $(version) == old ]]' "fails, old binary back"
+expect '[[ ! -f $T/active/dogevm-signer-2 ]] && ! signer_paused 2' "signer 2, unpausable, is left stopped"
+expect '[[ -f $T/active/dogevm-signer-1 && -f $T/active/dogevm-signer-3 ]] && signer_paused 1 && signer_paused 3' "signers 1 and 3 run, paused (3 was paused by the cleanup)"
+expect 'grep -q "dogevm-signer-2: stopped (could not be paused" "$T/out"' "says so"
+
+echo "32. a signer that can't be paused, stopped or killed is reported as running unpaused, never as safe (round 9, Y3)"
+setup
+code=$(FAIL_RESUME=dogevm-signer-2 FAIL_PAUSE=dogevm-signer-1 FAIL_STOP_RESUMED=dogevm-signer-1 FAIL_KILL=dogevm-signer-1 RESUME=1 run)
+expect '[[ $code != 0 ]]' "fails"
+expect 'grep -q "dogevm-signer-1: STILL RUNNING AND NOT PAUSED" "$T/out"' "says signer 1 is exposed"
+expect '! grep -q "no signer is running unpaused" "$T/out"' "doesn't claim everything is safe"
 
 echo
 echo "$pass passed, $fail failed"

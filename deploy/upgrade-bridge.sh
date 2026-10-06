@@ -167,6 +167,35 @@ WORK=$(mktemp -d "$BACKUPS/upgrade-bridge-$(date +%Y%m%d-%H%M%S).XXXX")
 declare -A PAUSED_BY_US LOG_BEFORE LOG_MADE
 backed_up=0
 ok=0
+# contain makes sure no signer answers unpaused (round 9, Y3), for both
+# failure paths: each signer is paused, or else stopped, and a stop is
+# checked; one that is still running unpaused is reported as such, never
+# as safe. With "start", a paused, stopped signer is started again; an
+# unpaused one never is. It prints what it found and returns non-zero if
+# any signer is still exposed.
+contain() {
+  local mode=${1:-} unit exposed=0
+  for unit in "${SIGNERS[@]}"; do
+    paused_at "${SSET[$unit]}" ||
+      as_signer "$unit" "$SIGNER_BIN" pause -signers "${SSET[$unit]}" -reason "$REASON" >/dev/null 2>&1 || true
+    if paused_at "${SSET[$unit]}"; then
+      if [[ $mode == start ]] && ! systemctl is-active --quiet "$unit"; then
+        systemctl start "$unit" 2>/dev/null || true
+      fi
+      if systemctl is-active --quiet "$unit"; then echo "  $unit: running, paused" >&2; else echo "  $unit: stopped, paused" >&2; fi
+      continue
+    fi
+    systemctl stop "$unit" 2>/dev/null || true
+    systemctl is-active --quiet "$unit" && { systemctl kill --signal=KILL "$unit" 2>/dev/null || true; sleep 1; }
+    if systemctl is-active --quiet "$unit"; then
+      echo "  $unit: STILL RUNNING AND NOT PAUSED: it could sign; stop it by hand now" >&2
+      exposed=1
+    else
+      echo "  $unit: stopped (could not be paused; left stopped)" >&2
+    fi
+  done
+  return $exposed
+}
 cleanup() {
   [[ $ok == 1 ]] && return
   echo "upgrade-bridge: failed; the bridge and signers stay paused" >&2
@@ -192,7 +221,15 @@ cleanup() {
     done
   fi
   paused_at "$SET" || as_user "$HOME_DIR/bin/$CHAIN" pause -signers "$SET" -reason "$REASON" || true
-  systemctl start "${SIGNERS[@]}" "${COORD[@]}" || true
+  # Only a signer whose pause is in place starts again (round 9, Y3); the
+  # coordinator likewise only if the bridge is paused.
+  echo "upgrade-bridge: signers after the rollback:" >&2
+  contain start || echo "upgrade-bridge: WARNING: a signer is running unpaused (above)." >&2
+  if paused_at "$SET"; then
+    systemctl start "${COORD[@]}" || true
+  else
+    echo "upgrade-bridge: the bridge couldn't be paused, so it is left stopped" >&2
+  fi
   echo "upgrade-bridge: see $WORK" >&2
 }
 restore_contrib() { # backup, destination
@@ -456,17 +493,14 @@ forward_failure() {
   paused_at "$SET" || as_user "$HOME_DIR/bin/$CHAIN" pause -signers "$SET" -reason "$REASON" || true
   # A failure part-way through resuming leaves earlier signers resumed
   # (round 8, X4): pause every signer again, and stop any that can't be
-  # paused, so none answers requests while the operator looks.
-  local unit stopped=()
-  for unit in "${SIGNERS[@]}"; do
-    paused_at "${SSET[$unit]}" && continue
-    as_signer "$unit" "$SIGNER_BIN" pause -signers "${SSET[$unit]}" -reason "$REASON" >/dev/null 2>&1 || true
-    if ! paused_at "${SSET[$unit]}"; then
-      systemctl stop "$unit" 2>/dev/null || true
-      stopped+=("$unit")
-    fi
-  done
-  echo "upgrade-bridge: the bridge is stopped and paused, and every signer is paused${stopped[*]:+ (could not pause, so stopped: ${stopped[*]})}. Fix the cause and carry on by hand (RUNBOOK.md, \"Upgrading the bridge software\"); backups are in $WORK" >&2
+  # paused, checking the stop (round 9, Y3), so none answers requests
+  # while the operator looks.
+  echo "upgrade-bridge: signers:" >&2
+  if contain; then
+    echo "upgrade-bridge: the bridge is stopped, and no signer is running unpaused (above). Fix the cause and carry on by hand (RUNBOOK.md, \"Upgrading the bridge software\"); backups are in $WORK" >&2
+  else
+    echo "upgrade-bridge: WARNING: a signer is still running unpaused (above): stop it by hand before anything else; backups are in $WORK" >&2
+  fi
 }
 trap forward_failure EXIT
 log "starting the signers (paused)"
