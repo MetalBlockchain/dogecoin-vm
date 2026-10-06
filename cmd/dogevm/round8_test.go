@@ -195,13 +195,17 @@ func TestInventoryGatesAdoption(t *testing.T) {
 	}
 	got := inv()
 	require.False(got.Ready)
+	require.Contains(strings.Join(got.Problems, "\n"), "not enough for the fence's", "1 DOGE can't pay its own 1 DOGE fence (Round 10, Z4)")
+
+	h.contribute(doge/2, 100)
+	got = inv()
 	require.Equal(1, got.Chains[chainDogecoin].Batches)
-	require.Contains(strings.Join(got.Problems, "\n"), "contribute (DVMC) first", "1 DOGE of surplus doesn't cover the fences")
+	require.Contains(strings.Join(got.Problems, "\n"), "contribute (DVMC) first", "1.5 DOGE of surplus doesn't cover twice the fences")
 
 	h.contribute(20*doge, 100)
 	got = inv()
 	require.True(got.Ready, "%v", got.Problems)
-	require.Len(got.Chains[chainDogecoin].Coins, 2)
+	require.Len(got.Chains[chainDogecoin].Coins, 3)
 	peg, err := h.b.signers.address(h.b.dogeParams)
 	require.NoError(err)
 	require.Contains(got.Addresses, peg.EncodeAddress(), "the peg address, to reconcile against a full node")

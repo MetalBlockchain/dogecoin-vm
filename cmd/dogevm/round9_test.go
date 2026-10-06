@@ -300,14 +300,9 @@ func TestInventoryCountsTheCarriedChange(t *testing.T) {
 	require.Len(ic.Coins, 2*per)
 	require.Equal(3, ic.Batches, "the change takes a place in every later batch")
 
-	var coins []utxo
-	for _, u := range s.lockedUTXOs {
-		if u.confirmations > 0 {
-			coins = append(coins, u)
-		}
-	}
-	_, _, costliest, err := h.b.fenceBudget(s, chainDogecoin, coins)
+	_, _, costliest, infeasible, err := h.b.fenceBudget(s, chainDogecoin)
 	require.NoError(err)
+	require.Empty(infeasible)
 	require.Greater(costliest, h.b.fenceBase(chainDogecoin), "a 100-input fence costs more than one base fee")
 	require.Equal(formatDoge(int64(fenceReplacements)*costliest), ic.Headroom)
 

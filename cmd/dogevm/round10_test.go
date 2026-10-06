@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -141,4 +144,81 @@ func onlyOf(list []string, want ...string) []string {
 		}
 	}
 	return out
+}
+
+// TestInventoryPricesTheFencesTheCutoverSigns (Round 10, Z4; Codex r10 #4):
+// the inventory builds the same fences the cutover does, in the same
+// order (the tip, then oldest first), with each input's own redeem script
+// and the real change carried forward. Here older personal-deposit coins
+// (a longer redeem script) fall into the first batch by age, not where
+// their outpoints would sort; the inventory's fees equal what the cutover
+// actually paid.
+func TestInventoryPricesTheFencesTheCutoverSigns(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	per := maxFenceInputs(chainDogecoin)
+	for range per + 10 {
+		h.contribute(doge, 100)
+	}
+	// One personal-deposit coin, older than every contribution (so the
+	// cutover's age order puts it in the first, full batch) but with an
+	// outpoint that sorts after all of them (so outpoint order would leave
+	// it to the small second batch). Its longer redeem script takes the
+	// full batch past a fee step.
+	dest := h.user(40)
+	_, err := h.b.registry.add(dest)
+	require.NoError(err)
+	for _, c := range h.signers {
+		_, err := c.b.registry.add(dest)
+		require.NoError(err)
+	}
+	var last chainhash.Hash
+	for _, t := range h.doge.txs {
+		if hash := t.tx.TxHash(); bytes.Compare(hash[:], last[:]) > 0 {
+			last = hash
+		}
+	}
+	for value := int64(2 * doge); ; value++ {
+		tx := wire.NewMsgTx(1)
+		tx.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+		tx.AddTxOut(wire.NewTxOut(value, p2shScript(h.b.signers.depositRedeemScript(dest))))
+		if hash := tx.TxHash(); bytes.Compare(hash[:], last[:]) > 0 {
+			h.doge.add(tx, 300)
+			break
+		}
+	}
+	s, err := h.b.load()
+	require.NoError(err)
+	inv, err := nodeInventory(h.b, s)
+	require.NoError(err)
+	ic := inv.Chains[chainDogecoin]
+	require.Equal(2, ic.Batches)
+
+	h.rebuildLogs()
+	h.fenceUntilDone(80)
+	var paid int64
+	s, err = h.b.load()
+	require.NoError(err)
+	for _, t := range h.doge.txs {
+		if _, ok := parseFence(t.tx); ok {
+			fee := fenceFeeOf(s, chainDogecoin, t.tx)
+			require.Positive(fee)
+			paid += fee
+		}
+	}
+	require.Equal(ic.FenceFees, formatDoge(paid), "the inventory priced exactly what the cutover paid")
+}
+
+// TestInventoryReportsAnInfeasibleFence (Round 10, Z4): a batch whose
+// coins can't pay its fee and leave the next anchor is a problem the
+// inventory names, not a number it adds up.
+func TestInventoryReportsAnInfeasibleFence(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t) // the peg holds only the seed: one fence fee, nothing left
+	s, err := h.b.load()
+	require.NoError(err)
+	inv, err := nodeInventory(h.b, s)
+	require.NoError(err)
+	require.False(inv.Ready)
+	require.Contains(strings.Join(inv.Problems, "\n"), "not enough for the fence's")
 }

@@ -676,6 +676,28 @@ func recordedSet(coins []string) map[wire.OutPoint]bool {
 // of the set other than a fence is pending there (a fence would conflict
 // with it).
 func (s *pegState) fenceInputs(chain string, recorded map[wire.OutPoint]bool) ([]utxo, error) {
+	inputs, err := s.fenceOrder(chain)
+	if err != nil {
+		return nil, err
+	}
+	if n := maxFenceInputs(chain); len(inputs) > n {
+		inputs = inputs[:n] // the rest in the next fence
+	}
+	for _, u := range inputs {
+		if recorded[u.outPoint] {
+			return inputs, nil
+		}
+	}
+	return nil, fmt.Errorf("no recorded coin on %s is left for a fence to spend", chain)
+}
+
+// fenceOrder is every coin fences on chain will spend, in the order they
+// spend them: the lineage's tip first (when it has one), then every
+// confirmed coin of the set nothing spends, oldest first, ties by
+// outpoint. fenceInputs takes the first batch of it; the inventory prices
+// every batch from it (Round 10, Z4), so the two can't disagree. It fails
+// while a transaction of the set other than a fence is pending there.
+func (s *pegState) fenceOrder(chain string) ([]utxo, error) {
 	var anchor *utxo
 	var free []utxo
 	switch chain {
@@ -721,16 +743,7 @@ func (s *pegState) fenceInputs(chain string, recorded map[wire.OutPoint]bool) ([
 	if anchor != nil {
 		inputs = append(inputs, *anchor)
 	}
-	inputs = append(inputs, rest...)
-	if n := maxFenceInputs(chain); len(inputs) > n {
-		inputs = inputs[:n] // the rest in the next fence
-	}
-	for _, u := range inputs {
-		if recorded[u.outPoint] {
-			return inputs, nil
-		}
-	}
-	return nil, fmt.Errorf("no recorded coin on %s is left for a fence to spend", chain)
+	return append(inputs, rest...), nil
 }
 
 // fenceBase is the fee a fence fee is a multiple of on chain.

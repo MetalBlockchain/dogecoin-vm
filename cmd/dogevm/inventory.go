@@ -120,9 +120,12 @@ func nodeInventory(b *bridge, s *pegState) (inventory, error) {
 			}
 		}
 		ic.Total = formatDoge(total)
-		fees, batches, costliest, err := b.fenceBudget(s, chain, confirmed)
+		fees, batches, costliest, infeasible, err := b.fenceBudget(s, chain)
 		if err != nil {
 			return inventory{}, err
+		}
+		if infeasible != "" {
+			inv.Problems = append(inv.Problems, infeasible)
 		}
 		ic.Batches, ic.FenceFees = batches, formatDoge(fees)
 		// A stuck Dogecoin fence is replaced one fence fee higher each time
@@ -153,18 +156,18 @@ func nodeInventory(b *bridge, s *pegState) (inventory, error) {
 	return inv, nil
 }
 
-// fenceBudget is what fences spending coins on chain cost, how many it
-// takes, and the costliest one: batches as nextFence builds them (the first
-// coin first, at most maxFenceInputs, trimmed to maxFenceBytes), each after
-// the first starting with the change the one before paid back to the set's
-// own script (Round 9, Y4).
-func (b *bridge) fenceBudget(s *pegState, chain string, coins []utxo) (fees int64, batches int, costliest int64, err error) {
-	var script []byte
-	switch {
-	case chain == chainDogecoin && s.pegLine != nil:
-		script = s.pegLine.script
-	case chain == chainDogecoinVM && s.reserveLine != nil:
-		script = s.reserveLine.script
+// fenceBudget is what the fences on chain will cost, how many there will
+// be, and the costliest one, worked out by building them (Round 10, Z4):
+// the coins in fenceOrder's order (the lineage's tip first, then oldest
+// first), each batch as nextFence makes it (at most maxFenceInputs,
+// trimmed to maxFenceBytes, each input's own redeem script sized), built
+// with buildFence, and each batch after the first starting with the real
+// change the one before paid back. A batch that can't pay its fee and
+// leave pegDust is a problem, not a number: infeasible says why.
+func (b *bridge) fenceBudget(s *pegState, chain string) (fees int64, batches int, costliest int64, infeasible string, err error) {
+	coins, err := s.fenceOrder(chain)
+	if err != nil {
+		return 0, 0, 0, err.Error(), nil
 	}
 	var carry *utxo
 	for len(coins) > 0 {
@@ -175,30 +178,34 @@ func (b *bridge) fenceBudget(s *pegState, chain string, coins []utxo) (fees int6
 		take := min(len(coins), maxFenceInputs(chain)-len(batch))
 		batch = append(batch, coins[:take]...)
 		if batch, err = b.trimToSize(s, chain, batch); err != nil {
-			return 0, 0, 0, err
+			return 0, 0, 0, "", err
 		}
-		size, err := b.fenceSizeOf(s, chain, batch)
-		if err != nil {
-			return 0, 0, 0, err
-		}
-		fee := fenceFee(chain, b.fenceBase(chain), size)
-		fees += fee
-		costliest = max(costliest, fee)
-		batches++
 		used := len(batch)
 		if carry != nil {
 			used-- // the carried change isn't one of coins
 		}
 		if used <= 0 {
-			return 0, 0, 0, fmt.Errorf("%s: a fence can't take another coin past the change it carries", chain)
+			return fees, batches, costliest, fmt.Sprintf("%s: a fence can't take another coin past the change it carries", chain), nil
 		}
+		// The carried change sits at the set's own script, as the anchor
+		// before it did: size it like that one.
+		size, err := b.fenceSizeOf(s, chain, batch)
+		if err != nil {
+			return 0, 0, 0, "", err
+		}
+		fee := fenceFee(chain, b.fenceBase(chain), size)
+		tx, err := b.buildFence(chain, batch, fee)
+		if err != nil {
+			return fees, batches, costliest, fmt.Sprintf("%s: fence %d: %v", chain, batches+1, err), nil
+		}
+		fees += fee
+		costliest = max(costliest, fee)
+		batches++
 		coins = coins[used:]
-		if script == nil {
-			script = batch[0].pkScript
-		}
-		carry = &utxo{outPoint: wire.OutPoint{Index: uint32(batches)}, pkScript: script, confirmations: 1}
+		carry = &utxo{outPoint: wire.OutPoint{Hash: tx.TxHash(), Index: 0}, value: tx.TxOut[0].Value,
+			pkScript: tx.TxOut[0].PkScript, confirmations: 1}
 	}
-	return fees, batches, costliest, nil
+	return fees, batches, costliest, "", nil
 }
 
 // cmdInventory prints this node's inventory:
