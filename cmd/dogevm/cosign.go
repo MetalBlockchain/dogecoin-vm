@@ -1305,11 +1305,15 @@ type signingLog struct {
 	// goes down. CutoverStarted is when the current one began (unix s).
 	CutoverEpoch   int   `json:"cutoverEpoch,omitempty"`
 	CutoverStarted int64 `json:"cutoverStarted,omitempty"`
-	// CutoverBudget is what this signer may pay in fence fees over the
-	// cutover CutoverBudgetEpoch: its share of the surplus it saw when it
-	// first priced a fence in it (cutoverBudgetRoom, Round 9, Y1).
-	CutoverBudget      int64 `json:"cutoverBudget,omitempty"`
-	CutoverBudgetEpoch int   `json:"cutoverBudgetEpoch,omitempty"`
+	// FenceBudget is what this signer may pay in fence fees over its whole
+	// life, all cutovers together (cutoverBudgetRoom, Round 10, Z1): its
+	// share of the surplus it saw when it first priced a fence, plus its
+	// share of every DVMC contribution confirmed rootDepth deep after that.
+	// A new cutover never refills it: a fence another quorum kept back from
+	// an earlier one could still be mined. FenceCapital lists the
+	// contribution outputs already counted in it.
+	FenceBudget  int64    `json:"fenceBudget,omitempty"`
+	FenceCapital []string `json:"fenceCapital,omitempty"`
 	// An old log's "cutoverWaived" (round 5's operator waiver, since
 	// removed) discharges nothing: openSigningLog puts its coins back into
 	// Cutover (restoreWaived), so they clear only the normal way.

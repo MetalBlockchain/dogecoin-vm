@@ -150,6 +150,10 @@ type pegState struct {
 	unclaimedOnDoge int64 // deposits not credited: owed back as refunds
 	unclaimedOnVM   int64 // untagged or too-small payments into the reserve: owed back
 	contributed     int64 // DVMC payments to the peg address: operating capital
+	// contributions are those payments' outputs, with their depth: a
+	// signer's lifetime fence budget grows only by deep ones it hasn't
+	// counted yet (cutoverBudgetRoom).
+	contributions []utxo
 	// pendingRefunds is deposits refunded by a transaction not yet in a
 	// block: still owed until it is (its inputs still count as locked).
 	pendingRefunds int64
@@ -473,6 +477,8 @@ func (b *bridge) load() (*pegState, error) {
 				if t.confirmations > 0 {
 					s.contributed += out.Value
 				}
+				s.contributions = append(s.contributions, utxo{outPoint: d.outPoint, value: out.Value,
+					pkScript: out.PkScript, confirmations: t.confirmations})
 				continue
 			case bytes.Equal(out.PkScript, script):
 				// The shared peg address needs a DVMD tag.

@@ -114,30 +114,26 @@ func TestDroppedDogeFenceIsStillUnsettled(t *testing.T) {
 	require.Nil(unsettledDogeFence(s), "what conflicts with it is rootDepth deep: dead")
 }
 
-// TestCutoverBudgetCountsEveryFenceOnce (Y1, Codex r9 #1): over a cutover a
-// signer pays at most its budget in fence fees, spent or not, each action
-// at its costliest alternative; a fence from before the cutover doesn't
-// count.
-func TestCutoverBudgetCountsEveryFenceOnce(t *testing.T) {
+// TestFenceBudgetCountsEveryFenceOnce (Y1, Z1): a signer's fence fees are
+// counted once per action at its costliest alternative, over its whole
+// life: a fence from an earlier cutover still counts.
+func TestFenceBudgetCountsEveryFenceOnce(t *testing.T) {
 	require := require.New(t)
 	l := &signingLog{CutoverEpoch: 2, CutoverStarted: 1000, Actions: map[string]*loggedAction{
 		"fence:a:0":  {First: 1000, Txs: []loggedTx{{Fee: 30}, {Fee: 50}}},
 		"fence:b:0":  {First: 1200, Txs: []loggedTx{{Fee: 40}}},
-		"fence:c:0":  {First: 900, Txs: []loggedTx{{Fee: 1000}}}, // earlier cutover
+		"fence:c:0":  {First: 900, Txs: []loggedTx{{Fee: 1000}}}, // an earlier cutover: still counts
 		"cancel:d:0": {First: 1100, Txs: []loggedTx{{Fee: 500}}}, // not a fence
 	}}
-	require.EqualValues(100, l.epochFenceFees("fence:a:0", 60), "a replacement counts at its costliest")
-	require.EqualValues(90, l.epochFenceFees("fence:a:0", 10), "a cheaper one adds nothing")
-	require.EqualValues(100, l.epochFenceFees("fence:e:0", 10), "a new action adds its fee")
+	require.EqualValues(1100, l.fenceFees("fence:a:0", 60), "a replacement counts at its costliest")
+	require.EqualValues(1090, l.fenceFees("fence:a:0", 10), "a cheaper one adds nothing")
+	require.EqualValues(1100, l.fenceFees("fence:e:0", 10), "a new action adds its fee")
 }
 
-// TestCutoverBudgetStopsCumulativeFees (Y1, Codex r9 #1): with one
-// dishonest signer the coordinator can route every DogecoinVM fence to the
-// honest signer that knows nothing of another quorum's kept-back fence.
-// feeRoom alone lets it sign fee after fee as each becomes final; the
-// budget stops it at its share of the surplus it saw when the cutover
-// began.
-func TestCutoverBudgetStopsCumulativeFees(t *testing.T) {
+// TestFenceBudgetStopsCumulativeFees (Y1): with one dishonest signer the
+// coordinator can route every fence to the honest signer that knows nothing
+// of another quorum's kept-back fence; the budget stops it at its share.
+func TestFenceBudgetStopsCumulativeFees(t *testing.T) {
 	require := require.New(t)
 	h := newCosignHarness(t)
 	h.inUse()
@@ -147,13 +143,58 @@ func TestCutoverBudgetStopsCumulativeFees(t *testing.T) {
 	require.NoError(err)
 	key := actionFence + ":" + wire.OutPoint{Index: 7}.String()
 	require.NoError(c.cutoverBudgetRoom(s, key, 1))
-	budget := c.log.CutoverBudget
+	budget := c.log.FenceBudget
 	require.Positive(budget)
-	require.Equal(c.log.CutoverEpoch, c.log.CutoverBudgetEpoch)
 
 	c.log.Actions["fence:spent:0"] = &loggedAction{First: c.log.CutoverStarted, Txs: []loggedTx{{Fee: budget - 5}}}
 	require.NoError(c.cutoverBudgetRoom(s, key, 5), "up to the budget")
 	require.ErrorContains(c.cutoverBudgetRoom(s, key, 6), "more than its budget")
+}
+
+// TestNewCutoverDoesNotRefillTheFenceBudget (Z1, Codex r10 #1): A and B
+// sign a DogecoinVM fence and the coordinator keeps it back from C. C
+// starts a new cutover. Round 9 gave each cutover a fresh budget, so C
+// could pay new Dogecoin fees while the kept-back fence (charged to the
+// earlier cutover) could still be mined: together more than the surplus.
+// The budget is now lifetime: a new cutover adds nothing, and only a new
+// contribution, once rootDepth deep, adds C's share of it.
+func TestNewCutoverDoesNotRefillTheFenceBudget(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	h.inUse()
+	h.rebuildLogs()
+	c := h.signers[2]
+	s, err := c.b.load()
+	require.NoError(err)
+	key := actionFence + ":" + wire.OutPoint{Index: 9}.String()
+	require.NoError(c.cutoverBudgetRoom(s, key, 1))
+	budget := c.log.FenceBudget
+	require.Positive(budget)
+	// C signed fences up to its budget in this cutover; one of them was a
+	// DogecoinVM fence kept back.
+	c.log.Actions["fence:keptback:0"] = &loggedAction{First: c.log.CutoverStarted, Txs: []loggedTx{{Chain: chainDogecoinVM, Fee: budget}}}
+
+	// A new cutover.
+	before := c.log.CutoverEpoch
+	require.NoError(c.startCutover(s))
+	require.Equal(before+1, c.log.CutoverEpoch)
+	s, err = c.b.load()
+	require.NoError(err)
+	require.ErrorContains(c.cutoverBudgetRoom(s, key, 1), "more than its budget", "a new cutover refills nothing")
+	require.Equal(budget, c.log.FenceBudget)
+
+	// New capital adds room only once it is deep.
+	h.contribute(4*doge, 1)
+	s, err = c.b.load()
+	require.NoError(err)
+	require.ErrorContains(c.cutoverBudgetRoom(s, key, 1), "more than its budget", "a shallow contribution adds nothing")
+	for range s.pegLine.rootDepth {
+		h.doge.mine()
+	}
+	s, err = c.b.load()
+	require.NoError(err)
+	require.NoError(c.cutoverBudgetRoom(s, key, 1), "a deep one adds this signer's share")
+	require.Greater(c.log.FenceBudget, budget)
 }
 
 // TestPendingVMPaymentNeverHoldsTheCutover (Y2, Codex r9 #2): a payment to

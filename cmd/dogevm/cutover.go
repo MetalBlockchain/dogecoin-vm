@@ -456,7 +456,7 @@ func fenceState(s *pegState, chain string, recorded map[wire.OutPoint]bool) (pen
 // place. Only those signers know about the alternative, so every signer
 // refuses every other surplus spend while it sees such a fence, whoever
 // signed it. A fence it can't see at all is covered by the two-phase rule
-// and the epoch budget (surplusSpendWait, cutoverBudgetRoom).
+// and the lifetime fence budget (surplusSpendWait, cutoverBudgetRoom).
 func unsettledDogeFence(s *pegState) *chainTx {
 	v := s.view(chainDogecoin)
 	setFence := func(t chainTx) bool {
@@ -518,18 +518,18 @@ func (c *cosigner) surplusSpendWait(s *pegState) error {
 	return waitForDogeFence(s)
 }
 
-// cutoverBudgetRoom bounds what this signer pays in fence fees over a whole
-// cutover (Round 9, Y1): at most its share (1/(n-t+1)) of the surplus it
-// saw when it first priced a fence in this cutover, counting every fence
-// action it signed in the cutover once at its costliest alternative,
-// confirmed or not.
+// cutoverBudgetRoom bounds what this signer pays in fence fees over its
+// whole life (Round 10, Z1): at most its share (1/(n-t+1)) of the surplus
+// it saw when it first priced a fence, plus its share of each DVMC
+// contribution confirmed rootDepth deep since, counting every fence action
+// it ever signed once, at its costliest alternative, sent or not.
 //
-// The half-surplus rule (feeRoom) bounds promises outstanding at once; a
-// fee that is final stops counting there, so a signer kept in the dark
-// about another quorum's kept-back fence could sign fee after fee. The
-// budget counts what it has already spent too. Every signed transaction
-// carries an honest signature, so the fees all signers pay in a cutover
-// add up to at most the honest signers' budgets: the surplus.
+// Every signed transaction carries an honest signature, so the fees all
+// quorums pay add up to at most the honest signers' budgets: the surplus
+// plus capital added since. The budget is lifetime, not per cutover: a
+// fence another quorum kept back from an earlier cutover can still be
+// mined, so starting a new cutover must not hand out fresh room (Codex
+// r10 #1). Only new capital does, and only once it is deep.
 func (c *cosigner) cutoverBudgetRoom(s *pegState, key string, fee int64) error {
 	if c.log.CutoverEpoch == 0 {
 		return nil
@@ -539,29 +539,69 @@ func (c *cosigner) cutoverBudgetRoom(s *pegState, key string, fee int64) error {
 	if share < 1 {
 		share = 1
 	}
-	if c.log.CutoverBudgetEpoch != c.log.CutoverEpoch {
-		c.log.CutoverBudget = max(c.b.audit(s).Surplus, 0) / share
-		c.log.CutoverBudgetEpoch = c.log.CutoverEpoch
+	if c.addFenceCapital(s, share) {
 		if err := c.log.write(); err != nil {
 			return fmt.Errorf("writing the signing log: %w", err)
 		}
 	}
-	spent := c.log.epochFenceFees(key, fee)
-	if spent > c.log.CutoverBudget {
-		return fmt.Errorf("fences in cutover %d would cost this signer %s DOGE, more than its budget of %s DOGE (1/%d of the surplus when the cutover began); contribute and start a new cutover",
-			c.log.CutoverEpoch, formatDoge(spent), formatDoge(c.log.CutoverBudget), share)
+	spent := c.log.fenceFees(key, fee)
+	if spent > c.log.FenceBudget {
+		return fmt.Errorf("fences would cost this signer %s DOGE in all, more than its budget of %s DOGE (1/%d of the surplus when it first fenced, plus 1/%d of each contribution %d deep since); contribute (DVMC) and wait for depth",
+			formatDoge(spent), formatDoge(c.log.FenceBudget), share, share, s.pegLine.rootDepth)
 	}
 	return nil
 }
 
-// epochFenceFees is the fence fees this log signed in the current cutover,
-// each action counted once at its costliest alternative, with fee added to
-// action key (or as a new action).
-func (l *signingLog) epochFenceFees(key string, fee int64) int64 {
+// addFenceCapital fixes the budget the first time and adds this signer's
+// share of each contribution that has become rootDepth deep since. The
+// first time, the budget is the surplus less contributions not yet deep
+// (a reorganisation could still take them away; they are added once deep),
+// and the deep ones already in that surplus are marked counted. It reports
+// whether the log changed.
+func (c *cosigner) addFenceCapital(s *pegState, share int64) bool {
+	counted := map[string]bool{}
+	for _, op := range c.log.FenceCapital {
+		counted[op] = true
+	}
+	deep := s.pegLine.rootDepth
+	changed := false
+	if c.log.FenceBudget == 0 && len(c.log.FenceCapital) == 0 {
+		surplus := c.b.audit(s).Surplus
+		for _, u := range s.contributions {
+			if u.confirmations > 0 && u.confirmations < deep {
+				surplus -= u.value // in the surplus, but not deep yet
+			}
+		}
+		c.log.FenceBudget = max(surplus, 0) / share
+		for _, u := range s.contributions {
+			if u.confirmations >= deep {
+				c.log.FenceCapital = append(c.log.FenceCapital, u.outPoint.String())
+				counted[u.outPoint.String()] = true
+			}
+		}
+		changed = true
+	}
+	for _, u := range s.contributions {
+		op := u.outPoint.String()
+		if counted[op] || u.confirmations < deep {
+			continue
+		}
+		c.log.FenceBudget += u.value / share
+		c.log.FenceCapital = append(c.log.FenceCapital, op)
+		counted[op] = true
+		changed = true
+	}
+	return changed
+}
+
+// fenceFees is the fence fees this log ever signed, each action counted
+// once at its costliest alternative, with fee added to action key (or as
+// a new action).
+func (l *signingLog) fenceFees(key string, fee int64) int64 {
 	var total int64
 	seen := false
 	for k, a := range l.Actions {
-		if !strings.HasPrefix(k, actionFence+":") || a.First < l.CutoverStarted {
+		if !strings.HasPrefix(k, actionFence+":") {
 			continue
 		}
 		var most int64
