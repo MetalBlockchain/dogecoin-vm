@@ -59,6 +59,11 @@ func (h *healthChecker) run(state *pegState, loadErr error) []check {
 
 	// The peg.
 	switch {
+	case errors.Is(loadErr, errUnresolvedHistory):
+		// The signers refuse this state (Round 11, AA2), so the public check
+		// says so plainly instead of reporting a peg it can't account.
+		checks = append(checks, check{"history", false, loadErr.Error()})
+		checks = append(checks, check{"peg", false, "not checked: Dogecoin history is unresolved"})
 	case loadErr != nil:
 		checks = append(checks, check{"peg", false, "cannot read both chains: " + loadErr.Error()})
 	default:
@@ -450,6 +455,7 @@ func cmdMonitor(args []string) error {
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
 	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
+	b.readUnsettled(*signersPath)
 
 	if *once {
 		state, err := b.load()

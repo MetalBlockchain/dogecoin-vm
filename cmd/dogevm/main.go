@@ -741,6 +741,7 @@ func cmdAudit(args []string) error {
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
 	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
+	b.readUnsettled(*signersPath)
 	if err := watchPeg(b, false); err != nil {
 		return err
 	}

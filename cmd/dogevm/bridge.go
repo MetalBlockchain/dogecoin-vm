@@ -59,6 +59,8 @@ type bridge struct {
 	// unsettledPath is the unsettled-transaction file this process keeps
 	// (deadhistory.go); empty keeps none.
 	unsettledPath string
+	// unsettledReadOnly: read the file, never write it (web, monitor, audit).
+	unsettledReadOnly bool
 
 	// fenceBumpAfter is how long a cutover's fence may wait unconfirmed on
 	// Dogecoin before one paying another fence fee may replace it
@@ -270,15 +272,24 @@ func unsettledFor(signersPath string) string {
 }
 
 // keepUnsettled points the Dogecoin client at its unsettled-transaction
-// file. Only the processes that sign or propose keep one (the coordinator,
-// the signers, signer-log); the web server and the monitor read nothing of
-// it.
+// file. The processes that sign or propose keep one (the coordinator, the
+// signers, signer-log); the web server, the monitor and audit read the
+// coordinator's without writing it (readUnsettled), so they refuse what the
+// signers refuse (Round 12): a public audit or health check never reports a
+// healthy peg the signers won't sign for.
 func (b *bridge) keepUnsettled() {
 	dc, ok := b.doge.(*dogeChain)
 	if !ok || dc.dead != nil || b.unsettledPath == "" {
 		return
 	}
-	dc.dead = &deadHistory{path: b.unsettledPath, depth: max(b.depositConfirmations, b.confFloor, 1)}
+	dc.dead = &deadHistory{path: b.unsettledPath, depth: max(b.depositConfirmations, b.confFloor, 1), readOnly: b.unsettledReadOnly}
+}
+
+// readUnsettled makes this process read, never write, the unsettled-
+// transaction file beside signersPath.
+func (b *bridge) readUnsettled(signersPath string) {
+	b.unsettledPath = unsettledFor(signersPath)
+	b.unsettledReadOnly = true
 }
 
 func (b *bridge) load() (*pegState, error) {

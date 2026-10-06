@@ -442,6 +442,10 @@ type historyEntry struct {
 	time          int64
 }
 
+// errUnresolvedHistory marks a history read refused because a transaction
+// the books need is missing from the wallet (Round 11, AA2).
+var errUnresolvedHistory = errors.New("unresolved Dogecoin history")
+
 // history brings the wallet history up to date and returns the tip's height
 // and a copy of every entry, with every unsettled transaction the wallet no
 // longer lists added back as conflicted (deadhistory.go).
@@ -500,8 +504,8 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 				if spender != "" {
 					why = "block transaction " + spender + " spends its output"
 				}
-				return 0, nil, fmt.Errorf("transaction %s was mined (%s) but the wallet no longer lists it, and nothing shows it conflicted: "+
-					"its claim is missing from the books, so nothing is signed or accounted until it is imported (importprunedfunds; RUNBOOK \"Mined but missing\")", txid, why)
+				return 0, nil, fmt.Errorf("%w: transaction %s was mined (%s) but the wallet no longer lists it, and nothing shows it conflicted: "+
+					"its claim is missing from the books, so nothing is signed or accounted until it is imported (importprunedfunds; RUNBOOK \"Mined but missing\")", errUnresolvedHistory, txid, why)
 			}
 		}
 		c.mu.Lock()

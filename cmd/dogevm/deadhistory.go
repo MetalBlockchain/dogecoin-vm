@@ -66,6 +66,10 @@ func (r deadRecord) proofs() []conflictProof {
 type deadHistory struct {
 	path  string
 	depth int64 // what settles a transaction: rootDepth on Dogecoin
+	// readOnly: this process only reads the file (the web server, the
+	// monitor and audit): it takes no lock, adds and removes nothing, and
+	// still sees every record the signers would add back (Round 12).
+	readOnly bool
 }
 
 func (d *deadHistory) lock() (func(), error) {
@@ -128,6 +132,22 @@ func (d *deadHistory) write(records map[string]deadRecord) error {
 // other's records; each process only adds what it saw unsettled and
 // removes what it saw settle.
 func (d *deadHistory) sync(tip int64, entries map[string]historyEntry, body func(string) (string, error)) (map[string]deadRecord, error) {
+	if d.readOnly {
+		// The writers replace the file by rename, so an unlocked read sees
+		// a whole version. A record the writers haven't added yet is one
+		// the wallet still lists, so it isn't missing from these entries.
+		records, err := d.read()
+		if err != nil {
+			return nil, err
+		}
+		gone := map[string]deadRecord{}
+		for txid, rec := range records {
+			if _, listed := entries[txid]; !listed {
+				gone[txid] = rec
+			}
+		}
+		return gone, nil
+	}
 	unlock, err := d.lock()
 	if err != nil {
 		return nil, err
