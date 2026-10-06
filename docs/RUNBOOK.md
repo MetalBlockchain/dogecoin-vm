@@ -160,12 +160,36 @@ Rebuild a host from one:
 
 3. Start Dogecoin Core and the Metal node, and let both sync. The restored
    staking files keep the same NodeID, so the validator carries on.
-4. Start the bridge, web wallet and monitor, **paused** until everything
-   checks out: `dv pause …`, then start the services, `dv audit`, and resume.
+4. Start the bridge, web wallet and monitor, **paused**, with every signer
+   paused too, and keep them paused through step 5 of "After any wallet
+   restore or rebuild" below: `dv audit` and `/api/health` passing are not
+   enough on their own.
 5. Point DNS at the new server.
 
 Only the restored secrets can move funds, so wipe the unpacked copy and
 anything else holding them once the host is running.
+
+## After any wallet restore or rebuild
+
+Any time a Dogecoin wallet is restored from a backup, rebuilt, or rescanned
+(the coordinator's or a signer's), keep the bridge and every signer
+**paused** until a manual reconciliation is done (round 12). The automatic
+refusal ("Mined but missing", below) only covers transactions still in the
+unsettled file: one that settled 20 deep was removed from it, and if a
+restore loses it while keeping a later transaction that spent its coin,
+nothing flags it. `dv audit`, `/api/health` and `signer-log status`
+passing do not prove the history is complete.
+
+1. Pause the bridge and every signer (`dv pause`, each signer's pause).
+2. On the restored node, list every set address (`dogevm inventory` prints
+   them) and compare its wallet history, outpoint by outpoint, with an
+   independent full node or explorer and with the last wallet backup from
+   before the restore: deposits, releases, payouts, refunds and fences.
+3. Import anything missing (`importprunedfunds`, or restart Core with
+   `-rescan`, or restore the newer wallet backup) until the lists match.
+4. Run `dv audit` and every signer's `signer-log status`; the totals must
+   match the reconciliation, not just pass.
+5. Only then resume, signers first, then the bridge.
 
 ## Operating capital (contributions)
 
@@ -671,7 +695,9 @@ is full confirmations deep (20) the coin clears by the normal rule:
 - **if it was mined after all** (the wallet lost it), nothing a proof can
   say clears it (round 10), and since round 11 **nothing is read at all**
   ("was mined ... but the wallet no longer lists it": every load fails, so
-  the bridge, the signers and the cutover all stop) when the wallet once
+  the bridge, the signers and the cutover all stop; since round 12 so do
+  `dv audit` and the web server's `/api/health`, which shows a failing
+  `history` check, because they read the same file read-only) when the wallet once
   listed it in a block, or still lists a block transaction spending its
   output, and nothing shows it conflicted. ("Mined but missing".) A mined transaction may carry a customer
   claim, and only the transaction itself, back in the wallet, puts that
@@ -681,7 +707,9 @@ is full confirmations deep (20) the coin clears by the normal rule:
   no `rescanblockchain`; restarting Core with `-rescan`, or restoring the
   wallet backup, also works), then its coin clears the normal way once its
   spend is 20 deep. Until then the cutover stays gated: fail
-  closed, safe.
+  closed, safe. This refusal covers only transactions still in the
+  unsettled file; for anything else after a restore, see "After any wallet
+  restore or rebuild".
 
 The dropped transaction's record stays in the unsettled file for good: it
 is what clears its outputs, so deleting it would leave them owed (round 8).
