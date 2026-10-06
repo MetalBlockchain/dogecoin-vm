@@ -87,7 +87,7 @@ func cmdUnsettled(args []string) error {
 			return err
 		}
 		p := conflictProof{Spender: *spender, Block: *block}
-		depth, err := dc.proofDepth(dropped, &p)
+		depth, _, outputSpend, err := dc.proofDepth(dropped, &p)
 		if err != nil {
 			return err
 		}
@@ -97,7 +97,11 @@ func cmdUnsettled(args []string) error {
 		if err := dc.dead.setProof(*txid, p); err != nil {
 			return err
 		}
-		printJSON(map[string]any{"file": dc.dead.path, "txid": *txid, "conflictDepth": depth,
+		kind := "conflict" // spends one of its inputs: it can never be mined
+		if outputSpend {
+			kind = "output spend" // spends one of its outputs: that coin clears
+		}
+		printJSON(map[string]any{"file": dc.dead.path, "txid": *txid, "proof": kind, "depth": depth,
 			"settlesAt": dc.dead.depth, "settledNow": depth >= dc.dead.depth})
 		return nil
 	}
@@ -105,8 +109,11 @@ func cmdUnsettled(args []string) error {
 		TxID          string `json:"txid"`
 		Listed        bool   `json:"listedByWallet"`
 		ConflictDepth int64  `json:"conflictDepth"`
-		Proof         bool   `json:"proof"`
-		ProofError    string `json:"proofError,omitempty"`
+		// OutputSpendDepth: a proof that one of its outputs is spent, this
+		// deep (Round 9, Y6).
+		OutputSpendDepth int64  `json:"outputSpendDepth,omitempty"`
+		Proof            bool   `json:"proof"`
+		ProofError       string `json:"proofError,omitempty"`
 	}
 	var rows []row
 	for id, rec := range records {
@@ -115,11 +122,15 @@ func cmdUnsettled(args []string) error {
 		if dropped, err := decodeTx(rec.Hex); err == nil {
 			r.ConflictDepth, _ = dc.walletConflictDepth(tip, dropped, entries)
 			if rec.Proof != nil {
-				pd, perr := dc.proofDepth(dropped, rec.Proof)
+				pd, _, outputSpend, perr := dc.proofDepth(dropped, rec.Proof)
 				if perr != nil {
 					r.ProofError = perr.Error()
 				}
-				r.ConflictDepth = max(r.ConflictDepth, pd)
+				if outputSpend {
+					r.OutputSpendDepth = pd // clears the output it spends
+				} else {
+					r.ConflictDepth = max(r.ConflictDepth, pd)
+				}
 			}
 		}
 		rows = append(rows, r)

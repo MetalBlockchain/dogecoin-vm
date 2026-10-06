@@ -65,37 +65,53 @@ func spendsInputOf(spender, dropped *wire.MsgTx) bool {
 	return false
 }
 
+// spendsOutputOf reports whether spender spends one of dropped's own
+// outputs: then dropped is in the chain after all (the wallet lost it), and
+// a deep enough spender clears that output the normal way (Round 9, Y6).
+func spendsOutputOf(spender, dropped *wire.MsgTx) bool {
+	hash := dropped.TxHash()
+	for _, in := range spender.TxIn {
+		if in.PreviousOutPoint.Hash == hash {
+			return true
+		}
+	}
+	return false
+}
+
 // proofDepth is how deep, on this node's main chain, the block a proof
-// names is, if it holds a transaction spending one of dropped's inputs; 0
-// if it doesn't, or isn't on the main chain.
-func (c *dogeChain) proofDepth(dropped *wire.MsgTx, p *conflictProof) (int64, error) {
+// names is, if it holds a transaction spending one of dropped's inputs (a
+// conflict) or one of its outputs (a spend of a recorded coin, Round 9,
+// Y6); 0 if it doesn't, or isn't on the main chain. spender is the proof's
+// transaction, and outputSpend says which kind it is.
+func (c *dogeChain) proofDepth(dropped *wire.MsgTx, p *conflictProof) (depth int64, spender *wire.MsgTx, outputSpend bool, err error) {
 	if p == nil {
-		return 0, nil
+		return 0, nil, false, nil
 	}
-	spender, err := decodeTx(p.Spender)
+	spender, err = decodeTx(p.Spender)
 	if err != nil {
-		return 0, fmt.Errorf("the proof's spender: %w", err)
+		return 0, nil, false, fmt.Errorf("the proof's spender: %w", err)
 	}
-	if !spendsInputOf(spender, dropped) {
-		return 0, errors.New("the proof's spender spends none of the dropped transaction's inputs")
+	outputSpend = spendsOutputOf(spender, dropped)
+	if !outputSpend && !spendsInputOf(spender, dropped) {
+		return 0, nil, false, errors.New("the proof's spender spends neither one of the dropped transaction's inputs nor one of its outputs")
 	}
 	var block struct {
 		Confirmations int64    `json:"confirmations"`
 		Tx            []string `json:"tx"`
 	}
 	if err := c.rpc.call(&block, "getblock", p.Block, true); err != nil {
-		return 0, fmt.Errorf("the proof's block %s: %w", p.Block, err)
+		return 0, nil, false, fmt.Errorf("the proof's block %s: %w", p.Block, err)
 	}
 	if block.Confirmations < 1 {
-		return 0, nil // not on the main chain (any more)
+		return 0, nil, false, nil // not on the main chain (any more)
 	}
 	id := spender.TxHash().String()
 	for _, txid := range block.Tx {
 		if strings.EqualFold(txid, id) {
-			return block.Confirmations, nil
+			return block.Confirmations, spender, outputSpend, nil
 		}
 	}
-	return 0, fmt.Errorf("block %s doesn't hold the proof's spender %s", p.Block, id)
+	return 0, nil, false, fmt.Errorf("block %s doesn't hold the proof's spender %s", p.Block, id)
 }
 
 // walletConflictDepth is the depth of the deepest transaction the wallet
@@ -126,7 +142,7 @@ func (c *dogeChain) droppedDepth(tip int64, dropped *wire.MsgTx, entries map[str
 	if err != nil {
 		return 0, err
 	}
-	if pd, err := c.proofDepth(dropped, p); err == nil {
+	if pd, _, outputSpend, err := c.proofDepth(dropped, p); err == nil && !outputSpend {
 		depth = max(depth, pd)
 	}
 	return depth, nil

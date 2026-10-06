@@ -2,11 +2,13 @@ package main
 
 import (
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
@@ -191,4 +193,93 @@ func TestPendingVMPaymentNeverHoldsTheCutover(t *testing.T) {
 	h.vm.txs = kept
 	h.fenceUntilDone(30)
 	require.Equal(historyFenced, c.log.History, "the cutover finishes")
+}
+
+// TestRememberedConflictClearsNothing (Y6, Grok r9 #2): a dropped
+// transaction the wallet once listed conflicted rootDepth deep was kept
+// cleared from memory (its "settled" flag) after the wallet stopped
+// listing it and anything that conflicts with it. Now only evidence read
+// now clears its coin.
+func TestRememberedConflictClearsNothing(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	_, _, _, _ = h.inUse()
+	signer := h.signers[0]
+	s, err := signer.b.load()
+	require.NoError(err)
+	depth := s.pegLine.rootDepth
+
+	dropped := wire.NewMsgTx(1)
+	dropped.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+	dropped.AddTxOut(wire.NewTxOut(2*doge, h.b.signers.pkScript()))
+	dropped.AddTxOut(nullData(tagContrib))
+	id := dropped.TxHash().String()
+	op := wire.OutPoint{Hash: dropped.TxHash()}.String()
+	core := &stubDogecoinCore{listed: map[string]int64{id: 0}, bodies: map[string]string{id: encodeTx(dropped)}}
+	srv := core.serve(t)
+	path := filepath.Join(t.TempDir(), deadHistoryFile)
+	node := &dogeChain{rpc: newRPCClient(srv.URL, "", ""), dead: &deadHistory{path: path, depth: depth}}
+	signer.b.doge = coreConflicts{fakeChain: h.doge, core: node}
+	_, err = signer.b.load() // listed, unconfirmed: kept in the file
+	require.NoError(err)
+	core.listed[id] = -3 // conflicted 3 deep
+	h.adoptOne(signer)
+	require.Contains(signer.log.Cutover[chainDogecoin], op)
+
+	left := func() []string {
+		s, err := signer.b.load()
+		require.NoError(err)
+		_, err = signer.advanceCutover(s)
+		require.NoError(err)
+		return signer.cutoverLeft(s)[chainDogecoin]
+	}
+	core.listed[id] = -depth // the wallet lists it conflicted rootDepth deep
+	require.NotContains(left(), op, "evidence read now: cleared")
+	delete(core.listed, id) // the wallet drops it, and lists nothing that conflicts
+	require.Contains(left(), op, "memory alone clears nothing")
+}
+
+// TestProofOfAnOutputSpendClears (Y6, Grok r9 #2): the wallet lost a
+// transaction that was mined after all, and the spend of its output too.
+// An operator's proof that the output is spent in a block on this node's
+// main chain puts the spender into history at its depth, so the recorded
+// coin clears the normal way once that spend is rootDepth deep.
+func TestProofOfAnOutputSpendClears(t *testing.T) {
+	require := require.New(t)
+	h := newHarness(t)
+	depth := int64(20)
+	lost := wire.NewMsgTx(1)
+	lost.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+	lost.AddTxOut(wire.NewTxOut(2*doge, h.b.signers.pkScript()))
+	id := lost.TxHash().String()
+	spend := wire.NewMsgTx(1)
+	spend.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: lost.TxHash()}, nil, nil))
+	spend.AddTxOut(wire.NewTxOut(doge, h.user(3).pkScript()))
+	sid := spend.TxHash().String()
+	core := &stubDogecoinCore{listed: map[string]int64{id: 0}, bodies: map[string]string{id: encodeTx(lost)},
+		blocks: map[string]stubBlock{"blk": {confirmations: depth - 1, tx: []string{sid}}}}
+	srv := core.serve(t)
+	node := &dogeChain{rpc: newRPCClient(srv.URL, "", ""), dead: &deadHistory{path: filepath.Join(t.TempDir(), deadHistoryFile), depth: depth}}
+	peg, err := h.b.signers.address(h.b.dogeParams)
+	require.NoError(err)
+	_, err = node.txsFor([]btcutil.Address{peg}) // kept while listed
+	require.NoError(err)
+	delete(core.listed, id)
+	require.NoError(node.dead.setProof(id, conflictProof{Spender: encodeTx(spend), Block: "blk"}))
+
+	spendDepth := func() int64 {
+		txs, err := node.txsFor([]btcutil.Address{peg})
+		require.NoError(err)
+		for _, t := range txs {
+			if t.tx.TxHash().String() == sid {
+				return t.confirmations
+			}
+		}
+		return 0
+	}
+	require.EqualValues(depth-1, spendDepth(), "the spender is in history at its depth")
+	core.blocks["blk"] = stubBlock{confirmations: depth, tx: []string{sid}}
+	require.EqualValues(depth, spendDepth())
+	core.blocks["blk"] = stubBlock{confirmations: 0, tx: []string{sid}}
+	require.Zero(spendDepth(), "its block left the main chain: no spend")
 }

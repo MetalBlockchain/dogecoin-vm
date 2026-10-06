@@ -480,10 +480,9 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 		if err != nil {
 			return 0, nil, fmt.Errorf("unsettled transaction %s: %w", txid, err)
 		}
-		if rec.Settled {
-			// The wallet once listed it conflicted rootDepth deep.
-			depth = max(depth, c.dead.depth)
-		}
+		// Only evidence read now counts (Round 9, Y6): rec.Settled (the
+		// wallet once listed it conflicted rootDepth deep) is a note, not a
+		// depth, so a coin is never cleared on memory alone.
 		c.mu.Lock()
 		if c.known == nil {
 			c.known = map[string]*wire.MsgTx{}
@@ -491,6 +490,16 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 		c.known[txid] = tx
 		c.mu.Unlock()
 		entries[txid] = historyEntry{conflicted: true, conflictDepth: depth, time: rec.Time}
+		// A proof that one of its outputs is spent in a block: the spender
+		// goes into history at its depth, so the recorded coin clears the
+		// normal way, by a spend rootDepth deep (Round 9, Y6).
+		if pd, spender, outputSpend, err := c.proofDepth(tx, rec.Proof); err == nil && outputSpend && pd > 0 {
+			sid := spender.TxHash().String()
+			c.mu.Lock()
+			c.known[sid] = spender
+			c.mu.Unlock()
+			entries[sid] = historyEntry{height: tip - pd + 1, time: rec.Time}
+		}
 	}
 	return tip, entries, nil
 }
@@ -593,15 +602,21 @@ func touches(tx *wire.MsgTx, scripts map[string]bool, c *dogeChain) (bool, error
 		if in.PreviousOutPoint.Hash == (chainhash.Hash{}) {
 			continue // a coinbase
 		}
-		// Needs Dogecoin Core's -txindex for outputs the wallet did not
-		// create.
-		var prevHex string
-		if err := c.rpc.call(&prevHex, "getrawtransaction", in.PreviousOutPoint.Hash.String(), 0); err != nil {
-			return false, fmt.Errorf("reading %v, which wallet transaction %v spends (is -txindex on?): %w", in.PreviousOutPoint.Hash, tx.TxHash(), err)
-		}
-		prevTx, err := decodeTx(prevHex)
-		if err != nil {
-			return false, err
+		// A transaction the unsettled file kept is known already (the
+		// wallet may have lost it). Otherwise this needs Dogecoin Core's
+		// -txindex for outputs the wallet did not create.
+		c.mu.Lock()
+		prevTx := c.known[in.PreviousOutPoint.Hash.String()]
+		c.mu.Unlock()
+		if prevTx == nil {
+			var prevHex string
+			if err := c.rpc.call(&prevHex, "getrawtransaction", in.PreviousOutPoint.Hash.String(), 0); err != nil {
+				return false, fmt.Errorf("reading %v, which wallet transaction %v spends (is -txindex on?): %w", in.PreviousOutPoint.Hash, tx.TxHash(), err)
+			}
+			var err error
+			if prevTx, err = decodeTx(prevHex); err != nil {
+				return false, err
+			}
 		}
 		if int(in.PreviousOutPoint.Index) < len(prevTx.TxOut) &&
 			scripts[string(prevTx.TxOut[in.PreviousOutPoint.Index].PkScript)] {
