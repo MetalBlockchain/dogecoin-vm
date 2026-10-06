@@ -336,8 +336,13 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
    new binary on the host without installing it, for the read-only checks
    below (it reads; it signs nothing):
 
-       NEW=/root/dogevm-new; (cd /opt/dogevm/src && git fetch && git checkout <commit> && go build -o "$NEW" ./cmd/dogevm)
+       NEW=/opt/dogevm/bin/dogevm-preflight   # somewhere the service user can run it, not /root
+       sudo -u dogevm env HOME=/opt/dogevm PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local \
+         bash -c "cd /opt/dogevm/src && git fetch && git checkout <commit> && go build -o $NEW ./cmd/dogevm"
        dvn() { sudo -u dogevm env HOME=/opt/dogevm $(cat $S/bridge.env | xargs) "$NEW" "$@"; }
+       dvn version   # must run as the service user before you go on
+
+   (Delete `$NEW` after step 13; the upgrade installs its own build.)
 
 2. **Pause everything first: the bridge and every signer** (round 8):
    a dishonest coordinator ignores its own pause, so the signers must
@@ -356,12 +361,16 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
 
        dvn inventory -signers "$SET" -deposits "$REG"
 
-   It shows each coin's value and depth, how many fences they take, what
-   those cost (a Dogecoin fence pays `-doge-fee`, live 0.1 DOGE, per
-   started 10 kB, plus headroom for four replacements), the surplus, and
-   what the surplus must be: **twice** the fences' fees and headroom, as
-   each signer promises at most half of it. If the surplus is short,
-   contribute the difference (and some) with the `DVMC` tag ("Operating
+   It shows each coin's value and depth, how many fences they take (each
+   fence after the first starts with the change the one before paid back,
+   so 200 coins at 100 a fence is three fences), what those cost (a
+   Dogecoin fence pays `-doge-fee`, live 0.1 DOGE, per started 10 kB, plus
+   headroom for four replacements of the costliest one, each one fence fee
+   more), the surplus, and what the surplus must be: **twice** the fences'
+   fees and headroom, as each signer promises at most half of it and pays
+   at most half of it over the whole cutover. If the surplus is short,
+   contribute `needed` minus the surplus **plus a margin of one Dogecoin
+   fence fee per batch**, with the `DVMC` tag ("Operating
    capital") and **wait for 20 confirmations** (rootDepth), not 6. Run it
    again: the contribution must show in the surplus (the old software,
    still running, would have called it a held payment; the new one counts
@@ -369,10 +378,12 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
 4. **Every set coin deep, nothing pending, nothing conflicted.**
    `dvn inventory -require-ready -signers "$SET" -deposits "$REG"` must
    succeed: every coin at the peg address and the personal deposit
-   addresses at least 20 confirmations deep, none unconfirmed, no
-   transaction of the set conflicted short of 20, and the surplus enough.
-   The upgrade runs the same check before adopting anything, and stops
-   (exit 3) if it fails.
+   addresses at least 20 confirmations deep, no payment to the set
+   unconfirmed on either chain (round 9: wait for it, or for what replaces
+   it), no transaction of the set conflicted short of 20, and the surplus
+   enough. The upgrade runs the same check before adopting anything, and
+   stops (exit 3) if it fails; if `inventory` couldn't run at all (a node
+   down, a wrong path) that is exit 1, not 3.
 5. **Reconcile against the chain, outpoint by outpoint (stop gate).** The
    signers kept no logs, so nothing records what they signed before; the
    cutover can only fence what the wallets know. Check that what they know
@@ -432,10 +443,15 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
      peg: run the fence commands it printed until **every** signer's
      `signer-log status` shows `cutoverLeft` `{}` **and** `history`
      `"fenced"`. If one signer is still gated, don't resume the others:
-     find the coin it waits for (`dogevm unsettled list`, "Cutover").
-   - **1**: anything else; read the message. Before the point of no
-     return it is the same state as 2; after it, nothing is rolled back
-     (below).
+     find the coin it waits for (`dogevm unsettled list`, "Cutover"). It
+     also prints the start, health and resume commands, for step 9 on.
+   - **1**: anything else, including an `inventory` that couldn't run;
+     read the message. Before the point of no return it is the same state
+     as 2, except that a signer whose pause couldn't be put back is left
+     **stopped**, not started (round 9); after it, nothing is rolled back
+     (below). Either way the script lists each signer as running paused,
+     stopped paused, stopped unpaused, or STILL RUNNING AND NOT PAUSED:
+     the last means stop it by hand, now.
 9. **Check while still paused.** On a block explorer, every coin a
    signer recorded is spent, or its transaction conflicted, at least 20
    confirmations deep (DogecoinVM: in a block). Each signer's
@@ -599,11 +615,26 @@ left. Fences:
   DogecoinVM fence is final in its block and is only resent);
 - count only if they spend a recorded coin: a stranger's payment tagged
   `DVMZ` neither holds the next fence up nor clears anything;
-- on DogecoinVM, wait while any Dogecoin fence of the set is unconfirmed or
-  shorter of 20 confirmations (round 8): until then a costlier signed
-  replacement of it could still be mined, and only its signers know of
-  it, so every signer refuses every other surplus spend (DogecoinVM
-  fences, cancellations) whoever signed the Dogecoin fence.
+- on DogecoinVM, wait for the Dogecoin part (round 9: two phases): a
+  signer pays nothing else from the surplus (DogecoinVM fences,
+  cancellations) while its own Dogecoin cutover still lists a coin. Its
+  Dogecoin coins clear only once spent, or their transaction conflicted,
+  20 deep, and every Dogecoin fence spends the line's tip first, so by
+  then every Dogecoin fence anyone signed against them, sent or kept back,
+  is in a block deep or dead. It also waits while it sees any Dogecoin
+  fence of the set unconfirmed, short of 20, or listed as conflicted
+  short of 20 (Core lists a fence it dropped from its mempool at -1; that
+  one is sent again, it isn't dead);
+- count against a **budget** over the whole cutover (round 9): each
+  signer pays at most its half of the surplus it saw when it first priced
+  a fence in the cutover, every fence it signed counted once at its
+  costliest alternative, confirmed or not. Every signed transaction
+  carries an honest signature, so the fees of every quorum together stay
+  within the surplus. A signer that runs out refuses ("more than its
+  budget"): contribute (DVMC, 20 deep), check on an explorer that every
+  Dogecoin fence of the cutover so far is 20 deep or dead (a new epoch
+  gives a new budget, which must not stack on a fence another quorum may
+  still have kept back), then `signer-log cutover` on that signer.
 
 Deposits aren't affected: what is owed is read from each deposit's own
 transaction, not from its coin staying where it was paid.
@@ -620,6 +651,11 @@ then get it, or a conflicting spend of its inputs, into a block. Once that
 is full confirmations deep (20) the coin clears by the normal rule:
 
 - if the wallet lists the conflicting spend (it pays the set), on its own;
+- if it was mined after all and the wallet lost it and the spend of its
+  output too: prove that spend the same way (`-spender` is the
+  transaction spending the recorded output); the node puts it in its
+  history at its block's depth, and the coin clears once that is 20 deep
+  (round 9);
 - if it doesn't (a payer double-spent a deposit to themselves), record
   the spend on **every** node that holds the dropped transaction:
   `dogevm unsettled prove -signers <its signers.json> -txid <the dropped
@@ -630,11 +666,14 @@ is full confirmations deep (20) the coin clears by the normal rule:
   how deep. A wrong proof clears nothing. A coinbase is never evidence:
   every coinbase spends the same null input.
 
-The dropped transaction's record stays in the unsettled file once its
-conflict is deep, marked settled: it is what clears its outputs, so
-deleting it would leave them owed for good (round 8). If a reorganisation
-makes the evidence shallow again, the coin shows as owed again until it is
-deep again.
+The dropped transaction's record stays in the unsettled file for good: it
+is what clears its outputs, so deleting it would leave them owed (round 8).
+Only evidence read now clears a coin (round 9): the wallet listing a
+conflicting spend, or a proof that still checks out. A record "settled"
+because the wallet once listed it conflicted 20 deep clears nothing once
+the wallet stops listing that, so prove it. If a reorganisation makes the
+evidence shallow again, the coin shows as owed again until it is deep
+again.
 
 An old log's `cutoverWaived` coins (software that had a waiver) go back
 into its cutover when it loads, even a log that had finished: they clear

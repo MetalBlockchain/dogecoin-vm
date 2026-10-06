@@ -36,7 +36,8 @@ case \$cmd in
   version) echo "$2" ;;
   coverage) set=\$(arg -signers "\$@"); u=\$(unit_of "\$set"); v=COVERAGE_\${u//-/_}
     d='{"registry":"r1","registered":2,"coins":{"dogecoin":["aa:0"],"dogecoinvm":["bb:1"]}}'; echo "\${!v:-\$d}" ;;
-  inventory) if [[ -n \${INVENTORY_PROBLEM:-} ]]; then echo "{\"problems\":[\"\$INVENTORY_PROBLEM\"],\"ready\":false}"; echo "not ready" >&2; exit 1; fi
+  inventory) [[ -n \${INVENTORY_FAIL:-} ]] && { echo "\$INVENTORY_FAIL" >&2; exit 1; }
+    if [[ -n \${INVENTORY_PROBLEM:-} ]]; then echo "{\"problems\":[\"\$INVENTORY_PROBLEM\"],\"ready\":false}"; echo "not ready" >&2; exit 1; fi
     echo '{"chains":{"dogecoin":{"coins":[{"outpoint":"aa:0"}]},"dogecoinvm":{"coins":[{"outpoint":"bb:1"}]}},"surplus":"9.00000000","needed":"2.00000000","problems":[],"ready":true}' ;;
   pause) set=\$(arg -signers "\$@"); [[ -n \${FAIL_PAUSE:-} && \$set == *\$FAIL_PAUSE* && -f "\$(dirname "\$set")/resumed-once" ]] && exit 1
     [[ -n \${FAIL_PAUSE_ALWAYS:-} && \$set == *\$FAIL_PAUSE_ALWAYS* ]] && exit 1
@@ -330,6 +331,7 @@ expect '! grep -q "^start dogevm-bridge-main" "$EVENTS"' "the bridge stays stopp
 expect 'paused && all_signers_paused' "bridge and signers stay paused"
 expect 'grep -q "cutover isn.t finished" "$T/out" && grep -q "bridge -signers .* -fence dogecoinvm" "$T/out"' "says so, prints the fence commands"
 expect '! grep -q "^resume" "$EVENTS"' "nothing resumed"
+expect '[[ $code == 4 ]] && grep -q "runuser -u dogevm-signer-1 -- .* resume -signers" "$T/out" && grep -q "systemctl start dogevm-bridge-main" "$T/out"' "exit 4, with the steps for after it's verified (round 9, Y5)"
 
 echo "19. an old log whose anchors walk to the tip is still cut over (Grok r5 #1)"
 setup
@@ -418,6 +420,12 @@ code=$(FAIL_RESUME=dogevm-signer-2 FAIL_PAUSE=dogevm-signer-1 FAIL_STOP_RESUMED=
 expect '[[ $code != 0 ]]' "fails"
 expect 'grep -q "dogevm-signer-1: STILL RUNNING AND NOT PAUSED" "$T/out"' "says signer 1 is exposed"
 expect '! grep -q "no signer is running unpaused" "$T/out"' "doesn't claim everything is safe"
+
+echo "33. an inventory that can't run is exit 1, not exit 3 (round 9, Y5)"
+setup
+code=$(INVENTORY_FAIL="dial tcp 127.0.0.1:22555: connection refused" run)
+expect '[[ $code == 1 ]] && grep -q "couldn.t run (not a readiness verdict): dial tcp" "$T/out"' "exit 1, says it couldn't run"
+expect '[[ $(version) == old ]] && paused && all_signers_paused' "old binary back, everything paused"
 
 echo
 echo "$pass passed, $fail failed"

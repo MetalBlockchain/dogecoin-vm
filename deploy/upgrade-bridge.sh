@@ -331,10 +331,18 @@ log "inventory"
 # transaction is conflicted short of rootDepth (its outputs could come
 # back), or the surplus doesn't cover twice the fences' fees and headroom
 # (round 8, X5; RUNBOOK.md, "First upgrade of the live bridge").
-inv=$(as_coordinator "$HOME_DIR/bin/$CHAIN" inventory -require-ready -signers "$SET" ${COORD_DEPOSITS:+-deposits "$COORD_DEPOSITS"} 2>&1) ||
-  die_code 3 "not ready to adopt: $(python3 -c 'import json,sys
-try: print("; ".join(json.loads(sys.argv[1][:sys.argv[1].rindex("}")+1])["problems"]))
-except Exception: print(sys.argv[1])' "$inv"). The previous binaries are back, paused"
+# Exit 3 is only "it ran and isn't ready" (it printed its inventory); a
+# command that couldn't run (a node down, a wrong path) is 1 (round 9, Y5).
+if ! inv=$(as_coordinator "$HOME_DIR/bin/$CHAIN" inventory -require-ready -signers "$SET" ${COORD_DEPOSITS:+-deposits "$COORD_DEPOSITS"} 2>&1); then
+  problems=$(python3 -c 'import json,sys
+s=sys.argv[1]
+try: d=json.loads(s[s.index("{"):s.rindex("}")+1])
+except Exception: sys.exit(1)
+if d.get("ready") is not False: sys.exit(1)
+print("; ".join(d.get("problems", [])))' "$inv") ||
+    die "dogevm inventory couldn't run (not a readiness verdict): $inv. The previous binaries are back, paused"
+  die_code 3 "not ready to adopt: $problems. The previous binaries are back, paused"
+fi
 echo "inventory: ready ($(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print({c: len(v["coins"]) for c, v in d["chains"].items()}, "coins; surplus", d["surplus"], "of", d["needed"], "needed")' "$inv"))"
 
 log "signing logs"
@@ -585,7 +593,11 @@ if [[ -n $left ]]; then
   for unit in "${SIGNERS[@]}"; do
     echo "  runuser -u $unit -- bash -c 'set -a; . $VARLIB/$unit/signer.env; set +a; exec $SIGNER_BIN signer-log status -signers ${SSET[$unit]} -key-file ${SKEY[$unit]} -log ${SLOG[$unit]}'"
   done
-  echo "Only then start the bridge (systemctl start $CHAIN-bridge-main), read the checks and resume (RUNBOOK.md, \"Upgrading the bridge software\")."
+  echo "Only once they all do, and you have checked on an explorer that every recorded Dogecoin coin's spend is rootDepth deep:"
+  echo "  systemctl start $CHAIN-bridge-main"
+  echo "  curl -s http://$WEB/api/health   # every check present; only the pause failing"
+  echo "then resume, signers first (RUNBOOK.md, \"First upgrade of the live bridge\"):"
+  resume_cmds
   echo "Backups (old binaries, logs, cosigners.json, contribution lists) are in $WORK."
   DONE=1 # an expected stop, not a failure: everything stays as it is
   exit 4
