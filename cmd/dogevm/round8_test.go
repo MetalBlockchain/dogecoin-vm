@@ -141,7 +141,9 @@ func TestDogeFenceFreezesOtherSurplusSpendsAcrossQuorums(t *testing.T) {
 	up(c)
 	down(a)
 	_, err = h.b.proposeFence(chainDogecoinVM)
-	require.ErrorContains(err, h.servers[c].URL+": a Dogecoin fence", "C refuses, though its own log reserves nothing")
+	// C refuses, though its own log reserves nothing: its Dogecoin cutover
+	// isn't done (Round 9, Y1; round 8 refused on seeing the fence).
+	require.ErrorContains(err, h.servers[c].URL+": this signer's Dogecoin cutover still has", "C refuses, though its own log reserves nothing")
 	require.ErrorContains(err, "no other fee is paid from the surplus")
 
 	s, err := h.signers[c].b.load()

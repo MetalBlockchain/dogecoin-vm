@@ -437,46 +437,138 @@ func fenceState(s *pegState, chain string, recorded map[wire.OutPoint]bool) (pen
 }
 
 // unsettledDogeFence is a Dogecoin fence of the set (tagged, spending one
-// of its coins) that isn't yet rootDepth deep, unconfirmed or in a block;
-// nil if there is none (Round 8, X2).
+// of its coins) that isn't yet settled: unconfirmed, in a block short of
+// rootDepth, or listed by the wallet as conflicted by something short of
+// rootDepth (Core 1.14 reports a transaction dropped from its mempool at
+// -1: it can still be sent again and mined). nil if there is none (Round 8,
+// X2; Round 9, Y1).
 //
-// A fence's fee comes from the surplus, and while it isn't deep a
+// A fence's fee comes from the surplus, and while it isn't settled a
 // costlier alternative some signers signed could still be mined in its
-// place. Only those signers know about the alternative, and with one
-// dishonest signer the coordinator can send every other surplus spend to
-// the honest signer who doesn't. So every signer refuses every other
-// surplus spend (a DogecoinVM fence, a cancellation) while it sees such a
-// fence, whoever signed it: the fees can then never add up past the
-// surplus, whatever the logs hold.
+// place. Only those signers know about the alternative, so every signer
+// refuses every other surplus spend while it sees such a fence, whoever
+// signed it. A fence it can't see at all is covered by the two-phase rule
+// and the epoch budget (surplusSpendWait, cutoverBudgetRoom).
 func unsettledDogeFence(s *pegState) *chainTx {
 	v := s.view(chainDogecoin)
-	for i := range v.txs {
-		t := v.txs[i]
-		if t.confirmations >= v.depth {
-			continue
-		}
+	setFence := func(t chainTx) bool {
 		if _, ok := parseFence(t.tx); !ok {
-			continue
+			return false
 		}
 		for _, in := range t.tx.TxIn {
 			f, ok := v.funding[in.PreviousOutPoint.Hash]
 			if ok && int(in.PreviousOutPoint.Index) < len(f.tx.TxOut) && v.isCoin(f.tx.TxOut[in.PreviousOutPoint.Index]) {
-				return &t
+				return true
 			}
+		}
+		return false
+	}
+	for i := range v.txs {
+		if t := v.txs[i]; t.confirmations < v.depth && setFence(t) {
+			return &t
+		}
+	}
+	for i := range v.conflicted {
+		// confirmations is minus the depth of what it conflicts with.
+		if t := v.conflicted[i]; -t.confirmations < v.depth && setFence(t) {
+			return &t
 		}
 	}
 	return nil
 }
 
 // waitForDogeFence refuses a surplus spend while a Dogecoin fence isn't
-// deep (unsettledDogeFence).
+// settled (unsettledDogeFence).
 func waitForDogeFence(s *pegState) error {
 	t := unsettledDogeFence(s)
 	if t == nil {
 		return nil
 	}
+	if t.confirmations < 0 {
+		return fmt.Errorf("a Dogecoin fence (%v) is out of the mempool but not dead (what conflicts with it is %d of %d deep); until it is, it could still be mined, so no other fee is paid from the surplus",
+			t.tx.TxHash(), -t.confirmations, s.view(chainDogecoin).depth)
+	}
 	return fmt.Errorf("a Dogecoin fence (%v) has %d of %d confirmations; until it is deep, a costlier alternative could still be mined, so no other fee is paid from the surplus",
 		t.tx.TxHash(), max(t.confirmations, 0), s.view(chainDogecoin).depth)
+}
+
+// surplusSpendWait is every check a surplus spend other than a Dogecoin
+// fence (a DogecoinVM fence, a cancellation) must pass (Round 9, Y1).
+//
+// Two phases: while this signer's own Dogecoin cutover still lists a coin,
+// it pays nothing else from the surplus. Its Dogecoin coins clear only when
+// spent (or their funding conflicted) rootDepth deep, and every Dogecoin
+// fence spends the line's tip first, so by then every Dogecoin fence anyone
+// signed against those coins, sent or kept back, is either in a block deep
+// or dead: none can be mined later to spend surplus this signer already
+// let go. A fence this signer can see that isn't settled also waits
+// (waitForDogeFence).
+func (c *cosigner) surplusSpendWait(s *pegState) error {
+	if left := c.cutoverLeft(s)[chainDogecoin]; len(left) > 0 {
+		return fmt.Errorf("this signer's Dogecoin cutover still has %d coin(s) to clear; until it is done, a Dogecoin fence it never saw could still be mined, so no other fee is paid from the surplus", len(left))
+	}
+	return waitForDogeFence(s)
+}
+
+// cutoverBudgetRoom bounds what this signer pays in fence fees over a whole
+// cutover (Round 9, Y1): at most its share (1/(n-t+1)) of the surplus it
+// saw when it first priced a fence in this cutover, counting every fence
+// action it signed in the cutover once at its costliest alternative,
+// confirmed or not.
+//
+// The half-surplus rule (feeRoom) bounds promises outstanding at once; a
+// fee that is final stops counting there, so a signer kept in the dark
+// about another quorum's kept-back fence could sign fee after fee. The
+// budget counts what it has already spent too. Every signed transaction
+// carries an honest signature, so the fees all signers pay in a cutover
+// add up to at most the honest signers' budgets: the surplus.
+func (c *cosigner) cutoverBudgetRoom(s *pegState, key string, fee int64) error {
+	if c.log.CutoverEpoch == 0 {
+		return nil
+	}
+	set := c.b.signers
+	share := int64(len(set.pubKeys) - set.Required + 1)
+	if share < 1 {
+		share = 1
+	}
+	if c.log.CutoverBudgetEpoch != c.log.CutoverEpoch {
+		c.log.CutoverBudget = max(c.b.audit(s).Surplus, 0) / share
+		c.log.CutoverBudgetEpoch = c.log.CutoverEpoch
+		if err := c.log.write(); err != nil {
+			return fmt.Errorf("writing the signing log: %w", err)
+		}
+	}
+	spent := c.log.epochFenceFees(key, fee)
+	if spent > c.log.CutoverBudget {
+		return fmt.Errorf("fences in cutover %d would cost this signer %s DOGE, more than its budget of %s DOGE (1/%d of the surplus when the cutover began); contribute and start a new cutover",
+			c.log.CutoverEpoch, formatDoge(spent), formatDoge(c.log.CutoverBudget), share)
+	}
+	return nil
+}
+
+// epochFenceFees is the fence fees this log signed in the current cutover,
+// each action counted once at its costliest alternative, with fee added to
+// action key (or as a new action).
+func (l *signingLog) epochFenceFees(key string, fee int64) int64 {
+	var total int64
+	seen := false
+	for k, a := range l.Actions {
+		if !strings.HasPrefix(k, actionFence+":") || a.First < l.CutoverStarted {
+			continue
+		}
+		var most int64
+		for _, t := range a.Txs {
+			most = max(most, t.Fee)
+		}
+		if k == key {
+			most, seen = max(most, fee), true
+		}
+		total += most
+	}
+	if !seen {
+		total += fee
+	}
+	return total
 }
 
 // fenceFeeOf is what a fence pays: its inputs, as s knows them, less its

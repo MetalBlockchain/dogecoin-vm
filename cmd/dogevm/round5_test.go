@@ -235,12 +235,10 @@ func TestMultiBatchNeedsEveryCoinDeep(t *testing.T) {
 	recorded := recordedSet(h.signers[2].log.Cutover[chainDogecoin])
 	require.Greater(len(recorded), maxFenceInputs(chainDogecoin))
 
-	// VM done; Dogecoin batch 1, then deep.
-	_, err := h.b.proposeFence(chainDogecoinVM)
-	require.NoError(err)
+	// Dogecoin batch 1, then deep. (DogecoinVM waits for Dogecoin: Round 9,
+	// Y1.)
 	f1, err := h.b.proposeFence(chainDogecoin)
 	require.NoError(err)
-	h.vm.mine()
 	h.doge.mine()
 	_, err = h.b.proposeFence(chainDogecoin)
 	require.ErrorContains(err, "not yet deep enough", "batch 2 waits for batch 1's depth")
@@ -502,15 +500,30 @@ func TestFenceGateCoversBothChains(t *testing.T) {
 	alice, _, _, _ := h.inUse()
 	dep := h.deposit(4*doge, &alice, 9)
 	h.rebuildLogs()
-	_, err := h.b.proposeFence(chainDogecoinVM) // only DogecoinVM
-	require.NoError(err)
-	h.vm.mine()
-
 	c := h.signers[2]
+
+	// DogecoinVM can't go first any more (Round 9, Y1): its fence waits for
+	// the Dogecoin cutover.
+	_, err := h.b.proposeFence(chainDogecoinVM)
+	require.ErrorContains(err, "Dogecoin cutover still has")
+	require.ErrorContains(h.releaseErr(c, dep, alice), "in a cutover")
+
+	// Dogecoin done, DogecoinVM not: still nothing but fences, on both.
+	_, err = h.b.proposeFence(chainDogecoin)
+	require.NoError(err)
 	s, err := c.b.load()
+	require.NoError(err)
+	for range s.pegLine.rootDepth {
+		h.doge.mine()
+	}
+	s, err = c.b.load()
 	require.NoError(err)
 	_, err = c.advanceCutover(s)
 	require.NoError(err)
-	require.NotContains(c.log.Cutover, chainDogecoinVM, "DogecoinVM's part is done")
-	require.ErrorContains(h.releaseErr(c, dep, alice), "in a cutover", "a DogecoinVM release waits for Dogecoin")
+	require.NotContains(c.log.Cutover, chainDogecoin, "Dogecoin's part is done")
+	require.Contains(c.log.Cutover, chainDogecoinVM)
+	require.ErrorContains(h.releaseErr(c, dep, alice), "in a cutover", "a release waits for the DogecoinVM part")
+
+	h.fenceUntilDone(10)
+	require.NoError(h.releaseErr(c, dep, alice))
 }

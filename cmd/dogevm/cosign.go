@@ -847,8 +847,8 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 			redeems = append(redeems, b.signers.redeemScript)
 		}
 		// The fee leaves the reserve and circulates: it needs the surplus,
-		// and no Dogecoin fence may be pending (Round 8, X2).
-		if err := waitForDogeFence(s); err != nil {
+		// and no Dogecoin fence may be unsettled (Round 8, X2; Round 9, Y1).
+		if err := c.surplusSpendWait(s); err != nil {
 			return nil, nil, 0, err
 		}
 		if err := c.feeRoom(b.audit(s), b.vmFee, unseen); err != nil {
@@ -876,11 +876,14 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		// replacement of it: nextFence only builds one when none is in a
 		// block short of depth.
 		if req.Chain == chainDogecoinVM {
-			if err := waitForDogeFence(s); err != nil {
+			if err := c.surplusSpendWait(s); err != nil {
 				return nil, nil, 0, err
 			}
 		}
 		if err := c.feeRoom(b.audit(s), fee, unseen); err != nil {
+			return nil, nil, 0, err
+		}
+		if err := c.cutoverBudgetRoom(s, except, fee); err != nil {
 			return nil, nil, 0, err
 		}
 		c.fenceFee = fee
@@ -1302,6 +1305,11 @@ type signingLog struct {
 	// goes down. CutoverStarted is when the current one began (unix s).
 	CutoverEpoch   int   `json:"cutoverEpoch,omitempty"`
 	CutoverStarted int64 `json:"cutoverStarted,omitempty"`
+	// CutoverBudget is what this signer may pay in fence fees over the
+	// cutover CutoverBudgetEpoch: its share of the surplus it saw when it
+	// first priced a fence in it (cutoverBudgetRoom, Round 9, Y1).
+	CutoverBudget      int64 `json:"cutoverBudget,omitempty"`
+	CutoverBudgetEpoch int   `json:"cutoverBudgetEpoch,omitempty"`
 	// An old log's "cutoverWaived" (round 5's operator waiver, since
 	// removed) discharges nothing: openSigningLog puts its coins back into
 	// Cutover (restoreWaived), so they clear only the normal way.

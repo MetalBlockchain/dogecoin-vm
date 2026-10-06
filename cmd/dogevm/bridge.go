@@ -1258,10 +1258,25 @@ func (b *bridge) rebroadcast(s *pegState) {
 		b.resent = map[chainhash.Hash]time.Time{}
 	}
 	now := time.Now()
+	// A Dogecoin fence the node dropped from its mempool is listed as
+	// conflicted at -1, not as unconfirmed; it isn't dead, and the cutover
+	// waits for it, so it is sent again too (Round 9, Y1).
+	dogeTxs := s.unconfirmed
+	if v := s.view(chainDogecoin); len(v.conflicted) > 0 {
+		dogeTxs = map[chainhash.Hash]chainTx{}
+		for txid, t := range s.unconfirmed {
+			dogeTxs[txid] = t
+		}
+		for _, t := range v.conflicted {
+			if _, ok := parseFence(t.tx); ok && -t.confirmations < v.depth {
+				dogeTxs[t.tx.TxHash()] = t
+			}
+		}
+	}
 	for _, side := range []struct {
 		c   chain
 		txs map[chainhash.Hash]chainTx
-	}{{b.doge, s.unconfirmed}, {b.vm, s.vmUnconfirmed}} {
+	}{{b.doge, dogeTxs}, {b.vm, s.vmUnconfirmed}} {
 		r, ok := side.c.(resender)
 		if !ok {
 			continue
@@ -1277,7 +1292,7 @@ func (b *bridge) rebroadcast(s *pegState) {
 		}
 	}
 	for txid := range b.resent {
-		_, doge := s.unconfirmed[txid]
+		_, doge := dogeTxs[txid]
 		_, vm := s.vmUnconfirmed[txid]
 		if !doge && !vm {
 			delete(b.resent, txid)
