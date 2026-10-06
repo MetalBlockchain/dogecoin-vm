@@ -56,8 +56,20 @@ func (h *healthChecker) run(state *pegState, loadErr error) []check {
 	var checks []check
 
 	checks = append(checks, h.pauseCheck())
+	checks = append(checks, h.pegChecks(state, loadErr)...)
+	checks = append(checks, h.dogecoinNode())
+	checks = append(checks, h.walletSize())
+	checks = append(checks, h.dogecoinVM())
+	if h.validationID != "" {
+		checks = append(checks, h.validatorBalance())
+	}
+	return checks
+}
 
-	// The peg.
+// pegChecks are the checks read from both chains: the peg's solvency and
+// the bridge's liveness, or why they couldn't be read.
+func (h *healthChecker) pegChecks(state *pegState, loadErr error) []check {
+	var checks []check
 	switch {
 	case errors.Is(loadErr, errUnresolvedHistory):
 		// The signers refuse this state (Round 11, AA2), so the public check
@@ -72,13 +84,6 @@ func (h *healthChecker) run(state *pegState, loadErr error) []check {
 			formatDoge(a.Locked), formatDoge(a.Circulating), formatDoge(a.PendingPegIns), formatDoge(a.PendingPegOuts))
 		checks = append(checks, check{"peg", a.solvent(), detail})
 		checks = append(checks, h.bridgeLiveness(state))
-	}
-
-	checks = append(checks, h.dogecoinNode())
-	checks = append(checks, h.walletSize())
-	checks = append(checks, h.dogecoinVM())
-	if h.validationID != "" {
-		checks = append(checks, h.validatorBalance())
 	}
 	return checks
 }
