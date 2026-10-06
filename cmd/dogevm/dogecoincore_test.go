@@ -681,3 +681,60 @@ func TestLargeFenceOnDogecoinCore(t *testing.T) {
 	a := h.audit()
 	require.True(a.solvent(), "%+v", a)
 }
+
+// TestDroppedFenceStillFreezesOnDogecoinCore (round 9, Y1): a Dogecoin
+// fence that another spend of its anchor (here a payout, which is no fence)
+// pushes out of the mempool and into a block is listed by Dogecoin Core at
+// -1 confirmations. Until that spend is rootDepth deep a reorganisation can
+// still mine the fence, so it freezes every other surplus spend; once the
+// spend is deep it is dead and the freeze lifts.
+func TestDroppedFenceStillFreezesOnDogecoinCore(t *testing.T) {
+	require := require.New(t)
+	n := startDogecoin(t)
+	h := n.bridgeHarness()
+	s, err := h.b.load()
+	require.NoError(err)
+	coins, err := cutoverCoins(s, &signingLog{Actions: map[string]*loggedAction{}})
+	require.NoError(err)
+	fence, err := h.b.sendFence(chainDogecoin, recordedSet(coins[chainDogecoin]))
+	require.NoError(err)
+	require.True(n.inMempool(fence))
+
+	// A payout of the fence's anchor, paying more, replaces it (BIP125).
+	s, err = h.b.load()
+	require.NoError(err)
+	anchor := s.unconfirmed[fence].tx.TxIn[0].PreviousOutPoint
+	in, ok := s.pendingCoins[anchor]
+	require.True(ok, "the anchor is a peg coin")
+	payout, err := h.b.buildPayout([]utxo{in}, in.value*3/4, h.user(9), nil, in.value/2)
+	require.NoError(err)
+	redeem := s.redeemFor[string(in.pkScript)]
+	require.NotNil(redeem)
+	require.NoError(h.b.authorize(&proposal{Chain: chainDogecoin, tx: payout, redeems: [][]byte{redeem},
+		Action: action{Kind: actionPayout}}))
+	_, err = h.b.doge.send(payout)
+	require.NoError(err)
+	require.False(n.inMempool(fence), "the payout replaced the fence")
+	n.mine(1)
+
+	s, err = h.b.load()
+	require.NoError(err)
+	got := unsettledDogeFence(s)
+	require.NotNil(got, "a fence out of the mempool is still unsettled")
+	require.Equal(fence, got.tx.TxHash())
+	require.Equal(int64(-1), int64(got.confirmations), "Dogecoin Core lists it as conflicted")
+	err = waitForDogeFence(s)
+	require.ErrorContains(err, "out of the mempool but not dead", "other surplus spends wait")
+
+	// Handing it back to Core is harmless: Core refuses it (its anchor is
+	// spent), and the bridge carries on.
+	h.b.resent = nil
+	h.b.rebroadcast(s)
+	require.False(n.inMempool(fence))
+
+	n.mine(int(s.pegLine.rootDepth) - 1)
+	s, err = h.b.load()
+	require.NoError(err)
+	require.Nil(unsettledDogeFence(s), "what conflicts with it is deep: dead")
+	require.NoError(waitForDogeFence(s))
+}
