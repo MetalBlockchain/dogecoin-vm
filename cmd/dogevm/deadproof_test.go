@@ -84,16 +84,16 @@ func TestDroppedTransactionClearsOnAProvenConflict(t *testing.T) {
 	delete(core.listed, id)
 
 	// Bad proofs: a spender of something else, and a block without it.
-	require.NoError(c.dead.setProof(id, conflictProof{Spender: encodeTx(unrelated), Block: "B"}))
+	require.NoError(c.dead.addProof(id, conflictProof{Spender: encodeTx(unrelated), Block: "B"}))
 	_, entries, err := c.history()
 	require.NoError(err)
 	require.Zero(entries[id].conflictDepth)
-	require.NoError(c.dead.setProof(id, conflictProof{Spender: encodeTx(winner), Block: "E"}))
+	require.NoError(c.dead.addProof(id, conflictProof{Spender: encodeTx(winner), Block: "E"}))
 	_, entries, err = c.history()
 	require.NoError(err)
 	require.Zero(entries[id].conflictDepth)
 
-	require.NoError(c.dead.setProof(id, conflictProof{Spender: encodeTx(winner), Block: "B"}))
+	require.NoError(c.dead.addProof(id, conflictProof{Spender: encodeTx(winner), Block: "B"}))
 	_, entries, err = c.history()
 	require.NoError(err)
 	require.EqualValues(3, entries[id].conflictDepth, "a good proof, not yet deep")

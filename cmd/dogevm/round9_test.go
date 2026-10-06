@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
@@ -278,51 +277,6 @@ func TestRememberedConflictClearsNothing(t *testing.T) {
 	require.NotContains(left(), op, "evidence read now: cleared")
 	delete(core.listed, id) // the wallet drops it, and lists nothing that conflicts
 	require.Contains(left(), op, "memory alone clears nothing")
-}
-
-// TestProofOfAnOutputSpendClears (Y6, Grok r9 #2): the wallet lost a
-// transaction that was mined after all, and the spend of its output too.
-// An operator's proof that the output is spent in a block on this node's
-// main chain puts the spender into history at its depth, so the recorded
-// coin clears the normal way once that spend is rootDepth deep.
-func TestProofOfAnOutputSpendClears(t *testing.T) {
-	require := require.New(t)
-	h := newHarness(t)
-	depth := int64(20)
-	lost := wire.NewMsgTx(1)
-	lost.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
-	lost.AddTxOut(wire.NewTxOut(2*doge, h.b.signers.pkScript()))
-	id := lost.TxHash().String()
-	spend := wire.NewMsgTx(1)
-	spend.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: lost.TxHash()}, nil, nil))
-	spend.AddTxOut(wire.NewTxOut(doge, h.user(3).pkScript()))
-	sid := spend.TxHash().String()
-	core := &stubDogecoinCore{listed: map[string]int64{id: 0}, bodies: map[string]string{id: encodeTx(lost)},
-		blocks: map[string]stubBlock{"blk": {confirmations: depth - 1, tx: []string{sid}}}}
-	srv := core.serve(t)
-	node := &dogeChain{rpc: newRPCClient(srv.URL, "", ""), dead: &deadHistory{path: filepath.Join(t.TempDir(), deadHistoryFile), depth: depth}}
-	peg, err := h.b.signers.address(h.b.dogeParams)
-	require.NoError(err)
-	_, err = node.txsFor([]btcutil.Address{peg}) // kept while listed
-	require.NoError(err)
-	delete(core.listed, id)
-	require.NoError(node.dead.setProof(id, conflictProof{Spender: encodeTx(spend), Block: "blk"}))
-
-	spendDepth := func() int64 {
-		txs, err := node.txsFor([]btcutil.Address{peg})
-		require.NoError(err)
-		for _, t := range txs {
-			if t.tx.TxHash().String() == sid {
-				return t.confirmations
-			}
-		}
-		return 0
-	}
-	require.EqualValues(depth-1, spendDepth(), "the spender is in history at its depth")
-	core.blocks["blk"] = stubBlock{confirmations: depth, tx: []string{sid}}
-	require.EqualValues(depth, spendDepth())
-	core.blocks["blk"] = stubBlock{confirmations: 0, tx: []string{sid}}
-	require.Zero(spendDepth(), "its block left the main chain: no spend")
 }
 
 // TestInventoryCountsTheCarriedChange (Y4, both r9 reviews): every fence

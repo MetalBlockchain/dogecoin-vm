@@ -476,7 +476,7 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 		if err != nil {
 			return 0, nil, fmt.Errorf("unsettled transaction %s: %w", txid, err)
 		}
-		depth, err := c.droppedDepth(tip, tx, entries, rec.Proof)
+		depth, err := c.droppedDepth(tip, tx, entries, rec.proofs())
 		if err != nil {
 			return 0, nil, fmt.Errorf("unsettled transaction %s: %w", txid, err)
 		}
@@ -490,16 +490,6 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 		c.known[txid] = tx
 		c.mu.Unlock()
 		entries[txid] = historyEntry{conflicted: true, conflictDepth: depth, time: rec.Time}
-		// A proof that one of its outputs is spent in a block: the spender
-		// goes into history at its depth, so the recorded coin clears the
-		// normal way, by a spend rootDepth deep (Round 9, Y6).
-		if pd, spender, outputSpend, err := c.proofDepth(tx, rec.Proof); err == nil && outputSpend && pd > 0 {
-			sid := spender.TxHash().String()
-			c.mu.Lock()
-			c.known[sid] = spender
-			c.mu.Unlock()
-			entries[sid] = historyEntry{height: tip - pd + 1, time: rec.Time}
-		}
 	}
 	return tip, entries, nil
 }

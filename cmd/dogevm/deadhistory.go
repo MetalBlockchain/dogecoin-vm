@@ -36,15 +36,25 @@ type deadRecord struct {
 	// ConflictDepth is the deepest the wallet ever saw a conflict of it.
 	ConflictDepth int64 `json:"conflictDepth,omitempty"`
 	Time          int64 `json:"time,omitempty"`
-	// Proof is an operator-recorded spender of one of its inputs, checked
-	// against the chain on every read (deadproof.go).
-	Proof *conflictProof `json:"proof,omitempty"`
+	// Proofs are operator-recorded spenders of its inputs, each checked
+	// against the chain on every read (deadproof.go). Proof is a single
+	// proof as earlier builds wrote it; proofs() reads both.
+	Proofs []conflictProof `json:"proofs,omitempty"`
+	Proof  *conflictProof  `json:"proof,omitempty"`
 	// Settled is set once the wallet listed it conflicted rootDepth deep: a
 	// reorganisation shallower than that can't undo the conflict, so the
 	// record stays as a tombstone saying so, even if the wallet later
 	// stops listing it and lists nothing that conflicts with it (Round 8,
 	// X1).
 	Settled bool `json:"settled,omitempty"`
+}
+
+// proofs is every proof recorded for r.
+func (r deadRecord) proofs() []conflictProof {
+	if r.Proof == nil {
+		return r.Proofs
+	}
+	return append([]conflictProof{*r.Proof}, r.Proofs...)
 }
 
 // deadHistory is the file and what this process last read of it.

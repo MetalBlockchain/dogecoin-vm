@@ -9,7 +9,10 @@ import (
 )
 
 // cmdUnsettled lists a node's unsettled transactions, or records a proof
-// that a dropped one can never be mined (deadproof.go):
+// that a dropped one can never be mined: a transaction spending one of its
+// inputs, in a block (deadproof.go). Nothing else clears a dropped one; a
+// transaction that was mined after all but the wallet lost needs a rescan
+// or import (RUNBOOK "Cutover").
 //
 //	dogevm unsettled list  -signers FILE
 //	dogevm unsettled prove -signers FILE -txid TXID -spender HEX -block HASH
@@ -30,7 +33,7 @@ func cmdUnsettled(args []string) error {
 	fs := flag.NewFlagSet("unsettled "+step, flag.ExitOnError)
 	signersPath := fs.String("signers", "", "the signer set beside the unsettled file (public keys are enough)")
 	txid := fs.String("txid", "", "prove: the dropped transaction")
-	spender := fs.String("spender", "", "prove: a transaction spending one of its inputs, hex")
+	spender := fs.String("spender", "", "prove: a transaction spending one of its inputs (a conflict), hex")
 	block := fs.String("block", "", "prove: the hash of the block holding the spender")
 	s.register(fs)
 	b := bridgeFlags(fs)
@@ -87,50 +90,39 @@ func cmdUnsettled(args []string) error {
 			return err
 		}
 		p := conflictProof{Spender: *spender, Block: *block}
-		depth, _, outputSpend, err := dc.proofDepth(dropped, &p)
+		depth, err := dc.proofDepth(dropped, p)
 		if err != nil {
 			return err
 		}
 		if depth < 1 {
 			return fmt.Errorf("block %s isn't on this node's main chain", *block)
 		}
-		if err := dc.dead.setProof(*txid, p); err != nil {
+		if err := dc.dead.addProof(*txid, p); err != nil {
 			return err
 		}
-		kind := "conflict" // spends one of its inputs: it can never be mined
-		if outputSpend {
-			kind = "output spend" // spends one of its outputs: that coin clears
-		}
-		printJSON(map[string]any{"file": dc.dead.path, "txid": *txid, "proof": kind, "depth": depth,
+		printJSON(map[string]any{"file": dc.dead.path, "txid": *txid, "depth": depth,
 			"settlesAt": dc.dead.depth, "settledNow": depth >= dc.dead.depth})
 		return nil
 	}
 	type row struct {
-		TxID          string `json:"txid"`
-		Listed        bool   `json:"listedByWallet"`
-		ConflictDepth int64  `json:"conflictDepth"`
-		// OutputSpendDepth: a proof that one of its outputs is spent, this
-		// deep (Round 9, Y6).
-		OutputSpendDepth int64  `json:"outputSpendDepth,omitempty"`
-		Proof            bool   `json:"proof"`
-		ProofError       string `json:"proofError,omitempty"`
+		TxID          string   `json:"txid"`
+		Listed        bool     `json:"listedByWallet"`
+		ConflictDepth int64    `json:"conflictDepth"`
+		Proofs        int      `json:"proofs"`
+		ProofErrors   []string `json:"proofErrors,omitempty"`
 	}
 	var rows []row
 	for id, rec := range records {
-		r := row{TxID: id, Proof: rec.Proof != nil}
+		r := row{TxID: id, Proofs: len(rec.proofs())}
 		_, r.Listed = entries[id]
 		if dropped, err := decodeTx(rec.Hex); err == nil {
 			r.ConflictDepth, _ = dc.walletConflictDepth(tip, dropped, entries)
-			if rec.Proof != nil {
-				pd, _, outputSpend, perr := dc.proofDepth(dropped, rec.Proof)
+			for _, p := range rec.proofs() {
+				pd, perr := dc.proofDepth(dropped, p)
 				if perr != nil {
-					r.ProofError = perr.Error()
+					r.ProofErrors = append(r.ProofErrors, perr.Error())
 				}
-				if outputSpend {
-					r.OutputSpendDepth = pd // clears the output it spends
-				} else {
-					r.ConflictDepth = max(r.ConflictDepth, pd)
-				}
+				r.ConflictDepth = max(r.ConflictDepth, pd)
 			}
 		}
 		rows = append(rows, r)

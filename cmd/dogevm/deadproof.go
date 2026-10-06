@@ -27,8 +27,8 @@ import (
 // evidence comes from one of two places:
 //   - the wallet, when it lists a transaction in a block that spends one of
 //     the dropped transaction's inputs;
-//   - a proof an operator records (`dogevm unsettled prove`): the spender's
-//     bytes and the hash of the block holding it. Nothing in it is taken on
+//   - proofs an operator records (`dogevm unsettled prove`): the spender's
+//     bytes and the hash of the block holding it, kept side by side. Nothing in it is taken on
 //     trust: on every read this node checks the bytes spend one of the
 //     dropped transaction's inputs, that the block is on its main chain,
 //     how deep it is, and that the block lists the spender. A wrong proof
@@ -65,53 +65,39 @@ func spendsInputOf(spender, dropped *wire.MsgTx) bool {
 	return false
 }
 
-// spendsOutputOf reports whether spender spends one of dropped's own
-// outputs: then dropped is in the chain after all (the wallet lost it), and
-// a deep enough spender clears that output the normal way (Round 9, Y6).
-func spendsOutputOf(spender, dropped *wire.MsgTx) bool {
-	hash := dropped.TxHash()
-	for _, in := range spender.TxIn {
-		if in.PreviousOutPoint.Hash == hash {
-			return true
-		}
-	}
-	return false
-}
-
 // proofDepth is how deep, on this node's main chain, the block a proof
 // names is, if it holds a transaction spending one of dropped's inputs (a
-// conflict) or one of its outputs (a spend of a recorded coin, Round 9,
-// Y6); 0 if it doesn't, or isn't on the main chain. spender is the proof's
-// transaction, and outputSpend says which kind it is.
-func (c *dogeChain) proofDepth(dropped *wire.MsgTx, p *conflictProof) (depth int64, spender *wire.MsgTx, outputSpend bool, err error) {
-	if p == nil {
-		return 0, nil, false, nil
-	}
-	spender, err = decodeTx(p.Spender)
+// conflict: dropped can never be mined); 0 if it isn't on the main chain.
+// Only a conflict counts (Round 10, Z2): a proof that one of dropped's own
+// OUTPUTS is spent would say dropped was mined after all, and then the
+// customer claim it carried has to come back into the books with it; this
+// node can't rebuild that from a proof, so that case fails closed (rescan
+// or import the transaction, RUNBOOK "Cutover").
+func (c *dogeChain) proofDepth(dropped *wire.MsgTx, p conflictProof) (int64, error) {
+	spender, err := decodeTx(p.Spender)
 	if err != nil {
-		return 0, nil, false, fmt.Errorf("the proof's spender: %w", err)
+		return 0, fmt.Errorf("the proof's spender: %w", err)
 	}
-	outputSpend = spendsOutputOf(spender, dropped)
-	if !outputSpend && !spendsInputOf(spender, dropped) {
-		return 0, nil, false, errors.New("the proof's spender spends neither one of the dropped transaction's inputs nor one of its outputs")
+	if !spendsInputOf(spender, dropped) {
+		return 0, errors.New("the proof's spender doesn't spend any of the dropped transaction's inputs")
 	}
 	var block struct {
 		Confirmations int64    `json:"confirmations"`
 		Tx            []string `json:"tx"`
 	}
 	if err := c.rpc.call(&block, "getblock", p.Block, true); err != nil {
-		return 0, nil, false, fmt.Errorf("the proof's block %s: %w", p.Block, err)
+		return 0, fmt.Errorf("the proof's block %s: %w", p.Block, err)
 	}
 	if block.Confirmations < 1 {
-		return 0, nil, false, nil // not on the main chain (any more)
+		return 0, nil // not on the main chain (any more)
 	}
 	id := spender.TxHash().String()
 	for _, txid := range block.Tx {
 		if strings.EqualFold(txid, id) {
-			return block.Confirmations, spender, outputSpend, nil
+			return block.Confirmations, nil
 		}
 	}
-	return 0, nil, false, fmt.Errorf("block %s doesn't hold the proof's spender %s", p.Block, id)
+	return 0, fmt.Errorf("block %s doesn't hold the proof's spender %s", p.Block, id)
 }
 
 // walletConflictDepth is the depth of the deepest transaction the wallet
@@ -134,22 +120,27 @@ func (c *dogeChain) walletConflictDepth(tip int64, dropped *wire.MsgTx, entries 
 }
 
 // droppedDepth is the current depth of the best evidence that dropped can
-// never be mined: the deeper of the wallet's and a recorded proof's. A
-// proof that doesn't check out counts for nothing, and doesn't stop the
-// read: the transaction just stays unsettled.
-func (c *dogeChain) droppedDepth(tip int64, dropped *wire.MsgTx, entries map[string]historyEntry, p *conflictProof) (int64, error) {
+// never be mined: the deepest of the wallet's and every recorded proof's,
+// each checked now. A proof that doesn't check out counts for nothing, and
+// doesn't stop the read: the transaction just stays unsettled.
+func (c *dogeChain) droppedDepth(tip int64, dropped *wire.MsgTx, entries map[string]historyEntry, proofs []conflictProof) (int64, error) {
 	depth, err := c.walletConflictDepth(tip, dropped, entries)
 	if err != nil {
 		return 0, err
 	}
-	if pd, _, outputSpend, err := c.proofDepth(dropped, p); err == nil && !outputSpend {
-		depth = max(depth, pd)
+	for _, p := range proofs {
+		if pd, err := c.proofDepth(dropped, p); err == nil {
+			depth = max(depth, pd)
+		}
 	}
 	return depth, nil
 }
 
-// setProof records p for the unsettled transaction txid.
-func (d *deadHistory) setProof(txid string, p conflictProof) error {
+// addProof records p for the unsettled transaction txid, beside any
+// recorded before (Round 10, Z3): a later proof never replaces an earlier
+// one, so a mistaken second proof can't un-clear what a good one cleared.
+// Every one is checked again on every read.
+func (d *deadHistory) addProof(txid string, p conflictProof) error {
 	unlock, err := d.lock()
 	if err != nil {
 		return err
@@ -163,7 +154,13 @@ func (d *deadHistory) setProof(txid string, p conflictProof) error {
 	if !ok {
 		return fmt.Errorf("%s has no unsettled transaction %s", d.path, txid)
 	}
-	rec.Proof = &p
+	for _, q := range rec.proofs() {
+		if q == p {
+			return nil
+		}
+	}
+	rec.Proofs = append(rec.proofs(), p)
+	rec.Proof = nil
 	records[txid] = rec
 	return d.write(records)
 }

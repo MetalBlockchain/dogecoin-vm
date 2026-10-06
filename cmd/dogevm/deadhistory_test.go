@@ -139,6 +139,10 @@ func (n *stubDogecoinCore) serve(t *testing.T) *httptest.Server {
 				return
 			}
 			result = map[string]any{"hex": hex}
+		case "getrawtransaction":
+			// No transaction index: Core knows only mempool transactions.
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": nil, "error": map[string]any{"code": -5, "message": "No such mempool transaction"}})
+			return
 		default:
 			t.Errorf("unexpected call %s", req.Method)
 		}
