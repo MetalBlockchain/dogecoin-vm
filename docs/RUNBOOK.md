@@ -540,14 +540,16 @@ a wallet that sees a different history: rescan it, and don't let it sign
 until the tips agree.
 
 If the trail stays broken, the recovery is a cutover, never moving the
-anchor alone: with the signer stopped,
-
-    dv signer-log cutover -signers SET -key-file KEY -log LOG
-
-starts a new one (see "Cutover"). Its fences spend every coin the set holds,
-the old anchor too if it is still unspent, so nothing this signer signed
-from it can confirm afterwards; when it is done, the anchor is the tip.
-Never hand-edit a signer's `anchors` entry.
+anchor alone. Since round 11 this release **won't start a later cutover on
+a fenced log** (`signer-log cutover` refuses: "a later cutover isn't
+supported by this release"): a later cutover runs while the other signers
+sign as usual, and their surplus spends could overlap a fence kept back
+from it. So keep that signer stopped, keep the bridge paused, and recover
+with a reviewed release that accounts for it (a re-adopt and full cutover
+of every signer while everything is paused). Its fences spend every coin
+the set holds, the old anchor too if it is still unspent, so nothing this
+signer signed from it can confirm afterwards. Never hand-edit a signer's
+`anchors` entry.
 
 ## Cutover
 
@@ -577,8 +579,10 @@ lines' tips. Until then it refuses everything but fences with "in a cutover
 ... signs only fences".
 
 It starts by itself: adopt starts one, and an unproven log starts one on its
-first status or sign request. `signer-log cutover` starts a new one by hand
-(a new epoch; the coins of an unfinished one stay recorded).
+first status or sign request. `signer-log cutover` starts one by hand only
+on an unproven log; on a fenced (or new) log it refuses (round 11): a
+later cutover could overlap the other signers' surplus spends, so it needs
+a reviewed release.
 `signer-log status` shows `history`, `cutoverEpoch`, `cutoverLeft` (coins
 not yet cleared, per chain), `cutoverPending` (coins nothing in a block
 spends yet), `anchors` and `lineageTips`.
@@ -628,8 +632,9 @@ left. Fences:
 - count against a **lifetime budget** (round 10): each signer pays at
   most its half of the surplus it saw when it first priced a fence, plus
   its half of every DVMC contribution once that is 20 deep, over its whole
-  life, all cutovers together; every fence it ever signed counts once, at
-  its costliest alternative, confirmed or not. Every signed transaction
+  life, all cutovers together; every fence **and, since round 11, every
+  cancellation** it ever signed counts once, at its costliest alternative,
+  confirmed or not. Every signed transaction
   carries an honest signature, so the fees of every quorum together stay
   within the surplus plus capital added since. **A new cutover
   (`signer-log cutover`) adds nothing to the budget**: a fence another
@@ -664,7 +669,11 @@ is full confirmations deep (20) the coin clears by the normal rule:
   replaces an earlier one (they are kept side by side, round 10). A
   coinbase is never evidence: every coinbase spends the same null input.
 - **if it was mined after all** (the wallet lost it), nothing a proof can
-  say clears it (round 10): a mined transaction may carry a customer
+  say clears it (round 10), and since round 11 **nothing is read at all**
+  ("was mined ... but the wallet no longer lists it": every load fails, so
+  the bridge, the signers and the cutover all stop) when the wallet once
+  listed it in a block, or still lists a block transaction spending its
+  output, and nothing shows it conflicted. ("Mined but missing".) A mined transaction may carry a customer
   claim, and only the transaction itself, back in the wallet, puts that
   claim back in the books. Import it into the wallet of every node that
   holds it: `dogecoin-cli importprunedfunds <its hex> $(dogecoin-cli
@@ -705,9 +714,10 @@ signer's directory); don't delete it.
 A coin at a personal deposit address only some signers watch is recorded
 only by them, and the fences, built from the coordinator's view, don't
 spend it: those signers stay in their cutover (fail closed). Register the
-address with the coordinator (`dv deposit-address`), then start a new
-epoch (`signer-log cutover`) on the signers that finished, so they sign the
-fence that spends it. Before a cutover, `dogevm coverage` on every node
+address with the coordinator (`dv deposit-address`); the signers that
+already finished can't start a new epoch on this release (round 11), so
+keep everything paused and recover with a reviewed release that re-adopts
+them. Prevent it instead: the coverage check below. Before a cutover, `dogevm coverage` on every node
 must match (the upgrade checks it and stops otherwise): that is what the
 cutover's coverage rests on.
 
