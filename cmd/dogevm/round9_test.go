@@ -283,3 +283,46 @@ func TestProofOfAnOutputSpendClears(t *testing.T) {
 	core.blocks["blk"] = stubBlock{confirmations: 0, tx: []string{sid}}
 	require.Zero(spendDepth(), "its block left the main chain: no spend")
 }
+
+// TestInventoryCountsTheCarriedChange (Y4, both r9 reviews): every fence
+// after the first starts with the change the one before paid back, so 200
+// coins at 100 inputs a fence take three fences, not two; and a stuck
+// Dogecoin fence is replaced one fence fee higher each time (its own
+// size-based fee, not one base fee). The inventory now says so, and the
+// cutover really takes that many.
+func TestInventoryCountsTheCarriedChange(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	per := maxFenceInputs(chainDogecoin)
+	for range 2*per - 1 { // plus the seed: 2*per coins
+		h.contribute(doge, 100)
+	}
+	s, err := h.b.load()
+	require.NoError(err)
+	inv, err := nodeInventory(h.b, s)
+	require.NoError(err)
+	ic := inv.Chains[chainDogecoin]
+	require.Len(ic.Coins, 2*per)
+	require.Equal(3, ic.Batches, "the change takes a place in every later batch")
+
+	var coins []utxo
+	for _, u := range s.lockedUTXOs {
+		if u.confirmations > 0 {
+			coins = append(coins, u)
+		}
+	}
+	_, _, costliest, err := h.b.fenceBudget(s, chainDogecoin, coins)
+	require.NoError(err)
+	require.Greater(costliest, h.b.fenceBase(chainDogecoin), "a 100-input fence costs more than one base fee")
+	require.Equal(formatDoge(int64(fenceReplacements)*costliest), ic.Headroom)
+
+	h.rebuildLogs()
+	h.fenceUntilDone(80)
+	fences := 0
+	for _, t := range h.doge.txs {
+		if _, ok := parseFence(t.tx); ok {
+			fences++
+		}
+	}
+	require.Equal(ic.Batches, fences, "the cutover took as many Dogecoin fences as the inventory said")
+}

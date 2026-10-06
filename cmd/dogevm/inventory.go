@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/txscript"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/wire"
 )
 
 // Inventory before a cutover (Round 8, X5).
@@ -119,14 +120,16 @@ func nodeInventory(b *bridge, s *pegState) (inventory, error) {
 			}
 		}
 		ic.Total = formatDoge(total)
-		fees, batches, err := b.fenceBudget(s, chain, confirmed)
+		fees, batches, costliest, err := b.fenceBudget(s, chain, confirmed)
 		if err != nil {
 			return inventory{}, err
 		}
 		ic.Batches, ic.FenceFees = batches, formatDoge(fees)
+		// A stuck Dogecoin fence is replaced one fence fee higher each time
+		// (its own size-based fee), one batch at a time (Round 9, Y4).
 		var headroom int64
 		if chain == chainDogecoin {
-			headroom = int64(fenceReplacements) * b.fenceBase(chain)
+			headroom = int64(fenceReplacements) * costliest
 		}
 		ic.Headroom = formatDoge(headroom)
 		needed += fees + headroom
@@ -150,28 +153,52 @@ func nodeInventory(b *bridge, s *pegState) (inventory, error) {
 	return inv, nil
 }
 
-// fenceBudget is what fences spending coins on chain cost, and how many it
-// takes: batches as nextFence builds them (the first coin first, at most
-// maxFenceInputs, trimmed to maxFenceBytes). It leaves out the change each
-// fence pays the next one, a coin more per batch.
-func (b *bridge) fenceBudget(s *pegState, chain string, coins []utxo) (int64, int, error) {
-	var fees int64
-	batches := 0
+// fenceBudget is what fences spending coins on chain cost, how many it
+// takes, and the costliest one: batches as nextFence builds them (the first
+// coin first, at most maxFenceInputs, trimmed to maxFenceBytes), each after
+// the first starting with the change the one before paid back to the set's
+// own script (Round 9, Y4).
+func (b *bridge) fenceBudget(s *pegState, chain string, coins []utxo) (fees int64, batches int, costliest int64, err error) {
+	var script []byte
+	switch {
+	case chain == chainDogecoin && s.pegLine != nil:
+		script = s.pegLine.script
+	case chain == chainDogecoinVM && s.reserveLine != nil:
+		script = s.reserveLine.script
+	}
+	var carry *utxo
 	for len(coins) > 0 {
-		batch := coins[:min(len(coins), maxFenceInputs(chain))]
-		batch, err := b.trimToSize(s, chain, batch)
-		if err != nil {
-			return 0, 0, err
+		var batch []utxo
+		if carry != nil {
+			batch = append(batch, *carry)
+		}
+		take := min(len(coins), maxFenceInputs(chain)-len(batch))
+		batch = append(batch, coins[:take]...)
+		if batch, err = b.trimToSize(s, chain, batch); err != nil {
+			return 0, 0, 0, err
 		}
 		size, err := b.fenceSizeOf(s, chain, batch)
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, 0, err
 		}
-		fees += fenceFee(chain, b.fenceBase(chain), size)
+		fee := fenceFee(chain, b.fenceBase(chain), size)
+		fees += fee
+		costliest = max(costliest, fee)
 		batches++
-		coins = coins[len(batch):]
+		used := len(batch)
+		if carry != nil {
+			used-- // the carried change isn't one of coins
+		}
+		if used <= 0 {
+			return 0, 0, 0, fmt.Errorf("%s: a fence can't take another coin past the change it carries", chain)
+		}
+		coins = coins[used:]
+		if script == nil {
+			script = batch[0].pkScript
+		}
+		carry = &utxo{outPoint: wire.OutPoint{Index: uint32(batches)}, pkScript: script, confirmations: 1}
 	}
-	return fees, batches, nil
+	return fees, batches, costliest, nil
 }
 
 // cmdInventory prints this node's inventory:
