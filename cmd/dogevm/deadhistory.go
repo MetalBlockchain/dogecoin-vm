@@ -47,6 +47,11 @@ type deadRecord struct {
 	// stops listing it and lists nothing that conflicts with it (Round 8,
 	// X1).
 	Settled bool `json:"settled,omitempty"`
+	// Mined is set once the wallet listed it in a block (Round 11, AA2).
+	// Gone from the wallet later with no conflict to show for it, it was
+	// mined and lost, not dropped: its customer claim is out of the books
+	// until it is imported, so history refuses (chains.go).
+	Mined bool `json:"mined,omitempty"`
 }
 
 // proofs is every proof recorded for r.
@@ -159,6 +164,10 @@ func (d *deadHistory) sync(tip int64, entries map[string]historyEntry, body func
 				return nil, fmt.Errorf("keeping unsettled transaction %s: %w", txid, err)
 			}
 			rec = deadRecord{Hex: hex, Time: e.time}
+			changed = true
+		}
+		if e.height > 0 && !rec.Mined {
+			rec.Mined = true
 			changed = true
 		}
 		if e.conflicted && e.conflictDepth > rec.ConflictDepth {

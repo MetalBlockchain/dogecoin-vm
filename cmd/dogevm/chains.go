@@ -483,6 +483,27 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 		// Only evidence read now counts (Round 9, Y6): rec.Settled (the
 		// wallet once listed it conflicted rootDepth deep) is a note, not a
 		// depth, so a coin is never cleared on memory alone.
+		//
+		// A transaction that was mined (the wallet listed it in a block, or
+		// a block transaction the wallet lists spends one of its outputs)
+		// and that nothing shows conflicted is not dropped: the wallet lost
+		// it. Its customer claim (a deposit, a payout, a refund) is out of
+		// the books while a spend of its output can clear a cutover coin,
+		// so nothing is read until it is imported (Round 11, AA2).
+		if depth == 0 {
+			spender, err := c.listedSpender(tx, entries)
+			if err != nil {
+				return 0, nil, fmt.Errorf("unsettled transaction %s: %w", txid, err)
+			}
+			if rec.Mined || spender != "" {
+				why := "the wallet listed it in a block"
+				if spender != "" {
+					why = "block transaction " + spender + " spends its output"
+				}
+				return 0, nil, fmt.Errorf("transaction %s was mined (%s) but the wallet no longer lists it, and nothing shows it conflicted: "+
+					"its claim is missing from the books, so nothing is signed or accounted until it is imported (importprunedfunds; RUNBOOK \"Mined but missing\")", txid, why)
+			}
+		}
 		c.mu.Lock()
 		if c.known == nil {
 			c.known = map[string]*wire.MsgTx{}
@@ -492,6 +513,27 @@ func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
 		entries[txid] = historyEntry{conflicted: true, conflictDepth: depth, time: rec.Time}
 	}
 	return tip, entries, nil
+}
+
+// listedSpender is a transaction the wallet lists in a block that spends
+// an output of tx, or "" if there is none.
+func (c *dogeChain) listedSpender(tx *wire.MsgTx, entries map[string]historyEntry) (string, error) {
+	hash := tx.TxHash()
+	for txid, e := range entries {
+		if e.height == 0 || e.conflicted {
+			continue
+		}
+		spender, err := c.walletTx(txid)
+		if err != nil {
+			return "", err
+		}
+		for _, in := range spender.TxIn {
+			if in.PreviousOutPoint.Hash == hash {
+				return txid, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // walletEntries brings the wallet history up to date and returns the tip's
