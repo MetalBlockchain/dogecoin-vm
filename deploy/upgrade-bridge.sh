@@ -71,7 +71,11 @@
 # and an older copy over a newer one would forget a signature. A log this
 # run created is removed only if nothing changed it since; any other log is
 # left as it is.
-set -euo pipefail
+set -Eeuo pipefail
+# Any command that fails unexpectedly ends the run with exit 1, whatever its
+# own status: 2, 3 and 4 mean only what the header says (Round 10, Z5). The
+# EXIT trap (cleanup or forward_failure) still runs.
+trap 'rc=$?; echo "upgrade-bridge: a command failed (status $rc, line $LINENO)" >&2; exit 1' ERR
 
 CHAIN=dogevm
 COMMIT=${1:?usage: deploy/upgrade-bridge.sh COMMIT}

@@ -64,7 +64,7 @@ case \$cmd in
         fi ;;
       check) [[ -f \$log ]] || { echo "no log" >&2; exit 1; }; grep -q QUARANTINE "\$log" && { echo "quarantined" >&2; exit 1; }; true ;;
       anchors)
-        if [[ -z \$(arg -key-file "\$@") ]]; then echo "{\"tips\":\$tips}"; exit 0; fi
+        if [[ -z \$(arg -key-file "\$@") ]]; then [[ -n \${ANCHORS_TIPS_STATUS:-} ]] && exit \$ANCHORS_TIPS_STATUS; echo "{\"tips\":\$tips}"; exit 0; fi
         has -set "\$@" && echo "ANCHORS \$tips" >>"\$log"
         anchors=\$tips; walked=\$tips; fence=null
         if [[ -n \$set ]]; then
@@ -426,6 +426,11 @@ setup
 code=$(INVENTORY_FAIL="dial tcp 127.0.0.1:22555: connection refused" run)
 expect '[[ $code == 1 ]] && grep -q "couldn.t run (not a readiness verdict): dial tcp" "$T/out"' "exit 1, says it couldn't run"
 expect '[[ $(version) == old ]] && paused && all_signers_paused' "old binary back, everything paused"
+
+echo "34. a command failing unexpectedly ends the run with exit 1, whatever its own status (round 10, Z5)"
+setup
+code=$(ANCHORS_TIPS_STATUS=3 run)
+expect '[[ $code == 1 ]] && grep -q "a command failed (status 3" "$T/out"' "exit 1, not 3, and says which status"
 
 echo
 echo "$pass passed, $fail failed"

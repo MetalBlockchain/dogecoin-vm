@@ -625,16 +625,18 @@ left. Fences:
   fence of the set unconfirmed, short of 20, or listed as conflicted
   short of 20 (Core lists a fence it dropped from its mempool at -1; that
   one is sent again, it isn't dead);
-- count against a **budget** over the whole cutover (round 9): each
-  signer pays at most its half of the surplus it saw when it first priced
-  a fence in the cutover, every fence it signed counted once at its
-  costliest alternative, confirmed or not. Every signed transaction
+- count against a **lifetime budget** (round 10): each signer pays at
+  most its half of the surplus it saw when it first priced a fence, plus
+  its half of every DVMC contribution once that is 20 deep, over its whole
+  life, all cutovers together; every fence it ever signed counts once, at
+  its costliest alternative, confirmed or not. Every signed transaction
   carries an honest signature, so the fees of every quorum together stay
-  within the surplus. A signer that runs out refuses ("more than its
-  budget"): contribute (DVMC, 20 deep), check on an explorer that every
-  Dogecoin fence of the cutover so far is 20 deep or dead (a new epoch
-  gives a new budget, which must not stack on a fence another quorum may
-  still have kept back), then `signer-log cutover` on that signer.
+  within the surplus plus capital added since. **A new cutover
+  (`signer-log cutover`) adds nothing to the budget**: a fence another
+  quorum kept back from an earlier cutover could still be mined, on either
+  chain. A signer that runs out refuses ("more than its budget"): the only
+  way on is new capital. Contribute (DVMC) and wait until it is 20 deep;
+  each signer then adds its share by itself.
 
 Deposits aren't affected: what is owed is read from each deposit's own
 transaction, not from its coin staying where it was paid.
@@ -651,25 +653,31 @@ then get it, or a conflicting spend of its inputs, into a block. Once that
 is full confirmations deep (20) the coin clears by the normal rule:
 
 - if the wallet lists the conflicting spend (it pays the set), on its own;
-- if it was mined after all and the wallet lost it and the spend of its
-  output too: prove that spend the same way (`-spender` is the
-  transaction spending the recorded output); the node puts it in its
-  history at its block's depth, and the coin clears once that is 20 deep
-  (round 9);
 - if it doesn't (a payer double-spent a deposit to themselves), record
-  the spend on **every** node that holds the dropped transaction:
+  the conflicting spend on **every** node that holds the dropped transaction:
   `dogevm unsettled prove -signers <its signers.json> -txid <the dropped
   transaction> -spender <the spending transaction's hex> -block <the hash
   of its block>`, as that node's user. Nothing in a proof is trusted: each
   node checks, on every read, that the spender spends one of the dropped
   transaction's inputs and that its own chain holds it in that block, and
-  how deep. A wrong proof clears nothing. A coinbase is never evidence:
-  every coinbase spends the same null input.
+  how deep. A wrong proof clears nothing, and a later proof never
+  replaces an earlier one (they are kept side by side, round 10). A
+  coinbase is never evidence: every coinbase spends the same null input.
+- **if it was mined after all** (the wallet lost it), nothing a proof can
+  say clears it (round 10): a mined transaction may carry a customer
+  claim, and only the transaction itself, back in the wallet, puts that
+  claim back in the books. Import it into the wallet of every node that
+  holds it: `dogecoin-cli importprunedfunds <its hex> $(dogecoin-cli
+  gettxoutproof '["<txid>"]' <its block hash>)` (Dogecoin Core 1.14 has
+  no `rescanblockchain`; restarting Core with `-rescan`, or restoring the
+  wallet backup, also works), then its coin clears the normal way once its
+  spend is 20 deep. Until then the cutover stays gated: fail
+  closed, safe.
 
 The dropped transaction's record stays in the unsettled file for good: it
 is what clears its outputs, so deleting it would leave them owed (round 8).
 Only evidence read now clears a coin (round 9): the wallet listing a
-conflicting spend, or a proof that still checks out. A record "settled"
+conflicting spend, or a proof of one that still checks out. A record "settled"
 because the wallet once listed it conflicted 20 deep clears nothing once
 the wallet stops listing that, so prove it. If a reorganisation makes the
 evidence shallow again, the coin shows as owed again until it is deep
