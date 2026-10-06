@@ -122,11 +122,12 @@ func TestFenceBudgetCountsEveryFenceOnce(t *testing.T) {
 		"fence:a:0":  {First: 1000, Txs: []loggedTx{{Fee: 30}, {Fee: 50}}},
 		"fence:b:0":  {First: 1200, Txs: []loggedTx{{Fee: 40}}},
 		"fence:c:0":  {First: 900, Txs: []loggedTx{{Fee: 1000}}}, // an earlier cutover: still counts
-		"cancel:d:0": {First: 1100, Txs: []loggedTx{{Fee: 500}}}, // not a fence
+		"cancel:d:0": {First: 1100, Txs: []loggedTx{{Fee: 500}}}, // a surplus spend too (Round 11, AA1)
+		"refund:x:0": {First: 1100, Txs: []loggedTx{{Fee: 700}}}, // not paid from the surplus
 	}}
-	require.EqualValues(1100, l.fenceFees("fence:a:0", 60), "a replacement counts at its costliest")
-	require.EqualValues(1090, l.fenceFees("fence:a:0", 10), "a cheaper one adds nothing")
-	require.EqualValues(1100, l.fenceFees("fence:e:0", 10), "a new action adds its fee")
+	require.EqualValues(1600, l.fenceFees("fence:a:0", 60), "a replacement counts at its costliest")
+	require.EqualValues(1590, l.fenceFees("fence:a:0", 10), "a cheaper one adds nothing")
+	require.EqualValues(1600, l.fenceFees("fence:e:0", 10), "a new action adds its fee")
 }
 
 // TestFenceBudgetStopsCumulativeFees (Y1): with one dishonest signer the
@@ -173,8 +174,13 @@ func TestNewCutoverDoesNotRefillTheFenceBudget(t *testing.T) {
 	// DogecoinVM fence kept back.
 	c.log.Actions["fence:keptback:0"] = &loggedAction{First: c.log.CutoverStarted, Txs: []loggedTx{{Chain: chainDogecoinVM, Fee: budget}}}
 
-	// A new cutover.
+	// A new cutover: refused on a fenced log since Round 11 (AA1); should a
+	// reviewed release start one, the budget still isn't refilled.
 	before := c.log.CutoverEpoch
+	if c.log.History != "" {
+		require.ErrorContains(c.startCutover(s), "later cutover isn't supported")
+		c.log.History = ""
+	}
 	require.NoError(c.startCutover(s))
 	require.Equal(before+1, c.log.CutoverEpoch)
 	s, err = c.b.load()

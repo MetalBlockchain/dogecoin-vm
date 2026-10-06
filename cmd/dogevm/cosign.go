@@ -854,6 +854,11 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		if err := c.feeRoom(b.audit(s), b.vmFee, unseen); err != nil {
 			return nil, nil, 0, err
 		}
+		// One lifetime allowance for every surplus spend (Round 11, AA1):
+		// a cancellation's fee counts against it as a fence's does.
+		if err := c.cutoverBudgetRoom(s, except, b.vmFee); err != nil {
+			return nil, nil, 0, err
+		}
 		for _, u := range inputs {
 			unspent[u.outPoint] = true
 		}

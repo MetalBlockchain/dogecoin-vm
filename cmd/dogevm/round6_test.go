@@ -129,6 +129,10 @@ func TestCoinOnlyOneSignerWatchesKeepsItGated(t *testing.T) {
 	for _, other := range []*cosigner{b, c} {
 		s, err := other.b.load()
 		require.NoError(err)
+		// Round 11, AA1: a fenced log refuses a later cutover; the reviewed
+		// release that recovers this re-adopts it, as here.
+		require.ErrorContains(other.startCutover(s), "later cutover isn't supported")
+		other.log.History = ""
 		require.NoError(other.startCutover(s))
 	}
 	h.fenceUntil(30, a, b, c)

@@ -275,6 +275,15 @@ func (c *cosigner) startCutover(s *pegState) error {
 	if c.b.signers.indexOf(c.key.PubKey()) < 0 {
 		return errors.New("this key is not in the signer set")
 	}
+	// Only an unproven log cuts over: the first cutover, or one adopt starts
+	// (Round 11, AA1). A later cutover of a fenced log runs while other
+	// signers sign as usual, and their cancellations spend the same surplus
+	// a fence kept back from it could still claim (Codex r11 #1); this
+	// release doesn't account for that, so it refuses. A later cutover
+	// needs a reviewed release (RUNBOOK.md, "Cutover").
+	if c.log.History != "" {
+		return fmt.Errorf("this log's history is %q: a later cutover isn't supported by this release, since it could overlap the other signers' surplus spends; recover with a reviewed release (RUNBOOK.md, \"Cutover\")", c.log.History)
+	}
 	coins, err := cutoverCoins(s, c.log)
 	if err != nil {
 		return err
@@ -594,14 +603,15 @@ func (c *cosigner) addFenceCapital(s *pegState, share int64) bool {
 	return changed
 }
 
-// fenceFees is the fence fees this log ever signed, each action counted
-// once at its costliest alternative, with fee added to action key (or as
-// a new action).
+// fenceFees is the surplus fees this log ever signed (fences and, since
+// Round 11, AA1, cancellations), each action counted once at its
+// costliest alternative, with fee added to action key (or as a new
+// action).
 func (l *signingLog) fenceFees(key string, fee int64) int64 {
 	var total int64
 	seen := false
 	for k, a := range l.Actions {
-		if !strings.HasPrefix(k, actionFence+":") {
+		if !strings.HasPrefix(k, actionFence+":") && !strings.HasPrefix(k, actionCancel+":") {
 			continue
 		}
 		var most int64

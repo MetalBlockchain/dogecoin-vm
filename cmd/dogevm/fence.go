@@ -213,7 +213,7 @@ func tips(s *pegState) (map[string]string, error) {
 // (deploy/upgrade-bridge.sh compares them), or one could follow a line of
 // its own. An anchor that no longer leads to the tip (the line ended at a
 // spend that paid nothing back, or a reorganisation took the coin) is
-// recovered by a cutover (signer-log cutover), not by moving the anchor:
+// recovered by a cutover (with a reviewed release since Round 11, AA1), not by moving the anchor:
 // its fences spend every coin the set holds, the old anchor included, so
 // whatever this signer signed from it can't confirm (RUNBOOK.md, "Anchor
 // lineage").
@@ -236,7 +236,7 @@ func (c *cosigner) fillAnchors(s *pegState) (map[string]string, error) {
 		probe.AddTxIn(wire.NewTxIn(&op, nil, nil))
 		if c.log.Anchors[chain] != "" {
 			if err := c.log.anchorMoved(chain, probe, nil, line); err != nil {
-				return nil, fmt.Errorf("%s: the log's anchor doesn't lead to the line's tip %v: %w (recover with signer-log cutover; RUNBOOK.md, \"Anchor lineage\")", chain, op, err)
+				return nil, fmt.Errorf("%s: the log's anchor doesn't lead to the line's tip %v: %w (recover with a reviewed release; RUNBOOK.md, \"Anchor lineage\")", chain, op, err)
 			}
 			continue
 		}

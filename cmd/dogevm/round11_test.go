@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -111,4 +112,70 @@ func TestDroppedUnminedTransactionStillOnlyGates(t *testing.T) {
 	delete(core.listed, id)
 	_, err = signer.b.load()
 	require.NoError(err)
+}
+
+// TestLaterCutoverOfAFencedLogRefuses (AA1, Codex r11 #1): once a log is
+// fenced, this release won't start another cutover on it. A later cutover
+// runs while the other signers sign as usual, and their cancellations spend
+// the surplus a fence kept back from it could still claim.
+func TestLaterCutoverOfAFencedLogRefuses(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	h.inUse()
+	h.rebuildLogs()
+	h.fenceUntilDone(40)
+	for _, c := range h.signers {
+		require.Equal(historyFenced, c.log.History)
+		epoch := c.log.CutoverEpoch
+		s, err := c.b.load()
+		require.NoError(err)
+		require.ErrorContains(c.startCutover(s), "later cutover isn't supported")
+		require.Equal(epoch, c.log.CutoverEpoch, "nothing started")
+		require.Empty(c.log.Cutover)
+	}
+}
+
+// TestCancellationsCountAgainstTheLifetimeAllowance (AA1): a cancellation's
+// fee comes out of the same surplus as a fence's, so it counts against the
+// same lifetime allowance; every honest signer staying within its share is
+// what bounds all quorums' spends together. Round 10 checked cancellations
+// only against the visible surplus, so cancellations confirmed one at a
+// time could eat the room a kept-back fence still needed.
+func TestCancellationsCountAgainstTheLifetimeAllowance(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	h.setPolicy(func(b *bridge) { b.vmFee = doge / 10 })
+	alice := h.user(1)
+	dep := h.deposit(3*doge, &alice, 6)
+	op := wire.OutPoint{Hash: dep.TxHash()}
+	h.setPolicy(func(b *bridge) { b.minDeposit = 4 * doge }) // held, with a destination
+	addr, err := h.user(9).address(h.b.dogeParams)
+	require.NoError(err)
+	for _, c := range h.signers {
+		path := filepath.Join(t.TempDir(), "approvals")
+		require.NoError(os.WriteFile(path, []byte(op.String()+" "+addr.EncodeAddress()+"\n"), 0o600))
+		c.refundApprovals = path
+	}
+	s, err := h.b.load()
+	require.NoError(err)
+	inputs, err := s.cancelInputs(h.b.vmFee)
+	require.NoError(err)
+	tx, err := h.b.buildCancel(inputs, op)
+	require.NoError(err)
+	req := signRequest{Chain: chainDogecoinVM, Action: action{Kind: actionCancel, Deposit: op.String()}, Tx: encodeTx(tx)}
+
+	// C's allowance is nearly spent: half a fee left.
+	c := h.signers[2]
+	c.log.CutoverEpoch = 1
+	c.log.FenceBudget = h.b.vmFee / 2
+	c.log.FenceCapital = nil
+	for _, u := range s.contributions {
+		c.log.FenceCapital = append(c.log.FenceCapital, u.outPoint.String())
+	}
+	_, _, _, err = c.check(req)
+	require.ErrorContains(err, "more than its budget", "a cancellation counts against the allowance")
+
+	c.log.FenceBudget = 10 * doge
+	_, _, _, err = c.check(req)
+	require.NoError(err, "within the allowance it signs")
 }

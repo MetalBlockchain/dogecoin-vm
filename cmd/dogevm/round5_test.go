@@ -473,11 +473,17 @@ func TestBrokenAnchorRecoversByCutover(t *testing.T) {
 	s, err := c.b.load()
 	require.NoError(err)
 	_, err = c.fillAnchors(s)
-	require.ErrorContains(err, "signer-log cutover")
+	require.ErrorContains(err, "recover with a reviewed release")
 
 	for _, sc := range h.signers {
 		ss, err := sc.b.load()
 		require.NoError(err)
+		if sc.log.History != "" {
+			// Round 11, AA1: this release refuses a later cutover; the
+			// reviewed release it needs re-adopts the log, as here.
+			require.ErrorContains(sc.startCutover(ss), "later cutover isn't supported")
+			sc.log.History = ""
+		}
 		require.NoError(sc.startCutover(ss))
 	}
 	require.Equal(1, c.log.CutoverEpoch)
