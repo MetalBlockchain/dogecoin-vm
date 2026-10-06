@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -151,4 +152,43 @@ func TestCutoverBudgetStopsCumulativeFees(t *testing.T) {
 	c.log.Actions["fence:spent:0"] = &loggedAction{First: c.log.CutoverStarted, Txs: []loggedTx{{Fee: budget - 5}}}
 	require.NoError(c.cutoverBudgetRoom(s, key, 5), "up to the budget")
 	require.ErrorContains(c.cutoverBudgetRoom(s, key, 6), "more than its budget")
+}
+
+// TestPendingVMPaymentNeverHoldsTheCutover (Y2, Codex r9 #2): a payment to
+// the reserve that isn't in a DogecoinVM block yet makes the inventory not
+// ready, and isn't recorded by a cutover: no signature from before could
+// spend it (signers spent only confirmed reserve coins, and DogecoinVM
+// blocks are final). Round 8 recorded it; once it was replaced by a
+// payment elsewhere, the cutover could never clear it.
+func TestPendingVMPaymentNeverHoldsTheCutover(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	h.inUse()
+	h.contribute(20*doge, 100)
+	pending := wire.NewMsgTx(1)
+	pending.AddTxIn(wire.NewTxIn(h.coin(), nil, nil))
+	pending.AddTxOut(wire.NewTxOut(doge, h.b.signers.pkScript()))
+	h.vm.add(pending, 0)
+
+	s, err := h.b.load()
+	require.NoError(err)
+	inv, err := nodeInventory(h.b, s)
+	require.NoError(err)
+	require.False(inv.Ready)
+	require.Contains(strings.Join(inv.Problems, "\n"), pending.TxHash().String()+" pays the set and is not in a block yet")
+
+	h.rebuildLogs()
+	c := h.signers[2]
+	require.NotContains(c.log.Cutover[chainDogecoinVM], wire.OutPoint{Hash: pending.TxHash()}.String(), "not recorded")
+
+	// It is replaced by a payment elsewhere, which is final.
+	kept := h.vm.txs[:0]
+	for _, t := range h.vm.txs {
+		if t.tx.TxHash() != pending.TxHash() {
+			kept = append(kept, t)
+		}
+	}
+	h.vm.txs = kept
+	h.fenceUntilDone(30)
+	require.Equal(historyFenced, c.log.History, "the cutover finishes")
 }

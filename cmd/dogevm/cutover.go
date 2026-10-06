@@ -211,6 +211,14 @@ func cutoverCoins(s *pegState, l *signingLog) (map[string][]string, error) {
 		views[chain] = v
 		coins[chain] = map[wire.OutPoint]bool{}
 		for _, t := range append(append([]chainTx{}, v.txs...), v.conflicted...) {
+			// DogecoinVM blocks are final and signers only ever spent
+			// confirmed reserve coins, so no signature from before can
+			// spend an output of a DogecoinVM transaction not yet in a
+			// block. Recording one would hold the cutover for good if it
+			// were replaced (Round 9, Y2).
+			if chain == chainDogecoinVM && t.confirmations <= 0 {
+				continue
+			}
 			hash := t.tx.TxHash()
 			for i, out := range t.tx.TxOut {
 				op := wire.OutPoint{Hash: hash, Index: uint32(i)}

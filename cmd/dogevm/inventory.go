@@ -102,6 +102,22 @@ func nodeInventory(b *bridge, s *pegState) (inventory, error) {
 				confirmed = append(confirmed, u)
 			}
 		}
+		// A payment to the set that isn't in a block yet (either chain):
+		// wait for it, or for what replaces it, before adopting (Round 9,
+		// Y2). Its coin isn't in the list above (that holds only coins the
+		// wallet lists as unspent in a block).
+		v := s.view(chain)
+		for _, t := range v.txs {
+			if t.confirmations > 0 {
+				continue
+			}
+			for _, out := range t.tx.TxOut {
+				if v.isCoin(out) {
+					inv.Problems = append(inv.Problems, fmt.Sprintf("%s: %v pays the set and is not in a block yet", chain, t.tx.TxHash()))
+					break
+				}
+			}
+		}
 		ic.Total = formatDoge(total)
 		fees, batches, err := b.fenceBudget(s, chain, confirmed)
 		if err != nil {
