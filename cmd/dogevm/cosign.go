@@ -403,6 +403,11 @@ type cosigner struct {
 	open bool
 	// nonces are the requests accepted recently, so none is accepted twice.
 	nonces nonceCache
+	// maxRegistrations is how many new deposit addresses this signer starts
+	// watching in any hour (0: defaultMaxRegistrations); registered holds
+	// when it did, for the last hour.
+	maxRegistrations int
+	registered       []time.Time
 
 	mu sync.Mutex // one proposal at a time
 	// mine records which chain transactions carry this signer's signature
@@ -496,7 +501,7 @@ func (c *cosigner) handleRegister(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	addr, err := registerDeposit(c.b, d)
+	addr, err := c.register(d)
 	if err != nil {
 		return nil, err
 	}
@@ -572,14 +577,19 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		}
 		seen[in.PreviousOutPoint] = true
 	}
-	for _, h := range req.Register {
+	if len(req.Register) > maxProposalRegistrations {
+		return nil, nil, 0, fmt.Errorf("proposal registers %d deposit addresses; limit is %d", len(req.Register), maxProposalRegistrations)
+	}
+	register := make([]destination, len(req.Register))
+	for i, h := range req.Register {
 		d, err := parseDest(h)
 		if err != nil {
 			return nil, nil, 0, err
 		}
-		if _, err := registerDeposit(b, d); err != nil {
-			return nil, nil, 0, err
-		}
+		register[i] = d
+	}
+	if err := c.registerMany(register); err != nil {
+		return nil, nil, 0, err
 	}
 
 	s, err := b.load()
@@ -761,6 +771,61 @@ func (c *cosigner) check(req signRequest) (*wire.MsgTx, [][]byte, int64, error) 
 		return nil, nil, 0, fmt.Errorf("signing would exceed this signer's %s DOGE daily limit", formatDoge(c.maxDaily))
 	}
 	return tx, redeems, value, nil
+}
+
+// A legitimate proposal currently names one address. This bound prevents a
+// compromised coordinator from hiding a bulk registration request in one.
+const maxProposalRegistrations = 16
+
+// register starts watching d's deposit address. A new one counts against
+// the hourly limit, whether the coordinator registers it or names it in a
+// proposal: each costs this signer's node an address to watch for good, so
+// the coordinator key alone mustn't be able to add them without end. One
+// already registered is free.
+func (c *cosigner) register(d destination) (btcutil.Address, error) {
+	if err := c.registerMany([]destination{d}); err != nil {
+		return nil, err
+	}
+	return c.b.signers.depositAddress(d, c.b.dogeParams)
+}
+
+// registerMany preflights a batch before writing any of it, then registers
+// every destination. Requests are serialized by c.mu, so capacity cannot be
+// consumed by another signer request between the check and the writes.
+func (c *cosigner) registerMany(ds []destination) error {
+	newEntries, err := c.b.registry.capacityFor(ds)
+	if err != nil {
+		return err
+	}
+	if newEntries > 0 {
+		limit := c.maxRegistrations
+		if limit <= 0 {
+			limit = defaultMaxRegistrations
+		}
+		now := time.Now()
+		recent := c.registered[:0]
+		for _, t := range c.registered {
+			if now.Sub(t) < time.Hour {
+				recent = append(recent, t)
+			}
+		}
+		c.registered = recent
+		if len(recent)+newEntries > limit {
+			return fmt.Errorf("this signer has started watching %d new deposit addresses in the last hour, its limit; try later", limit)
+		}
+		// Reserve the whole batch before any permanent writes. A failed node
+		// import keeps the reservation, which is safer than permitting retries
+		// to exceed the bound.
+		for range newEntries {
+			c.registered = append(c.registered, now)
+		}
+	}
+	for _, d := range ds {
+		if _, err := registerDeposit(c.b, d); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // catchUp handles a signer that started watching a deposit address after a
@@ -1120,6 +1185,8 @@ func cmdSigner(args []string) error {
 	tlsCert := fs.String("tls-cert", "", "this signer's transport certificate (default: tls.crt next to -key-file, if there)")
 	tlsKey := fs.String("tls-key", "", "this signer's transport key (default: tls.key next to -key-file, if there)")
 	approvals := fs.String("refund-approvals", "", `file of approved refunds, "TXID:VOUT DOGECOIN-ADDRESS" per line`)
+	maxRegistrations := fs.Int("max-registrations", defaultMaxRegistrations, "most new deposit addresses this signer starts watching in an hour")
+	maxDepositEntries := fs.Int("max-deposit-addresses", defaultMaxDepositEntries, "most personal deposit addresses this signer keeps in its registry")
 	maxDaily := fs.Int64("max-daily", 0, "most DOGE, in koinu, this signer approves moving in 24 hours (0: no limit)")
 	rescan := fs.Bool("rescan", false, "rescan Dogecoin for past payments to the peg and registered deposit addresses")
 	s.register(fs)
@@ -1132,6 +1199,9 @@ func cmdSigner(args []string) error {
 	}
 	if err := required(map[string]string{"signers": *signersPath, "key-file": *keyFile}); err != nil {
 		return err
+	}
+	if *maxRegistrations < 1 || *maxDepositEntries < 1 {
+		return errors.New("-max-registrations and -max-deposit-addresses must be positive")
 	}
 	signers, err := readSignerSet(*signersPath)
 	if err != nil {
@@ -1154,6 +1224,7 @@ func cmdSigner(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.registry.setMaxEntries(*maxDepositEntries)
 	if err := watchPeg(b, *rescan); err != nil {
 		return fmt.Errorf("importing the peg addresses into Dogecoin Core: %w", err)
 	}
@@ -1164,7 +1235,7 @@ func cmdSigner(args []string) error {
 	if err != nil {
 		return err
 	}
-	c := &cosigner{b: b, key: key, log: log, refundApprovals: *approvals, maxDaily: *maxDaily}
+	c := &cosigner{b: b, key: key, log: log, refundApprovals: *approvals, maxDaily: *maxDaily, maxRegistrations: *maxRegistrations}
 	// Before serving anything, the log must hold everything the chains show
 	// this key signed. A node still syncing can't say yet; the same check
 	// runs before every signature.
