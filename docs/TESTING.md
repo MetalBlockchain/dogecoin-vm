@@ -20,7 +20,7 @@ It is a beta: deposits over 100 DOGE are not credited (they are held for a refun
 The hosted test network used to run at **https://metaldoge.com**; the notes below describe it and still apply to a testnet you run yourself:
 
 - **Web wallet.** Create a key (it stays in your browser), then use the faucet or deposit Dogecoin testnet DOGE and withdraw it back. The page shows the live peg audit: DOGE locked on Dogecoin against DOGE circulating on DogecoinVM.
-- **JSON-RPC** at `https://metaldoge.com/rpc`, user `public`, password `public`. It can read and broadcast but not administer.
+- **JSON-RPC** at `https://metaldoge.com/rpc`, user `public`, password `public`. It can read bounded chain data but cannot broadcast, rescan, or administer. The web wallet broadcasts through its bounded `/api/tx` endpoint.
 - **CLI.** Point `dogevm` at it:
   ```bash
   export DOGEVM_RPC=https://metaldoge.com/rpc DOGEVM_RPC_USER=public DOGEVM_RPC_PASS=public DOGEVM_NETWORK=testnet
@@ -77,7 +77,7 @@ curl -s -u "$DOGEVM_RPC_USER:$DOGEVM_RPC_PASS" -H 'content-type: application/jso
   -d '{"jsonrpc":"1.0","id":1,"method":"getblockcount","params":[]}' "$DOGEVM_RPC"
 ```
 
-RPC credentials and indexes are node settings, in `~/.dogevm-devnet/chain-configs/<chainID>/config.json`, not in the public genesis. The node needs `txIndex` and `addrIndex` for the wallet and bridge. For a shared node, set `rpcLimitUser`/`rpcLimitPass` there: a limited user can read and broadcast but not administer.
+RPC credentials and indexes are node settings, in `~/.dogevm-devnet/chain-configs/<chainID>/config.json`, not in the public genesis. The node needs `txIndex` and `addrIndex` for the wallet and bridge. For a shared node, set `rpcLimitUser`/`rpcLimitPass` there: a limited user can read bounded chain data but cannot broadcast, rescan, or administer.
 
 ### 3. Wallets
 
