@@ -611,8 +611,8 @@ func setupJoin(args []string) error {
 
 	switch {
 	case *fingerprint != "":
-		if *fingerprint != set.fingerprint() {
-			return fmt.Errorf("the set's fingerprint is %s, not %s: do not join", set.fingerprint(), *fingerprint)
+		if err := set.checkFingerprint(*fingerprint); err != nil {
+			return err
 		}
 	case p.interactive:
 		fmt.Fprintln(p.out, "Confirm this fingerprint with the coordinator and the other signers over a")
