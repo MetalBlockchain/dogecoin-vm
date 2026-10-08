@@ -2,7 +2,7 @@
 # Builds the site's developer pages from docs/API.md and docs/RUN-A-NODE.md,
 # so the markdown stays the one source:
 #
-#   scripts/docs-pages.sh        # writes cmd/dogevm/pages/{developers,run-a-node}.html
+#   scripts/docs-pages.sh        # writes cmd/dogevm/pages/{developers,run-a-node,changelog}.html
 #
 # Needs pandoc.
 set -euo pipefail
@@ -28,3 +28,4 @@ page() { # page SOURCE.md OUT.html
 
 page docs/API.md cmd/dogevm/pages/developers.html
 page docs/RUN-A-NODE.md cmd/dogevm/pages/run-a-node.html
+page docs/CHANGELOG.md cmd/dogevm/pages/changelog.html
