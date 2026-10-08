@@ -6,6 +6,9 @@
 # root on the bridge's host:
 #
 #   deploy/upgrade-bridge.sh COMMIT     # build that commit (from origin/$BRANCH)
+#   REMOTE=/opt/dogevm/x.bundle BRANCH=b deploy/upgrade-bridge.sh COMMIT
+#                                       # an unpushed branch, from a git bundle
+#                                       # the dogevm user can read
 #
 # Steps, stopping at the first failure:
 #   1. build the new dogevm binary beside the old one, as the dogevm user;
@@ -80,6 +83,7 @@ trap 'rc=$?; echo "upgrade-bridge: a command failed (status $rc, line $LINENO)" 
 CHAIN=dogevm
 COMMIT=${1:?usage: deploy/upgrade-bridge.sh COMMIT}
 BRANCH=${BRANCH:-dogecoin}
+REMOTE=${REMOTE:-origin}
 HOME_DIR=${HOME_DIR:-/opt/$CHAIN}
 STATE=${STATE:-/var/lib/metal-main}
 VARLIB=${VARLIB:-/var/lib}
@@ -151,7 +155,8 @@ fi
 log "building $CHAIN $COMMIT"
 (
   cd "$HOME_DIR/src"
-  as_user git fetch -q origin "$BRANCH"
+  echo "source was at $(as_user git rev-parse HEAD); it stays at $COMMIT, whatever happens"
+  as_user git fetch -q "$REMOTE" "$BRANCH"
   as_user git checkout -q --detach "$COMMIT"
   as_user git log -1 --format='%H %s'
   as_user go build -o "$HOME_DIR/bin/$CHAIN.new" "./cmd/$CHAIN"

@@ -218,9 +218,9 @@ never refunded, and `/api/audit` shows it as `contributed`. A payment to the
 peg address without a tag is a deposit without a destination: held, and owed
 back as a refund.
 
-Top-ups made before the tag existed (untagged payments to the peg address)
-would count as deposits owed back. List each such output, `TXID:VOUT`, one
-per line, in `contributions.txt` next to the signer set: the coordinator's
+Top-ups made before the tag existed, or from a wallet that can't write an
+`OP_RETURN` (untagged payments to the peg address), would count as deposits
+owed back. List each such output, `TXID:VOUT`, one per line, in `contributions.txt` next to the signer set: the coordinator's
 (`secrets/separate-signers/`) and every signer's (`/var/lib/dogevm-signer-N/`).
 Outputs, not transactions: a transaction ID alone is refused, since one
 transaction can pay a top-up and a customer's deposit. List only an output
@@ -304,9 +304,13 @@ backup. The only exceptions are named explicitly:
   separate signers existed, so every signature it made is on the chains.
   It rebuilds the log from them, anchors included.
 
-The three DogecoinVM signers set up in September 2026 signed without logs,
-so the first upgrade adopts them, and then fences both chains: adoption
-sees only what reached a chain, not a signature kept back. Follow "First
+Of the three DogecoinVM signers set up in September 2026, signer 3 has no
+log, and signers 1 and 2 have logs only
+from 1 October 2026 on, written by software from before the cutover rule.
+So the first upgrade adopts signer 3 only (`ADOPT_LOGS="dogevm-signer-3"`);
+signers 1 and 2 keep their logs and are cut over as unproven. Then it
+fences both chains: neither adoption nor an old log shows a signature kept
+back, or one made before the logs began. Follow "First
 upgrade of the live bridge" below, step by step.
 
 After an upgrade to this version, while the bridge is still paused, move
@@ -337,9 +341,10 @@ explorer); if not, contribute first, or payouts wait.
 ## First upgrade of the live bridge
 
 The live DogecoinVM bridge (Metal mainnet, Dogecoin mainnet) runs software
-from before the cutover rule; its three signers kept no logs. Its first
-upgrade adopts their logs from the chains and fences both chains before
-anything else is signed. Do these in order, as root on the bridge's host;
+from before the cutover rule. Signer 3 kept no log; signers 1 and 2 kept
+logs only from 1 October 2026, so neither shows what was signed in
+September. Its first upgrade adopts signer 3's log from the chains, cuts
+over all three, and fences both chains before anything else is signed. Do these in order, as root on the bridge's host;
 stop at the first surprise, and stay paused until the last step. Nothing
 here touches the VM plugin (the Metal node keeps running it); that is
 upgraded separately.
@@ -355,18 +360,30 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
 1. **Pin the code.** Choose the commit, run on a workstation
    `go test ./cmd/dogevm/ ./vm/...` with Dogecoin Core actually running
    (`DOGECOIND_DOCKER=...`: the Core tests must run; a skip fails this
-   step) and every `deploy/test/*.sh` under bash 5. Push the branch to
-   `origin` (an operator's decision) and record the commit hash. Build the
-   new binary on the host without installing it, for the read-only checks
-   below (it reads; it signs nothing):
+   step) and every `deploy/test/*.sh` under bash 5. Record the commit
+   hash. Get the code to the host: push the branch to `origin` (an
+   operator's decision), or, unpushed, copy a bundle of it
+   (`git bundle create dogevm.bundle <branch>` on the workstation) to
+   `/opt/dogevm/dogevm.bundle`, owned by `dogevm`. Note the commit the
+   host's source is at, then build the new binary without installing it,
+   for the read-only checks below (it reads; it signs nothing):
 
+       REMOTE=origin   # or /opt/dogevm/dogevm.bundle
+       BRANCH=<the branch> C=<commit>
+       sudo -u dogevm git -C /opt/dogevm/src rev-parse HEAD   # write it down: the old source
        NEW=/opt/dogevm/bin/dogevm-preflight   # somewhere the service user can run it, not /root
        sudo -u dogevm env HOME=/opt/dogevm PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local \
-         bash -c "cd /opt/dogevm/src && git fetch && git checkout <commit> && go build -o $NEW ./cmd/dogevm"
+         bash -c "cd /opt/dogevm/src && git fetch -q $REMOTE $BRANCH && git checkout -q --detach $C && go build -o $NEW ./cmd/dogevm"
        dvn() { sudo -u dogevm env HOME=/opt/dogevm $(cat $S/bridge.env | xargs) "$NEW" "$@"; }
        dvn version   # must run as the service user before you go on
 
-   (Delete `$NEW` after step 13; the upgrade installs its own build.)
+   From here, run the `deploy/` scripts from `/opt/dogevm/src`, now at the
+   new commit. Nothing runs from the source tree (the services run the
+   installed binaries), so leaving it there is harmless; the upgrade
+   checks out the same commit. If you abandon the upgrade before step 8,
+   check the old source back out (`git -C /opt/dogevm/src checkout
+   --detach <old>`, as `dogevm`), so the tree matches what runs. (Delete
+   `$NEW` after step 13; the upgrade installs its own build.)
 
 2. **Pause everything first: the bridge and every signer** (round 8):
    a dishonest coordinator ignores its own pause, so the signers must
@@ -374,9 +391,16 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
 
        dv pause -signers "$SET" -reason "Upgrading."
        for n in 1 2 3; do
-         runuser -u dogevm-signer-$n -- bash -c "set -a; . /var/lib/dogevm-signer-$n/signer.env; set +a; \
-           /opt/dogevm/bin/dogevm pause -signers /var/lib/dogevm-signer-$n/signers.json -reason Upgrading."
+         u=dogevm-signer-$n
+         bin=$(systemctl show -p ExecStart --value $u | sed -n 's/.*path=\([^ ;]*\).*/\1/p')   # the signer's own binary
+         set_=$(systemctl show -p ExecStart --value $u | grep -o -- '-signers [^ ;]*' | cut -d' ' -f2)
+         runuser -u $u -- bash -c "set -a; . /var/lib/$u/signer.env; set +a; \
+           $bin pause -signers $set_ -reason Upgrading."
+         cat "$(dirname $set_)/paused.json"   # each must show the pause
        done
+
+   (The signers run `/usr/local/lib/dogevm/dogevm`; their users can't read
+   `/opt/dogevm/bin`.)
 
    From here nothing is credited, paid, refunded or signed. (The upgrade
    finds these pauses and keeps them; you lift them by hand in step 11.)
@@ -398,7 +422,12 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
    capital") and **wait for 20 confirmations** (rootDepth), not 6. Run it
    again: the contribution must show in the surplus (the old software,
    still running, would have called it a held payment; the new one counts
-   it as capital).
+   it as capital). From a wallet that can't write the tag, pay it untagged
+   and add its output, `TXID:VOUT` (the output paying the peg, from
+   `getrawtransaction TXID 1`), as a line to the coordinator's
+   `$(dirname "$SET")/contributions.txt`; the upgrade copies it to every
+   signer. Without that line `inventory` counts it as a held deposit, owed
+   back, and the surplus doesn't grow.
 4. **Every set coin deep, nothing pending, nothing conflicted.**
    `dvn inventory -require-ready -signers "$SET" -deposits "$REG"` must
    succeed: every coin at the peg address and the personal deposit
@@ -408,8 +437,9 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
    enough. The upgrade runs the same check before adopting anything, and
    stops (exit 3) if it fails; if `inventory` couldn't run at all (a node
    down, a wrong path) that is exit 1, not 3.
-5. **Reconcile against the chain, outpoint by outpoint (stop gate).** The
-   signers kept no logs, so nothing records what they signed before; the
+5. **Reconcile against the chain, outpoint by outpoint (stop gate).**
+   Signer 3 kept no log and signers 1 and 2 none before 1 October, so
+   nothing records everything they signed; the
    cutover can only fence what the wallets know. Check that what they know
    is everything: for every address `inventory` lists under `addresses`
    (the peg address and every registered personal deposit address), list
@@ -441,15 +471,18 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
    signer can't see is a coin its cutover won't record.
 7. **Backup.** `dogevm-backup run`, then copy it off the host
    (`scripts/pull-backups.sh`).
-8. **Upgrade, adopt, fence.** Without `RESUME`, so you resume by hand, and
-   with every signer adopted (none of these keys may use `INIT_LOGS`:
-   they have signed):
+8. **Upgrade, adopt, fence.** Without `RESUME`, so you resume by hand,
+   adopting only signer 3, the one with no log (no key may use
+   `INIT_LOGS`: all three have signed; signers 1 and 2 keep their logs,
+   which the upgrade checks and cuts over; `ADOPT_LOGS` acts only on a
+   signer with no log):
 
-       BRANCH=<the pushed branch> ADOPT_LOGS="dogevm-signer-1 dogevm-signer-2 dogevm-signer-3" \
-         deploy/upgrade-bridge.sh <commit>
+       cd /opt/dogevm/src
+       REMOTE=$REMOTE BRANCH=$BRANCH ADOPT_LOGS="dogevm-signer-3" \
+         deploy/upgrade-bridge.sh $C
 
    It runs "Upgrading the bridge software": coverage compared, inventory
-   checked, the three logs adopted and cut over and their recorded coins
+   checked, signer 3's log adopted, all three cut over and their recorded coins
    compared again, the point of no return crossed **before any signer
    starts**, the bridge left stopped, and fences sent on both chains until
    every signer is done (a Dogecoin fence needs 20 confirmations, about 20
