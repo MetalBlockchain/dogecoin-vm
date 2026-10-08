@@ -351,4 +351,12 @@ func TestCoordinatorNamesEachSigner(t *testing.T) {
 	stranger := []*remoteSigner{{URL: "https://x.example", PublicKey: coord.PublicKeys[0]}}
 	require.ErrorContains(set.identifyCosigners(stranger), "not in the signer set")
 	require.ErrorContains(set.identifyCosigners([]*remoteSigner{{URL: "https://x.example"}}), "no public key")
+
+	// A transport pin comes from the card; cosigners.json can't swap it.
+	set.Operators[0].TLSPin = "aa"
+	pinned := []*remoteSigner{{URL: "https://signer1.example"}}
+	require.NoError(set.identifyCosigners(pinned))
+	require.Equal("aa", pinned[0].TLSPin)
+	swapped := []*remoteSigner{{URL: "https://signer1.example", TLSPin: "bb"}}
+	require.ErrorContains(set.identifyCosigners(swapped), "not the pin on its card")
 }
