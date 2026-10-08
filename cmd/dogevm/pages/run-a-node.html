@@ -102,10 +102,11 @@ the password, e.g. <code>openssl rand -hex 24</code>.</td>
 </tr>
 <tr>
 <td><code>rpcLimitUser</code> / <code>rpcLimitPass</code></td>
-<td>A read-mostly login: blocks, transactions,
-<code>searchrawtransactions</code>, <code>sendrawtransaction</code> and
-similar; no wallet or admin methods. This is what metaldoge.com exposes
-as <code>public</code>/<code>public</code>.</td>
+<td>A read-only login: blocks, transactions,
+<code>searchrawtransactions</code> (at most 500 per call; page with
+<code>skip</code>) and similar; no broadcast, wallet or admin methods.
+This is what metaldoge.com exposes as
+<code>public</code>/<code>public</code>.</td>
 </tr>
 <tr>
 <td><code>txIndex</code></td>
@@ -231,7 +232,7 @@ unspent</td>
 </tr>
 <tr>
 <td>Broadcast</td>
-<td><code>sendrawtransaction &lt;hex&gt;</code></td>
+<td><code>sendrawtransaction &lt;hex&gt;</code> (full login only)</td>
 </tr>
 </tbody>
 </table></div>

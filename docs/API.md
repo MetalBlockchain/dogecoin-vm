@@ -477,14 +477,18 @@ curl -s -u public:public https://metaldoge.com/rpc -H 'content-type: application
 {"result": 51, "error": null, "id": 1}
 ```
 
-The limited login may call: `getbestblockhash`, `getblock`, `getblockcount`,
-`getblockhash`, `getblockheader`, `getchaintips`, `getinfo`, `getrawmempool`,
-`getrawtransaction`, `gettxout`, `searchrawtransactions` (the node keeps an
-address index), `sendrawtransaction`, `decoderawtransaction`, `decodescript`,
-`createrawtransaction`, `estimatefee`, `validateaddress`, `verifymessage`,
-`getcurrentnet`, `getdifficulty`, `getnettotals`, `uptime`, `version`, `help`
-and btcd's notification methods. Wallet and node-administration methods are
-refused.
+The limited login may call: `getbestblock`, `getbestblockhash`, `getblock`,
+`getblockcount`, `getblockhash`, `getblockheader`, `getchaintips`, `getheaders`,
+`getcfilter`, `getcfilterheader`, `getinfo`, `getrawmempool`,
+`getrawtransaction`, `gettxout`, `searchrawtransactions`, `decoderawtransaction`,
+`decodescript`, `createrawtransaction`, `estimatefee`, `validateaddress`,
+`verifymessage`, `getcurrentnet`, `getdifficulty`, `getnettotals`, `uptime`,
+`version` and `help` (and `notifyblocks` over the WebSocket). Wallet,
+node-administration and broadcast methods are refused: to broadcast, use
+`POST /api/tx`.
+
+`searchrawtransactions` (the node keeps an address index) returns at most 500
+transactions per call; read longer histories in pages with `skip`.
 
 ---
 
@@ -512,7 +516,7 @@ refused.
 
    (`vmFee` and `dogeFee` in `/api/info` are the *bridge's* charges on credits
    and payouts, not network fees.)
-5. **Broadcast** with `POST /api/tx` (or `sendrawtransaction` on `/rpc`). Final
+5. **Broadcast** with `POST /api/tx`. Final
    in under a second; `/api/events` tells you when the block lands.
 
 **Bridge in:** `POST /api/deposit-address` with the user's DogecoinVM address,

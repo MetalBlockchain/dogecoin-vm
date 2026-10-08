@@ -73,7 +73,7 @@ JSON
 | Key | What it does |
 |---|---|
 | `rpcUser` / `rpcPass` | Full JSON-RPC access. Keep it private (or leave it out). Generate the password, e.g. `openssl rand -hex 24`. |
-| `rpcLimitUser` / `rpcLimitPass` | A read-mostly login: blocks, transactions, `searchrawtransactions`, `sendrawtransaction` and similar; no wallet or admin methods. This is what metaldoge.com exposes as `public`/`public`. |
+| `rpcLimitUser` / `rpcLimitPass` | A read-only login: blocks, transactions, `searchrawtransactions` (at most 500 per call; page with `skip`) and similar; no broadcast, wallet or admin methods. This is what metaldoge.com exposes as `public`/`public`. |
 | `txIndex` | Index every transaction, so `getrawtransaction` works for any txid. |
 | `addrIndex` | Index addresses, so `searchrawtransactions` can list an address's history. Wallets and explorers need it. |
 | `dataDir`, `logDir` | Where the chain's database and logs go. Set them explicitly: otherwise they're derived from `$HOME`. |
@@ -178,7 +178,7 @@ needs:
 | Tip, blocks | `getblockcount`, `getblockhash`, `getblock` |
 | A transaction | `getrawtransaction <txid> 1` (needs `txIndex`) |
 | An address's history and UTXOs | `searchrawtransactions <address>` (needs `addrIndex`), then `gettxout` for what's unspent |
-| Broadcast | `sendrawtransaction <hex>` |
+| Broadcast | `sendrawtransaction <hex>` (full login only) |
 
 The bridge (deposit addresses, withdrawals, proof of reserves) isn't part of a
 node: use the bridge's API at metaldoge.com for that ([API.md](API.md)). Keys

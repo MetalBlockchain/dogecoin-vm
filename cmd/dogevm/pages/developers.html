@@ -523,20 +523,25 @@ both <code>public</code>:</p>
 <pre class="sh"><code>curl -s -u public:public https://metaldoge.com/rpc -H &#39;content-type: application/json&#39; \
   -d &#39;{&quot;jsonrpc&quot;:&quot;1.0&quot;,&quot;id&quot;:1,&quot;method&quot;:&quot;getblockcount&quot;,&quot;params&quot;:[]}&#39;</code></pre>
 <pre class="json"><code>{&quot;result&quot;: 51, &quot;error&quot;: null, &quot;id&quot;: 1}</code></pre>
-<p>The limited login may call: <code>getbestblockhash</code>,
-<code>getblock</code>, <code>getblockcount</code>,
-<code>getblockhash</code>, <code>getblockheader</code>,
-<code>getchaintips</code>, <code>getinfo</code>,
+<p>The limited login may call: <code>getbestblock</code>,
+<code>getbestblockhash</code>, <code>getblock</code>,
+<code>getblockcount</code>, <code>getblockhash</code>,
+<code>getblockheader</code>, <code>getchaintips</code>,
+<code>getheaders</code>, <code>getcfilter</code>,
+<code>getcfilterheader</code>, <code>getinfo</code>,
 <code>getrawmempool</code>, <code>getrawtransaction</code>,
-<code>gettxout</code>, <code>searchrawtransactions</code> (the node
-keeps an address index), <code>sendrawtransaction</code>,
+<code>gettxout</code>, <code>searchrawtransactions</code>,
 <code>decoderawtransaction</code>, <code>decodescript</code>,
 <code>createrawtransaction</code>, <code>estimatefee</code>,
 <code>validateaddress</code>, <code>verifymessage</code>,
 <code>getcurrentnet</code>, <code>getdifficulty</code>,
-<code>getnettotals</code>, <code>uptime</code>, <code>version</code>,
-<code>help</code> and btcd's notification methods. Wallet and
-node-administration methods are refused.</p>
+<code>getnettotals</code>, <code>uptime</code>, <code>version</code> and
+<code>help</code> (and <code>notifyblocks</code> over the WebSocket).
+Wallet, node-administration and broadcast methods are refused: to
+broadcast, use <code>POST /api/tx</code>.</p>
+<p><code>searchrawtransactions</code> (the node keeps an address index)
+returns at most 500 transactions per call; read longer histories in
+pages with <code>skip</code>.</p>
 <hr />
 <h2 id="build-a-wallet-in-5-steps">Build a wallet in 5 steps</h2>
 <ol type="1">
@@ -571,9 +576,8 @@ fee; an output below 0.001 DOGE is non-standard;</li>
 <p>(<code>vmFee</code> and <code>dogeFee</code> in
 <code>/api/info</code> are the <em>bridge's</em> charges on credits and
 payouts, not network fees.)</p></li>
-<li><p><strong>Broadcast</strong> with <code>POST /api/tx</code> (or
-<code>sendrawtransaction</code> on <code>/rpc</code>). Final in under a
-second; <code>/api/events</code> tells you when the block
+<li><p><strong>Broadcast</strong> with <code>POST /api/tx</code>. Final
+in under a second; <code>/api/events</code> tells you when the block
 lands.</p></li>
 </ol>
 <p><strong>Bridge in:</strong> <code>POST /api/deposit-address</code>
