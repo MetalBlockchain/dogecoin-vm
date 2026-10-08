@@ -520,10 +520,17 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
    No "quarantin" in `journalctl -u dogevm-signer-N`. Then
    `systemctl start dogevm-bridge-main`; `curl -s
    http://127.0.0.1:8081/api/health` has the `pause`, `peg`, `bridge`,
-   `dogecoin` and `dogecoinvm` checks, only the pause failing; `audit` is
-   solvent, the surplus lower only by the fence fees `inventory` predicted.
+   `dogecoin` and `dogecoinvm` checks, only the pause failing, or also a
+   failure you can explain from before the upgrade (a held deposit fails
+   `bridge` until it is refunded; a low METAL balance fails `validator`);
+   `audit` is solvent, the surplus lower only by the fence fees `inventory`
+   predicted, and every obligation (circulating, `unclaimedOnDogecoin`,
+   `refund -list`) as before.
 10. **Web state and sandbox, still paused.** `deploy/move-web-state.sh`,
-    then `deploy/sandbox-units.sh`. Then `eval "$(deploy/bridge-paths.sh)"`
+    then `deploy/sandbox-units.sh`. It refuses while any check but the
+    pause fails; name the explained ones from step 9, and they must fail
+    the same way afterwards: `ALLOW_FAILING=bridge,validator
+    deploy/sandbox-units.sh`. Then `eval "$(deploy/bridge-paths.sh)"`
     again (the registry moved), open the site, make a deposit address, and
     check `/api/health` again: still only the pause failing.
 11. **Resume**, with the commands the upgrade printed: each signer first,

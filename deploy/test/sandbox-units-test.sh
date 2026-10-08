@@ -40,6 +40,8 @@ code=${h%%-*}
 case $h in
   503-pause) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":true}]}' ;;
   503-vm) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":false}]}' ;;
+  503-held) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":false,"detail":"deposit aa:0 (6.00000000 DOGE) is held"},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":true},{"name":"validator","ok":false,"detail":"0.97 METAL"}]}' ;;
+  503-heldx) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":false,"detail":"permission denied writing the registry"},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":true},{"name":"validator","ok":false,"detail":"0.96 METAL"}]}' ;;
   503-short) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true}]}' ;;
   503) body='not json' ;;
   200-short) body='{"checks":[{"name":"pause","ok":true}]}' ;;
@@ -122,6 +124,24 @@ expect '[[ $code != 0 ]] && [[ ! -e $SYSTEMD_DIR/dogevm-web-main.service.d ]]' "
 setup
 code=$(AFTER=503-vm run)
 expect '[[ $code != 0 ]] && [[ ! -e $SYSTEMD_DIR/dogevm-web-main.service.d/10-sandbox.conf ]]' "apply that breaks the VM check: fails and puts things back"
+
+echo "4a. known failures named in ALLOW_FAILING must fail the same way after (rehearsal, 8 Oct)"
+setup
+echo 503-held >"$HEALTH_FILE"
+code=$(run)
+expect '[[ $code != 0 ]] && [[ ! -e $SYSTEMD_DIR/dogevm-web-main.service.d ]]' "a held deposit, not named: refuses, writes nothing"
+setup
+echo 503-held >"$HEALTH_FILE"
+code=$(ALLOW_FAILING=bridge,validator AFTER=503-held run)
+expect '[[ $code == 0 ]]' "named, and failing the same way after: fine"
+setup
+echo 503-held >"$HEALTH_FILE"
+code=$(ALLOW_FAILING=bridge,validator AFTER=503-heldx run)
+expect '[[ $code != 0 ]] && [[ ! -e $SYSTEMD_DIR/dogevm-web-main.service.d/10-sandbox.conf ]]' "named, but the bridge fails differently after: fails and puts things back"
+setup
+echo 503-held >"$HEALTH_FILE"
+code=$(ALLOW_FAILING=bridge,validator,dogecoinvm run)
+expect '[[ $code != 0 ]] && grep -q "can.t name" "$T/out"' "can't allow a core check"
 
 echo "4b. a web directory holding the unsettled-transaction record is refused (round 6, V2)"
 setup

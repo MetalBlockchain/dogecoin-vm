@@ -25,6 +25,12 @@
 # three, the coordinator's key from the web and monitor, and the Telegram
 # token from the bridge and web. If a service doesn't come back up, or
 # /api/health doesn't answer 200, the previous drop-ins (if any) go back.
+#
+# A check already failing for a known reason (a held deposit fails
+# "bridge", a low validator balance "validator") stops it, unless you name
+# it after reading /api/health: ALLOW_FAILING=bridge,validator. Those must
+# then fail the same way afterwards (same message; the validator's balance
+# may move), and pause, peg, dogecoin and dogecoinvm can't be named.
 set -euo pipefail
 
 CHAIN=${CHAIN:-dogevm}
@@ -61,30 +67,45 @@ health_now() {
   code=${body##*$'\n'}
   body=${body%$'\n'*}
   if [[ $code == 200 || $code == 503 ]]; then
-    python3 - "$code" "$body" <<'PY'
+    python3 - "$code" "$body" "${ALLOW_FAILING:-}" <<'PY'
 import json, sys
-code, body = sys.argv[1], sys.argv[2]
+code, body, allow = sys.argv[1], sys.argv[2], [a for a in sys.argv[3].split(",") if a]
 want = ["pause", "peg", "bridge", "dogecoin", "dogecoinvm"]
 try:
-    checks = {c["name"]: bool(c["ok"]) for c in json.loads(body)["checks"]}
+    raw = json.loads(body)["checks"]
+    checks = {c["name"]: bool(c["ok"]) for c in raw}
+    detail = {c["name"]: str(c.get("detail", c.get("message", ""))) for c in raw}
 except Exception as e:
     print(f"bad {code}: the health response doesn't parse ({e})")
     sys.exit(0)
 missing = [n for n in want if n not in checks]
 failing = sorted(n for n, ok in checks.items() if not ok)
+allowed = [n for n in failing if n in allow]
+rest = [n for n in failing if n not in allow]
+# An allowed check must keep failing the same way: its message is part of
+# the state compared before and after (not the validator's balance).
+also = "".join(f" allowing {n}" + ("" if n == "validator" else f" ({detail[n]})") for n in allowed)
 if missing:
     print(f"bad {code}: missing checks " + ", ".join(missing))
 elif code == "200" and not failing:
     print("ok")
-elif code == "503" and failing == ["pause"]:
-    print("paused")
+elif code == "503" and not rest and allowed:
+    print("ok" + also)
+elif code == "503" and rest == ["pause"]:
+    print("paused" + also)
 else:
-    print(f"bad {code}: failing " + ", ".join(failing or ["(none named)"]))
+    print(f"bad {code}: failing " + ", ".join(rest or failing or ["(none named)"]))
 PY
     return
   fi
   echo "bad $code"
 }
+
+case ",${ALLOW_FAILING:-}," in
+  *,pause,* | *,peg,* | *,dogecoin,* | *,dogecoinvm,*) die "ALLOW_FAILING can't name pause, peg, dogecoin or dogecoinvm" ;;
+esac
+# fine AFTER BEFORE: healthy, or paused (or allowed failures) no worse than before.
+fine() { [[ $1 == ok || ( $1 == "$2" && ( $1 == ok* || $1 == paused* ) ) || ( $1 == paused && $2 == paused* ) ]]; }
 
 if [[ ${1:-} == remove ]]; then
   # The bridge must answer afterwards healthy, or paused with nothing else
@@ -98,7 +119,7 @@ if [[ ${1:-} == remove ]]; then
     systemctl is-active --quiet "$u" || die "$u didn't come back up without the sandbox: journalctl -u $u"
   done
   after=$(health_now)
-  [[ $after == ok || ( $after == paused && $before == paused ) ]] ||
+  fine "$after" "$before" ||
     die "removed, but /api/health is $after (it was $before before): journalctl -u $CHAIN-web-main"
   echo "sandbox-units: removed; /api/health is $after"
   exit 0
@@ -118,7 +139,7 @@ for dir in "$(dirname "$REGISTRY")" "$(dirname "$FINALITY")" "$INDEX"; do
   case $UNSETTLED in "$dir"/*) die "the web server would write $dir, which holds the coordinator's $UNSETTLED" ;; esac
 done
 before=$(health_now)
-[[ $before == ok || $before == paused ]] || die "the bridge isn't healthy now ($before; http://$WEB/api/health); fix that first"
+[[ $before == ok* || $before == paused* ]] || die "the bridge isn't healthy now ($before; http://$WEB/api/health); fix that first"
 
 BACKUP=$(mktemp -d)
 for u in "${UNITS[@]}"; do
@@ -188,7 +209,7 @@ for u in "${UNITS[@]}"; do
   systemctl is-active --quiet "$u" || { journalctl -u "$u" -n 20 --no-pager >&2 || true; die "$u didn't stay up under the sandbox"; }
 done
 after=$(health_now)
-[[ $after == ok || ( $after == paused && $before == paused ) ]] || die "under the sandbox /api/health is $after (it was $before before)"
+fine "$after" "$before" || die "under the sandbox /api/health is $after (it was $before before)"
 ok=1
 trap - EXIT
 rm -rf "$BACKUP"
