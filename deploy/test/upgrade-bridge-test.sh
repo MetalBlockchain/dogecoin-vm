@@ -54,6 +54,11 @@ case \$cmd in
       cutover|status)
         [[ \$step == cutover ]] && echo CUTOVER >>"\$log"
         unproven=\${NEEDS_FENCE:-}; grep -q UNPROVEN "\$log" && unproven=1
+        # STATUS_NOISE: as 8e91a6b-era logs did on the rehearsal, loading an
+        # unproven log starts its cutover and says so on stdout.
+        if [[ -n \${STATUS_NOISE:-} && -n \$unproven ]] && ! grep -q CUTOVER "\$log"; then
+          echo "2026-10-08T22:53:00Z cutover 1 started"; echo CUTOVER >>"\$log"
+        fi
         sent=\$(grep -c '^fence' "\$EVENTS" || true)
         if [[ -n \$unproven ]] && grep -q CUTOVER "\$log" && (( sent < \${FENCES_NEEDED:-2} )); then
           left=\${CUTOVER_LEFT:-'{"dogecoin":["aa:0"],"dogecoinvm":["bb:1"]}'}; echo "{\\"history\\":\\"\\",\\"cutoverEpoch\\":1,\\"cutoverLeft\\":\$left,\\"lineageTips\\":\$tips}"
@@ -431,6 +436,13 @@ echo "34. a command failing unexpectedly ends the run with exit 1, whatever its 
 setup
 code=$(ANCHORS_TIPS_STATUS=3 run)
 expect '[[ $code == 1 ]] && grep -q "a command failed (status 3" "$T/out"' "exit 1, not 3, and says which status"
+
+echo "35. a status that prints more than JSON stops the run, never steers it (rehearsal, 8 Oct)"
+setup
+code=$(NEEDS_FENCE=1 STATUS_NOISE=1 run)
+expect '[[ $code == 1 ]] && grep -q "signer-log status didn.t print JSON" "$T/out"' "exit 1, says the status wasn't JSON"
+expect '! grep -q "anchors lead to the coordinator" "$T/out"' "doesn't take the proven-log branch"
+expect '[[ $(version) == old ]] && paused && all_signers_paused' "old binary back, everything paused"
 
 echo
 echo "$pass passed, $fail failed"

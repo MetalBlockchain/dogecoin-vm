@@ -390,11 +390,17 @@ signer_log() { # unit step [args]: signer-log as that signer, with its own files
     ${SDEPOSITS[$unit]:+-deposits "${SDEPOSITS[$unit]}"} "$@"
 }
 in_cutover() { python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if any(d.get("cutoverLeft") or {}) or not d.get("history") else 1)' "$1"; }
+# Every JSON read below must parse: a python exception exits 1, which a
+# test would read as "no" and take the wrong branch (rehearsal, 8 Oct:
+# a "cutover started" line on stdout sent unproven logs to anchors -set).
+is_json() { python3 -c 'import json,sys; json.loads(sys.argv[1])' "$1" 2>/dev/null; }
 for unit in "${SIGNERS[@]}"; do
   st=$(signer_log "$unit" status)
+  is_json "$st" || die "$unit: signer-log status didn't print JSON: $st"
   if python3 -c 'import json,sys; sys.exit(0 if not json.loads(sys.argv[1]).get("history") and not json.loads(sys.argv[1]).get("cutoverLeft") else 1)' "$st"; then
     echo "$unit: unproven log: starting a cutover"
     st=$(signer_log "$unit" cutover)
+    is_json "$st" || die "$unit: signer-log cutover didn't print JSON: $st"
   fi
   if in_cutover "$st"; then
     python3 - "$unit" "$tips" "$st" <<'PY' || die "$unit's nodes don't see the coordinator's tips; stopped (RUNBOOK.md, \"Anchor lineage\")"
@@ -435,6 +441,7 @@ done
 now=$(as_coordinator "$HOME_DIR/bin/$CHAIN" coverage -signers "$SET" ${COORD_DEPOSITS:+-deposits "$COORD_DEPOSITS"}) || die "coverage on the coordinator failed"
 for unit in "${SIGNERS[@]}"; do
   st=$(signer_log "$unit" status)
+  is_json "$st" || die "$unit: signer-log status didn't print JSON: $st"
   in_cutover "$st" || continue
   diff=$(python3 - "$now" "$st" <<'PY'
 import json, sys
@@ -566,6 +573,7 @@ cutover_left() {
   local unit st
   for unit in "${SIGNERS[@]}"; do
     st=$(signer_log "$unit" status) || { echo "$unit: status failed"; continue; }
+    is_json "$st" || { echo "$unit: status unreadable"; continue; } # not done
     if in_cutover "$st"; then
       echo "$unit: $(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print("history=%r cutoverLeft=%s" % (d.get("history") or "", {c: len(v) for c, v in (d.get("cutoverLeft") or {}).items()}))' "$st")"
     fi

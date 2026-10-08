@@ -375,7 +375,7 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
        sudo -u dogevm env HOME=/opt/dogevm PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local \
          bash -c "cd /opt/dogevm/src && git fetch -q $REMOTE $BRANCH && git checkout -q --detach $C && go build -o $NEW ./cmd/dogevm"
        dvn() { sudo -u dogevm env HOME=/opt/dogevm $(cat $S/bridge.env | xargs) "$NEW" "$@"; }
-       dvn version   # must run as the service user before you go on
+       dvn 2>&1 | head -1   # must print "dogevm: DogecoinVM wallet ..." as the service user before you go on
 
    From here, run the `deploy/` scripts from `/opt/dogevm/src`, now at the
    new commit. Nothing runs from the source tree (the services run the

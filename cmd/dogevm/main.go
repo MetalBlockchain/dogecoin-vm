@@ -429,8 +429,11 @@ func cmdSignersCheck(args []string) error {
 // bridgeFlags registers the bridge's policy flags on fs.
 func bridgeFlags(fs *flag.FlagSet) *bridge {
 	b := &bridge{
+		// Logs go to stderr: the commands that print JSON (signer-log
+		// status, inventory, coverage) keep stdout parseable, even when
+		// loading a log starts a cutover and says so.
 		logf: func(format string, args ...any) {
-			fmt.Printf("%s "+format+"\n", append([]any{time.Now().Format(time.RFC3339)}, args...)...)
+			fmt.Fprintf(os.Stderr, "%s "+format+"\n", append([]any{time.Now().Format(time.RFC3339)}, args...)...)
 		},
 	}
 	fs.Int64Var(&b.depositConfirmations, "confirmations", 6, "Dogecoin confirmations before a deposit is credited")
