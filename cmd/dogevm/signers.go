@@ -2,13 +2,11 @@ package main
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcec/v2/ecdsa"
@@ -66,25 +64,6 @@ type pegPolicy struct {
 	// Fewer confirmations for smaller deposits; omitted when there are
 	// none, so sets made before tiers keep their fingerprint.
 	ConfirmationTiers []confirmationTier `json:"confirmationTiers,omitempty"`
-}
-
-// fingerprint identifies everything the signers agree to. Each signer reads
-// it out to the others over a separate channel before joining.
-func (s *signerSet) fingerprint() string {
-	agreed, _ := json.Marshal(struct {
-		Required       int            `json:"required"`
-		PublicKeys     []string       `json:"publicKeys"`
-		Networks       *setNetworks   `json:"networks"`
-		Operators      []operatorCard `json:"operators"`
-		CoordinatorKey string         `json:"coordinatorKey"`
-		Policy         *pegPolicy     `json:"policy"`
-		// Omitted when empty, so sets made before transport keys keep
-		// their fingerprint.
-		CoordinatorTLS string `json:"coordinatorTLS,omitempty"`
-	}{s.Required, s.PublicKeys, s.Networks, s.Operators, s.CoordinatorKey, s.Policy, s.CoordinatorTLS})
-	sum := sha256.Sum256(agreed)
-	h := hex.EncodeToString(sum[:10])
-	return strings.Join([]string{h[0:4], h[4:8], h[8:12], h[12:16], h[16:20]}, "-")
 }
 
 // publicCopy is the set without private keys.
