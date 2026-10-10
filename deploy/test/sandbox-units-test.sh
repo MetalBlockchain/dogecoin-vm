@@ -38,7 +38,7 @@ EOF
 h=$(cat "$HEALTH_FILE")
 code=${h%%-*}
 case $h in
-  503-pause) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":true}]}' ;;
+  200-pause|503-pause) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":true}]}' ;;
   503-vm) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":true},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":false}]}' ;;
   503-held) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":false,"detail":"deposit aa:0 (6.00000000 DOGE) is held"},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":true},{"name":"validator","ok":false,"detail":"0.97 METAL"}]}' ;;
   503-heldx) body='{"checks":[{"name":"pause","ok":false},{"name":"peg","ok":true},{"name":"bridge","ok":false,"detail":"permission denied writing the registry"},{"name":"dogecoin","ok":true},{"name":"dogecoinvm","ok":true},{"name":"validator","ok":false,"detail":"0.96 METAL"}]}' ;;
@@ -157,6 +157,20 @@ expect '[[ $code != 0 ]] && grep -q "missing checks bridge, dogecoin, dogecoinvm
 setup
 code=$(AFTER=200-short run remove)
 expect '[[ $code != 0 ]] && grep -q "missing checks" "$T/out"' "a 200 with only the pause check: fails"
+
+echo "5. a pause alone answers 200 \"degraded\" (serve.go): that is paused too (live first upgrade, 10 Oct 2026)"
+setup
+echo 200-pause >"$HEALTH_FILE"
+code=$(AFTER=200-pause run)
+expect '[[ $code == 0 ]] && [[ -e $SYSTEMD_DIR/dogevm-web-main.service.d ]]' "apply while paused, health 200 degraded: fine"
+setup
+echo 200-pause >"$HEALTH_FILE"
+code=$(AFTER=503-vm run)
+expect '[[ $code != 0 ]] && grep -q "failing dogecoinvm, pause" "$T/out"' "paused (200) before; the VM failing after: fails, names it"
+setup
+echo 200-pause >"$HEALTH_FILE"
+code=$(AFTER=200 run remove)
+expect '[[ $code == 0 ]]' "paused (200) before, healthy after: fine"
 
 echo
 echo "$pass passed, $fail failed"

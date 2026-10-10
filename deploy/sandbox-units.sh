@@ -56,8 +56,9 @@ REGISTRY=$(sed -nE 's/.* -deposits ([^ ;]+).*/\1/p' <<<"$web_start")
 FINALITY=$(sed -nE 's/.* -finality ([^ ;]+).*/\1/p' <<<"$web_start")
 [[ -n $WEB ]] || die "can't read the web server's -listen"
 [[ -n ${SANDBOX_TEST:-} ]] && systemd-analyze() { :; }
-# health_now: "ok" (200 and every expected check passing), "paused" (503
-# with every expected check present and the pause the only one failing), or
+# health_now: "ok" (200 and every expected check passing), "paused" (200
+# "degraded", as serve.go answers a deliberate pause, or 503, with every
+# expected check present and the pause the only one failing), or
 # "bad CODE: why". The body is read either way: a pause is expected around
 # this script, a broken VM or node check behind the same code is not, and a
 # response missing a check proves nothing about it.
@@ -91,7 +92,7 @@ elif code == "200" and not failing:
     print("ok")
 elif code == "503" and not rest and allowed:
     print("ok" + also)
-elif code == "503" and rest == ["pause"]:
+elif code in ("200", "503") and rest == ["pause"]:
     print("paused" + also)
 else:
     print(f"bad {code}: failing " + ", ".join(rest or failing or ["(none named)"]))
