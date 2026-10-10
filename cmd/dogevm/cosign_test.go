@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -359,4 +360,66 @@ func TestCoordinatorNamesEachSigner(t *testing.T) {
 	require.Equal("aa", pinned[0].TLSPin)
 	swapped := []*remoteSigner{{URL: "https://signer1.example", TLSPin: "bb"}}
 	require.ErrorContains(set.identifyCosigners(swapped), "not the pin on its card")
+}
+
+// TestSignerLimitsNewRegistrations: a coordinator-key holder can't make a
+// signer's node watch addresses without end, by registering them or by
+// naming them in proposals.
+func TestSignerLimitsNewRegistrations(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	c, r := h.signers[0], h.b.cosigners[0]
+	c.maxRegistrations = 3
+
+	// Reject a bulk registration hidden in a proposal before writing any of
+	// its destinations.
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: 1}, nil, nil))
+	bulk := make([]string, maxProposalRegistrations+1)
+	for i := range bulk {
+		bulk[i] = encodeDest(h.user(byte(i + 1)))
+	}
+	bulkReq := signRequest{Chain: chainDogecoinVM, Tx: encodeTx(tx), Register: bulk,
+		Action: action{Kind: actionRelease, Deposit: (wire.OutPoint{}).String()}}
+	_, _, _, err := c.check(bulkReq)
+	require.ErrorContains(err, "proposal registers")
+	registered, err := c.b.registry.list()
+	require.NoError(err)
+	require.Empty(registered)
+
+	for i := byte(1); i <= 3; i++ {
+		require.NoError(r.register(h.user(i)))
+	}
+	require.ErrorContains(r.register(h.user(4)), "limit")
+	require.NoError(r.register(h.user(2)), "one already watched is free")
+
+	// Naming a new one in a proposal counts too.
+	req := signRequest{Chain: chainDogecoinVM, Tx: encodeTx(tx), Register: []string{encodeDest(h.user(5))},
+		Action: action{Kind: actionRelease, Deposit: (wire.OutPoint{}).String()}}
+	_, _, _, err = c.check(req)
+	require.ErrorContains(err, "limit")
+	known, err := c.b.registry.has(h.user(5))
+	require.NoError(err)
+	require.False(known)
+
+	// An hour later, there is room again.
+	for i := range c.registered {
+		c.registered[i] = c.registered[i].Add(-time.Hour)
+	}
+	require.NoError(r.register(h.user(4)))
+}
+
+func TestSignerPreflightsRegistryCeiling(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	c := h.signers[0]
+	c.maxRegistrations = 10
+	c.b.registry.setMaxEntries(2)
+	require.NoError(c.registerMany([]destination{h.user(1)}))
+
+	err := c.registerMany([]destination{h.user(2), h.user(3)})
+	require.ErrorIs(err, errDepositRegistryFull)
+	registered, err := c.b.registry.list()
+	require.NoError(err)
+	require.Equal([]destination{h.user(1)}, registered, "a refused batch must not be partly registered")
 }

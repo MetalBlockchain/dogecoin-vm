@@ -105,6 +105,7 @@ GET  /api/pegout/{txid}        a withdrawal's status
 POST /api/deposit-address      {"address": …}: your deposit address
 POST /api/tx                   {"hex": …}: broadcast on DogecoinVM
 GET  /api/health               checks, for uptime monitors</pre>
+    <p>New deposit and watched addresses are rate-limited across all clients. The bridge also keeps a configured maximum number of personal deposit addresses, so public requests cannot grow its permanent watch set without bound.</p>
     <p>The source, including the chain, the bridge, both wallets' code and the deployment scripts, is on <a href="https://github.com/MetalBlockchain/dogecoin-vm">GitHub</a>.</p>
 
     <h2 id="security">Security</h2>

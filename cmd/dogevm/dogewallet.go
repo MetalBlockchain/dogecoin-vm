@@ -51,8 +51,13 @@ func (srv *server) dogeWatch(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, watched := srv.dogeIdx.isWatched(script); !watched && !srv.registerLimit.allow(clientIP(r)) {
-		return nil, &apiError{http.StatusTooManyRequests, "too many new addresses from this IP; try later"}
+	if _, watched := srv.dogeIdx.isWatched(script); !watched {
+		if !srv.registerLimit.allow(clientIP(r)) {
+			return nil, &apiError{http.StatusTooManyRequests, "too many new addresses from this IP; try later"}
+		}
+		if !srv.registerGlobal.allow("new-addresses") {
+			return nil, &apiError{http.StatusTooManyRequests, "too many new watched addresses; try later"}
+		}
 	}
 	from, err := srv.dogeIdx.watch(script)
 	if err != nil {

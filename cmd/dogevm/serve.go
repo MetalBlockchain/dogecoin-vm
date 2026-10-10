@@ -57,7 +57,8 @@ type server struct {
 	// many RPC calls.
 	heavy chan struct{}
 
-	registerLimit *rateLimit
+	registerLimit  *rateLimit // per client IP
+	registerGlobal *rateLimit // across all clients
 }
 
 // dogeSync is the part of Dogecoin Core's getblockchaininfo the page shows
@@ -487,11 +488,23 @@ func (srv *server) depositAddress(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !srv.registerLimit.allow(clientIP(r)) {
-		return nil, &apiError{http.StatusTooManyRequests, "too many new deposit addresses from this IP; try later"}
+	known, err := srv.b.registry.has(dest)
+	if err != nil {
+		return nil, err
+	}
+	if !known {
+		if !srv.registerLimit.allow(clientIP(r)) {
+			return nil, &apiError{http.StatusTooManyRequests, "too many new deposit addresses from this IP; try later"}
+		}
+		if !srv.registerGlobal.allow("new-addresses") {
+			return nil, &apiError{http.StatusTooManyRequests, "too many new deposit addresses; try later"}
+		}
 	}
 	depositAddr, err := registerDeposit(srv.b, dest)
 	if err != nil {
+		if errors.Is(err, errDepositRegistryFull) {
+			return nil, &apiError{http.StatusServiceUnavailable, err.Error()}
+		}
 		return nil, err
 	}
 	return map[string]string{
@@ -625,22 +638,46 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-// rateLimit allows each key n events per window.
+// rateLimit allows each key n events per window. Its key map is capped so an
+// attacker cannot turn spoofed or rotating client addresses into another
+// unbounded allocation.
 type rateLimit struct {
-	n      int
-	window time.Duration
-	mu     sync.Mutex
-	events map[string][]time.Time
+	n           int
+	window      time.Duration
+	mu          sync.Mutex
+	events      map[string][]time.Time
+	nextCleanup time.Time
 }
 
+const maxRateLimitKeys = 10_000
+
 func newRateLimit(n int, window time.Duration) *rateLimit {
-	return &rateLimit{n: n, window: window, events: map[string][]time.Time{}}
+	return &rateLimit{n: n, window: window, events: map[string][]time.Time{}, nextCleanup: time.Now().Add(window)}
 }
 
 func (l *rateLimit) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
+	if !now.Before(l.nextCleanup) {
+		for k, events := range l.events {
+			recent := events[:0]
+			for _, t := range events {
+				if now.Sub(t) < l.window {
+					recent = append(recent, t)
+				}
+			}
+			if len(recent) == 0 {
+				delete(l.events, k)
+			} else {
+				l.events[k] = recent
+			}
+		}
+		l.nextCleanup = now.Add(l.window)
+	}
+	if _, known := l.events[key]; !known && len(l.events) >= maxRateLimitKeys {
+		return false
+	}
 	recent := l.events[key][:0]
 	for _, t := range l.events[key] {
 		if now.Sub(t) < l.window {
@@ -694,6 +731,8 @@ func cmdServe(args []string) error {
 	depositsPath := flags.String("deposits", "", "deposit address registry (default: deposits.json next to -signers)")
 	faucetKey := flags.String("faucet-key", "", "private key (WIF or hex) of the faucet's DogecoinVM address; empty disables the faucet")
 	faucetAmount := flags.String("faucet-amount", "100", "DOGE per faucet claim")
+	maxRegistrations := flags.Int("max-registrations", defaultMaxRegistrations, "most new watched addresses accepted across all clients in an hour")
+	maxDepositEntries := flags.Int("max-deposit-addresses", defaultMaxDepositEntries, "most personal deposit addresses kept in the registry")
 	chainID := flags.String("chain-id", "", "the DogecoinVM chain's ID on Metal, shown on the page")
 	dogeIndexPath := flags.String("doge-index", "", "directory for the wallet's Dogecoin address index (default: dogeindex next to -signers; \"off\" disables Dogecoin balances)")
 	s.register(flags)
@@ -709,6 +748,9 @@ func cmdServe(args []string) error {
 	if err := required(map[string]string{"signers": *signersPath}); err != nil {
 		return err
 	}
+	if *maxRegistrations < 1 || *maxDepositEntries < 1 {
+		return errors.New("-max-registrations and -max-deposit-addresses must be positive")
+	}
 	signers, err := readSignerSet(*signersPath)
 	if err != nil {
 		return err
@@ -717,16 +759,18 @@ func cmdServe(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.registry.setMaxEntries(*maxDepositEntries)
 
 	srv := &server{
-		b:             b,
-		health:        health,
-		chainID:       *chainID,
-		vm:            b.vm.(*vmChain),
-		doge:          b.doge.(*dogeChain),
-		registerLimit: newRateLimit(30, time.Hour),
-		prevOuts:      map[wire.OutPoint]*wire.TxOut{},
-		heavy:         make(chan struct{}, 8),
+		b:              b,
+		health:         health,
+		chainID:        *chainID,
+		vm:             b.vm.(*vmChain),
+		doge:           b.doge.(*dogeChain),
+		registerLimit:  newRateLimit(30, time.Hour),
+		registerGlobal: newRateLimit(*maxRegistrations, time.Hour),
+		prevOuts:       map[wire.OutPoint]*wire.TxOut{},
+		heavy:          make(chan struct{}, 8),
 	}
 	if *faucetKey != "" {
 		key, err := parseKey(*faucetKey)
