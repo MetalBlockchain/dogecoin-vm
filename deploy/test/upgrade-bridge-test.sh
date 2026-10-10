@@ -265,6 +265,7 @@ code=$(FAIL_START=dogevm-signer-2 run)
 expect '[[ $code != 0 && $(version) == new && $("$SIGNER_BIN" version) == new ]]' "fails, the new binaries stay"
 expect 'paused && all_signers_paused' "bridge and signers paused"
 expect 'grep -q "nothing is rolled back" "$T/out"' "says so"
+expect 'grep -q "To carry on" "$T/out" && grep -q -- "-fence dogecoin" "$T/out" && grep -q -- "-fence dogecoinvm" "$T/out" && grep -q "signer-log status" "$T/out" && grep -q "resume -signers" "$T/out"' "prints how to carry on: status, start, fence and resume commands (rehearsal, 10 Oct)"
 
 echo "11. a signer that won't stop: nothing is installed or backed up"
 setup

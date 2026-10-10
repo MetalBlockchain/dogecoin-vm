@@ -547,6 +547,24 @@ If anything fails once the upgrade has crossed its point of no return
 (just before the signers start), nothing rolls back: the new binaries and
 every log stay, the bridge stays stopped, and every signer paused. Read the
 error, and `signer-log status` on each signer, before doing anything else.
+The upgrade prints the commands for each of these:
+
+1. `signer-log status` on each signer: in the cutover (`cutoverLeft`
+   non-empty, or `history` not yet `"fenced"`), never quarantined.
+2. Fix the cause (a signer that won't start: `journalctl -u
+   dogevm-signer-N`, its unit and drop-ins), then start what is stopped:
+   the signers (they start paused) and the web wallet and monitor. Not
+   the bridge.
+3. Send the printed fence commands, both chains, every minute or so, until
+   every signer shows `cutoverLeft` `{}` and `history` `"fenced"`. Running
+   them again is safe: a fence waiting for depth is never doubled ("has
+   waited … before it may be replaced"), the DogecoinVM fence waits for the
+   Dogecoin cutover, and a signer restarted in between keeps its cutover.
+4. Carry on from step 9 below.
+
+Rehearsed on 10 Oct 2026 (a signer that wouldn't start, then fencing
+interrupted by killing every signer): no second fence, nothing signed
+but fences, the fee as predicted.
 
 ## Anchor lineage
 

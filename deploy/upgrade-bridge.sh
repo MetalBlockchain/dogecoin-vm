@@ -501,48 +501,8 @@ os.replace(tmp, path)
 PY
 fi
 
-# The point of no return comes before any signer starts (round 7, W2):
-# signers start one by one, and the first may sign a fence before a later
-# one fails, which the old binary, knowing nothing of the cutover gate,
-# must never take over from. So from here a failure rolls nothing back:
-# the new binaries and every log stay, the bridge stays stopped and every
-# signer paused, for the operator.
-ok=1
-trap - EXIT
-forward_failure() {
-  local code=$?
-  [[ $code == 0 || ${DONE:-0} == 1 ]] && return
-  echo "upgrade-bridge: failed after the point of no return: nothing is rolled back (the new binaries and every signing log stay)." >&2
-  systemctl stop "$CHAIN-bridge-main" 2>/dev/null || true
-  paused_at "$SET" || as_user "$HOME_DIR/bin/$CHAIN" pause -signers "$SET" -reason "$REASON" || true
-  # A failure part-way through resuming leaves earlier signers resumed
-  # (round 8, X4): pause every signer again, and stop any that can't be
-  # paused, checking the stop (round 9, Y3), so none answers requests
-  # while the operator looks.
-  echo "upgrade-bridge: signers:" >&2
-  if contain; then
-    echo "upgrade-bridge: the bridge is stopped, and no signer is running unpaused (above). Fix the cause and carry on by hand (RUNBOOK.md, \"Upgrading the bridge software\"); backups are in $WORK" >&2
-  else
-    echo "upgrade-bridge: WARNING: a signer is still running unpaused (above): stop it by hand before anything else; backups are in $WORK" >&2
-  fi
-}
-trap forward_failure EXIT
-log "starting the signers (paused)"
-since=$(date '+%Y-%m-%d %H:%M:%S')
-systemctl start "${SIGNERS[@]}" || die "couldn't start every signer"
-sleep 5
-for unit in "${SIGNERS[@]}"; do
-  systemctl is-active --quiet "$unit" || die "$unit didn't start: journalctl -u $unit"
-  if journalctl -u "$unit" --since "$since" --no-pager 2>/dev/null | grep -qi quarantin; then
-    die "$unit reports a quarantine: journalctl -u $unit"
-  fi
-done
-
-# The web wallet and monitor run (the site shows the pause); the bridge
-# stays stopped until every cutover is done.
-log "starting the web wallet and monitor (the bridge stays stopped)"
-systemctl start "$CHAIN-web-main" "$CHAIN-monitor-main" || die "couldn't start the web wallet or monitor"
-
+# Commands printed for the operator; the bridge unit's command line is read
+# here, before the point of no return, so a bad one still rolls back.
 resume_cmds() { # the signers first, then the bridge (round 8, X5)
   for unit in "${SIGNERS[@]}"; do
     echo "  runuser -u $unit -- $SIGNER_BIN resume -signers ${SSET[$unit]}"
@@ -567,6 +527,67 @@ fence_cmds() {
     echo "  runuser -u $CHAIN -- bash -c 'set -a; . $BRIDGE_ENV; set +a; exec $HOME_DIR/bin/$CHAIN ${BRIDGE_ARGS[*]:1} -fence $chain'"
   done
 }
+status_cmds() {
+  for unit in "${SIGNERS[@]}"; do
+    echo "  runuser -u $unit -- bash -c 'set -a; . $VARLIB/$unit/signer.env; set +a; exec $SIGNER_BIN signer-log status -signers ${SSET[$unit]} -key-file ${SKEY[$unit]} -log ${SLOG[$unit]}${SDEPOSITS[$unit]:+ -deposits ${SDEPOSITS[$unit]}}'"
+  done
+}
+# carry_on: what to do by hand after a failure past the point of no return
+# (rehearsal, 10 Oct: a signer that wouldn't start left only "carry on by hand").
+carry_on() {
+  echo "To carry on (RUNBOOK.md, \"First upgrade of the live bridge\", after step 8):"
+  echo "1. read each signer's state (it must not be quarantined):"
+  status_cmds
+  echo "2. fix the cause, then start what is stopped (the bridge stays stopped; signers start paused):"
+  echo "  systemctl start ${SIGNERS[*]} $CHAIN-web-main $CHAIN-monitor-main"
+  echo "3. send fences until every signer shows cutoverLeft {} AND history \"fenced\":"
+  fence_cmds
+  echo "4. then step 9 on: start $CHAIN-bridge-main, check health and audit, and resume, signers first:"
+  resume_cmds
+}
+# The point of no return comes before any signer starts (round 7, W2):
+# signers start one by one, and the first may sign a fence before a later
+# one fails, which the old binary, knowing nothing of the cutover gate,
+# must never take over from. So from here a failure rolls nothing back:
+# the new binaries and every log stay, the bridge stays stopped and every
+# signer paused, for the operator.
+ok=1
+trap - EXIT
+forward_failure() {
+  local code=$?
+  [[ $code == 0 || ${DONE:-0} == 1 ]] && return
+  echo "upgrade-bridge: failed after the point of no return: nothing is rolled back (the new binaries and every signing log stay)." >&2
+  systemctl stop "$CHAIN-bridge-main" 2>/dev/null || true
+  paused_at "$SET" || as_user "$HOME_DIR/bin/$CHAIN" pause -signers "$SET" -reason "$REASON" || true
+  # A failure part-way through resuming leaves earlier signers resumed
+  # (round 8, X4): pause every signer again, and stop any that can't be
+  # paused, checking the stop (round 9, Y3), so none answers requests
+  # while the operator looks.
+  echo "upgrade-bridge: signers:" >&2
+  if contain; then
+    echo "upgrade-bridge: the bridge is stopped, and no signer is running unpaused (above). Fix the cause and carry on by hand; backups are in $WORK" >&2
+    carry_on >&2
+  else
+    echo "upgrade-bridge: WARNING: a signer is still running unpaused (above): stop it by hand before anything else; backups are in $WORK" >&2
+  fi
+}
+trap forward_failure EXIT
+log "starting the signers (paused)"
+since=$(date '+%Y-%m-%d %H:%M:%S')
+systemctl start "${SIGNERS[@]}" || die "couldn't start every signer"
+sleep 5
+for unit in "${SIGNERS[@]}"; do
+  systemctl is-active --quiet "$unit" || die "$unit didn't start: journalctl -u $unit"
+  if journalctl -u "$unit" --since "$since" --no-pager 2>/dev/null | grep -qi quarantin; then
+    die "$unit reports a quarantine: journalctl -u $unit"
+  fi
+done
+
+# The web wallet and monitor run (the site shows the pause); the bridge
+# stays stopped until every cutover is done.
+log "starting the web wallet and monitor (the bridge stays stopped)"
+systemctl start "$CHAIN-web-main" "$CHAIN-monitor-main" || die "couldn't start the web wallet or monitor"
+
 # cutover_left: every current-set signer not yet done (history unproven, or
 # coins left on a chain, later epochs included), with its coins left.
 cutover_left() {
@@ -607,9 +628,7 @@ if [[ -n $left ]]; then
   echo "Keep sending fences until every signer shows cutoverLeft {} AND history \"fenced\" (RUNBOOK.md, \"Cutover\"):"
   fence_cmds
   echo "check each signer with:"
-  for unit in "${SIGNERS[@]}"; do
-    echo "  runuser -u $unit -- bash -c 'set -a; . $VARLIB/$unit/signer.env; set +a; exec $SIGNER_BIN signer-log status -signers ${SSET[$unit]} -key-file ${SKEY[$unit]} -log ${SLOG[$unit]}'"
-  done
+  status_cmds
   echo "Only once they all do, and you have checked on an explorer that every recorded Dogecoin coin's spend is rootDepth deep:"
   echo "  systemctl start $CHAIN-bridge-main"
   echo "  curl -s http://$WEB/api/health   # every check present; only the pause failing"
