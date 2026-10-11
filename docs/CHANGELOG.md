@@ -23,8 +23,9 @@ kept working, and no balance changed.
 - **Deposits wait at least 6 Dogecoin confirmations** (about 6 minutes), however
   small: one confirmation can be undone by an ordinary Dogecoin reorg.
 - The site's services run with tighter system sandboxing.
-- Any signer's operator can pause every signer, with a pause signed by their
-  key. Only each signer's own operator can resume it.
+- The signer software accepts a pause signed by any signer's operator and sent
+  straight to each signer; only each signer's own operator can resume it. It
+  comes into use as the signers move to separate operators.
 - **The DogecoinVM node plugin is unchanged (v0.1.2):** node runners don't
   need to do anything.
 - **Also in this release**, thanks to [@MlennGarien](https://github.com/MlennGarien):
