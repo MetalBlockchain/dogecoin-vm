@@ -6,7 +6,7 @@ newest first. DogecoinVM is **alpha**: see the [terms](https://metaldoge.com/ter
 Security fixes are listed once they're live, described by what they protect
 rather than how the problem could be used.
 
-## 11 Oct 2026: hardened bridge (v0.2.0)
+## 11 Oct 2026: hardened bridge (v0.2.0, [#9](https://github.com/MetalBlockchain/dogecoin-vm/pull/9))
 
 The bridge and its three signers now run hardened software. Deposits and
 withdrawals paused for about 80 minutes during the upgrade; DogecoinVM payments
@@ -23,13 +23,23 @@ kept working, and no balance changed.
 - **Deposits wait at least 6 Dogecoin confirmations** (about 6 minutes), however
   small: one confirmation can be undone by an ordinary Dogecoin reorg.
 - The site's services run with tighter system sandboxing.
+- Any signer's operator can pause every signer, with a pause signed by their
+  key. Only each signer's own operator can resume it.
+- **The DogecoinVM node plugin is unchanged (v0.1.2):** node runners don't
+  need to do anything.
 - **Also in this release**, thanks to [@MlennGarien](https://github.com/MlennGarien):
-  public RPC hardening (#4, live on the node since 26 Sep), signer-set
-  fingerprints read as 24 words from the full hash (#3), and signer
+  public RPC hardening ([#4](https://github.com/MetalBlockchain/dogecoin-vm/pull/4), live on the node since 26 Sep), signer-set
+  fingerprints read as 24 words from the full hash ([#3](https://github.com/MetalBlockchain/dogecoin-vm/pull/3)), and signer
   connections pinned to the signed-off set, with new passkey backups requiring
-  PIN or biometric verification (#7). And DIP 21, `dogecoin:` and
-  `dogecoinvm:` payment links, drafted by
-  [@qlpqlp](https://github.com/qlpqlp) (#8).
+  PIN or biometric verification ([#7](https://github.com/MetalBlockchain/dogecoin-vm/pull/7)).
+- **DIP 21 (draft):** [`dogecoin:` and `dogecoinvm:` payment
+  links](https://github.com/MetalBlockchain/dogecoin-vm/blob/dogecoin/docs/dip-0021.md),
+  drafted by [@qlpqlp](https://github.com/qlpqlp) ([#8](https://github.com/MetalBlockchain/dogecoin-vm/pull/8)). No wallet
+  supports it yet.
+
+<!-- TODO: once the security advisories are published, add a bullet after "Stricter signers":
+     "Fixes for four privately reported issues, thanks to @MishaBoar and
+     @byfor8: [advisories](https://github.com/MetalBlockchain/dogecoin-vm/security/advisories)." -->
 
 ## 9 Oct 2026: developer docs
 
@@ -81,8 +91,8 @@ kept working, and no balance changed.
 - Payouts are sent straight away; the home page shows live finality.
 - Wallets get new blocks pushed to them instead of polling.
 
-## 24 Sep 2026: DogecoinVM v0.1.0, mainnet
+## 23–24 Sep 2026: DogecoinVM v0.1.0, mainnet
 
 - First round trip on mainnet: DOGE in, DogecoinVM payments, DOGE out.
-- Double-sign protection fixed (thanks @MlennGarien, #2).
+- Double-sign protection fixed (thanks @MlennGarien, [#2](https://github.com/MetalBlockchain/dogecoin-vm/pull/2)).
 - Mac wallet 0.2.0 released (open source).

@@ -74,7 +74,10 @@ h3 { font-size: var(--step-1); font-weight: 700; margin: 2rem 0 0.75rem; }
 .height dt::before { content: ""; flex: none; width: 0.6rem; height: 0.6rem; border-radius: 50%; }
 .height-doge dt::before { background: var(--coin); }
 .height-vm dt::before { background: var(--vm); }
-.height dd { margin: 0; font: 500 var(--step-1) var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+/* The dd holds the height and its meters; display: contents keeps them on
+   the row's grid, the height beside its label and the meters below. */
+.height dd { display: contents; }
+.height dd > span:first-child { margin: 0; font: 500 var(--step-1) var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
 .sync-meter, .sync-of { grid-column: 1 / -1; }
 .sync-meter { display: block; height: 4px; margin-top: 0.5rem; background: var(--rule); border-radius: 2px; overflow: hidden; }
 .sync-meter span { display: block; height: 100%; background: var(--coin); width: 0; transition: width 600ms ease; }
@@ -391,6 +394,7 @@ a.chain-vm { color: var(--vm-ink); }
 .kind { font-size: var(--step-1); font-weight: 500; padding: 0.6rem 0.8rem; border-left: 4px solid var(--ink-soft); background: var(--surface-sunk); }
 .kind-credit, .kind-reserve { border-color: var(--vm); }
 .kind-withdrawal { border-color: var(--coin); }
+.kind-maintenance { border-color: var(--rule); }
 .facts { display: grid; gap: 0.5rem; margin: 1.25rem 0; }
 .facts div { display: grid; grid-template-columns: 7rem 1fr; gap: 1rem; }
 .facts dt { color: var(--ink-soft); }

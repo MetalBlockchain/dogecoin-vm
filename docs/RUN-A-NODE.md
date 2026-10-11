@@ -12,7 +12,7 @@ locally; it doesn't validate, hold any bridge key or need any stake.
 | Subnet (L1) ID | `2t2zEB1T3mNUE2WoheMFMjfhAvQJawtgiwnKPJz2NsFk7FDgyN` |
 | DogecoinVM chain ID | `2hFCfzdMmfXBxYgvvdL7BYiJAxdejyn4AksMYUM2eM5gN7Xrjy` |
 | VM ID (plugin file name) | `mEUwHwfd8UTHf23UYkQxHvy1n1EGwWieXQnjmtzSryJRZckzu` |
-| Plugin release | **v0.1.2**, the build mainnet runs (v0.1.1 plus the public-RPC hotfix; don't build v0.1.1) (https://github.com/MetalBlockchain/dogecoin-vm, tag `v0.1.2`) |
+| Plugin release | **v0.1.2**, the build mainnet runs (v0.1.1 plus the public-RPC hotfix; don't build v0.1.1) (https://github.com/MetalBlockchain/dogecoin-vm, tag `v0.1.2`). v0.2.0 is the bridge release; nodes stay on v0.1.2 until a node release is announced. |
 
 ## What you need
 
@@ -35,7 +35,8 @@ sudo install -m 755 metalgo/build/metalgo /usr/local/bin/metalgo
 ## 2. Build the DogecoinVM plugin
 
 Build the release tag the network runs (v0.1.2); newer commits on the
-default branch may not be deployed yet. The plugin file must be named after
+default branch may not be deployed yet. The v0.2.0 tag is the bridge's
+release, not a node release: don't build it for a node. The plugin file must be named after
 the VM ID and sit in metalgo's plugin directory.
 
 ```sh

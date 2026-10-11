@@ -9,8 +9,9 @@ wallet, newest first. DogecoinVM is <strong>alpha</strong>: see the <a
 href="/terms">terms</a>.</p>
 <p>Security fixes are listed once they're live, described by what they
 protect rather than how the problem could be used.</p>
-<h2 id="11-oct-2026-hardened-bridge-v020">11 Oct 2026: hardened bridge
-(v0.2.0)</h2>
+<h2 id="11-oct-2026-hardened-bridge-v020-9">11 Oct 2026: hardened bridge
+(v0.2.0, <a
+href="https://github.com/MetalBlockchain/dogecoin-vm/pull/9">#9</a>)</h2>
 <p>The bridge and its three signers now run hardened software. Deposits
 and withdrawals paused for about 80 minutes during the upgrade;
 DogecoinVM payments kept working, and no balance changed.</p>
@@ -28,15 +29,31 @@ and refunds only after a confirmed cancel.</li>
 (about 6 minutes), however small: one confirmation can be undone by an
 ordinary Dogecoin reorg.</li>
 <li>The site's services run with tighter system sandboxing.</li>
+<li>Any signer's operator can pause every signer, with a pause signed by
+their key. Only each signer's own operator can resume it.</li>
+<li><strong>The DogecoinVM node plugin is unchanged (v0.1.2):</strong>
+node runners don't need to do anything.</li>
 <li><strong>Also in this release</strong>, thanks to <a
 href="https://github.com/MlennGarien">@MlennGarien</a>: public RPC
-hardening (#4, live on the node since 26 Sep), signer-set fingerprints
-read as 24 words from the full hash (#3), and signer connections pinned
-to the signed-off set, with new passkey backups requiring PIN or
-biometric verification (#7). And DIP 21, <code>dogecoin:</code> and
-<code>dogecoinvm:</code> payment links, drafted by <a
-href="https://github.com/qlpqlp">@qlpqlp</a> (#8).</li>
+hardening (<a
+href="https://github.com/MetalBlockchain/dogecoin-vm/pull/4">#4</a>,
+live on the node since 26 Sep), signer-set fingerprints read as 24 words
+from the full hash (<a
+href="https://github.com/MetalBlockchain/dogecoin-vm/pull/3">#3</a>),
+and signer connections pinned to the signed-off set, with new passkey
+backups requiring PIN or biometric verification (<a
+href="https://github.com/MetalBlockchain/dogecoin-vm/pull/7">#7</a>).</li>
+<li><strong>DIP 21 (draft):</strong> <a
+href="https://github.com/MetalBlockchain/dogecoin-vm/blob/dogecoin/docs/dip-0021.md"><code>dogecoin:</code>
+and <code>dogecoinvm:</code> payment links</a>, drafted by <a
+href="https://github.com/qlpqlp">@qlpqlp</a> (<a
+href="https://github.com/MetalBlockchain/dogecoin-vm/pull/8">#8</a>). No
+wallet supports it yet.</li>
 </ul>
+<!-- TODO: once the security advisories are published, add a bullet after "Stricter signers":
+     "Fixes for four privately reported issues, thanks to @MishaBoar and
+     @byfor8: [advisories](https://github.com/MetalBlockchain/dogecoin-vm/security/advisories)." -->
+
 <h2 id="9-oct-2026-developer-docs">9 Oct 2026: developer docs</h2>
 <ul>
 <li>/developers: the public <code>/rpc</code> login is read-only.
@@ -93,12 +110,13 @@ to 1, 10 and 50 DOGE).</li>
 finality.</li>
 <li>Wallets get new blocks pushed to them instead of polling.</li>
 </ul>
-<h2 id="24-sep-2026-dogecoinvm-v010-mainnet">24 Sep 2026: DogecoinVM
-v0.1.0, mainnet</h2>
+<h2 id="2324-sep-2026-dogecoinvm-v010-mainnet">23–24 Sep 2026:
+DogecoinVM v0.1.0, mainnet</h2>
 <ul>
 <li>First round trip on mainnet: DOGE in, DogecoinVM payments, DOGE
 out.</li>
-<li>Double-sign protection fixed (thanks @MlennGarien, #2).</li>
+<li>Double-sign protection fixed (thanks @MlennGarien, <a
+href="https://github.com/MetalBlockchain/dogecoin-vm/pull/2">#2</a>).</li>
 <li>Mac wallet 0.2.0 released (open source).</li>
 </ul>
   </main>

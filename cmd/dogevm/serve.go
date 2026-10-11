@@ -174,6 +174,10 @@ func (srv *server) vmAddress(s string) (btcutil.Address, destination, error) {
 	return addr, dest, nil
 }
 
+// bridgeVersion is the bridge release this code belongs to, published in
+// /api/info. Bump it with each bridge release (docs/CHANGELOG.md).
+const bridgeVersion = "0.2.0"
+
 func (srv *server) info(*http.Request) (any, error) {
 	pegAddr, err := srv.b.dogePegAddress()
 	if err != nil {
@@ -202,6 +206,7 @@ func (srv *server) info(*http.Request) (any, error) {
 		"dogecoinvmVersions":   addressVersions(srv.b.vmParams),
 		"dogecoinVersions":     addressVersions(srv.b.dogeParams),
 		"chainID":              srv.chainID,
+		"bridgeVersion":        bridgeVersion,
 	}, nil
 }
 

@@ -37,7 +37,8 @@ protocol 43 and won't load in other versions)</td>
 <td><strong>v0.1.2</strong>, the build mainnet runs (v0.1.1 plus the
 public-RPC hotfix; don't build v0.1.1) (<a
 href="https://github.com/MetalBlockchain/dogecoin-vm">https://github.com/MetalBlockchain/dogecoin-vm</a>,
-tag <code>v0.1.2</code>)</td>
+tag <code>v0.1.2</code>). v0.2.0 is the bridge release; nodes stay on
+v0.1.2 until a node release is announced.</td>
 </tr>
 </tbody>
 </table></div>
@@ -61,8 +62,9 @@ sudo install -m 755 metalgo/build/metalgo /usr/local/bin/metalgo</code></pre>
 <h2 id="2-build-the-dogecoinvm-plugin">2. Build the DogecoinVM
 plugin</h2>
 <p>Build the release tag the network runs (v0.1.2); newer commits on the
-default branch may not be deployed yet. The plugin file must be named
-after the VM ID and sit in metalgo's plugin directory.</p>
+default branch may not be deployed yet. The v0.2.0 tag is the bridge's
+release, not a node release: don't build it for a node. The plugin file
+must be named after the VM ID and sit in metalgo's plugin directory.</p>
 <pre class="sh"><code>git clone --branch v0.1.2 https://github.com/MetalBlockchain/dogecoin-vm
 cd dogecoin-vm
 go run ./scripts/vm-id-generator.go       # prints mEUwHwfd8UTHf23UYkQxHvy1n1EGwWieXQnjmtzSryJRZckzu

@@ -76,7 +76,6 @@ curl https://metaldoge.com/api/info
   "signers": { "required": 2, "publicKeys": ["0212a0…", "…", "…"] },
   "depositConfirmations": 20,
   "confirmationTiers": [
-    { "upTo": "1.00000000", "confirmations": 1 },
     { "upTo": "10.00000000", "confirmations": 6 },
     { "upTo": "50.00000000", "confirmations": 12 }
   ],
@@ -87,7 +86,8 @@ curl https://metaldoge.com/api/info
   "minPegOut": "2.00000000",
   "maxCirculating": "4200.00000000",
   "faucet": { "enabled": false },
-  "dogeWallet": true
+  "dogeWallet": true,
+  "bridgeVersion": "0.2.0"
 }
 ```
 
@@ -98,7 +98,7 @@ curl https://metaldoge.com/api/info
 | `pegAddress` | The bridge's multisig on **Dogecoin** (the shared deposit address; see [deposits](#post-apideposit-address)). |
 | `reserveAddress` | The bridge's reserve on **DogecoinVM**. Paying DOGE into it (with a tag) is how you withdraw. It is the same script as `pegAddress`, so the same string. |
 | `signers` | The bridge's m-of-n signer set (public keys). |
-| `confirmationTiers`, `depositConfirmations` | Dogecoin confirmations a deposit needs before it is credited: by amount, up to each `upTo`; above the last tier, `depositConfirmations`. |
+| `confirmationTiers`, `depositConfirmations` | Dogecoin confirmations a deposit needs before it is credited: by amount, up to each `upTo`; above the last tier, `depositConfirmations`. The tiers already include the mainnet minimum: no mainnet deposit is credited before 6 confirmations. |
 | `vmFee` | What the bridge deducts from a deposit when it credits it on DogecoinVM. |
 | `dogeFee` | What the bridge deducts from a withdrawal for the Dogecoin payout. |
 | `minDeposit` / `maxDeposit` | Per-deposit limits. A deposit outside them isn't credited; it's held for a refund. |
@@ -106,6 +106,7 @@ curl https://metaldoge.com/api/info
 | `maxCirculating` | The alpha cap on all DOGE on DogecoinVM. A deposit that would exceed it waits. |
 | `faucet` | Test networks only; disabled on mainnet. |
 | `dogeWallet` | Whether the `/api/doge/*` endpoints are served. |
+| `bridgeVersion` | The bridge software's release, such as `0.2.0`. |
 
 ### `GET /api/status`
 
@@ -158,11 +159,17 @@ when something is down.
   "status": "ok",
   "checks": [
     { "name": "pause", "ok": true, "detail": "not paused" },
-    { "name": "peg", "ok": true, "detail": "locked 46.61000000, circulating 46.61000000, …" }
+    { "name": "peg", "ok": true, "detail": "locked 46.61000000, circulating 46.61000000, …" },
+    …
   ],
   "updated": "2026-10-03T22:08:11Z"
 }
 ```
+
+The checks are `pause`, `peg`, `bridge`, `dogecoin`, `wallet` (the bridge's
+Dogecoin Core wallet), `dogecoinvm` and `validator` (its fee balance). If the
+bridge can't account for Dogecoin's history, a failing `history` check takes
+the place of `peg`.
 
 ### `GET /api/reserves`
 
@@ -186,19 +193,33 @@ yourself against any Dogecoin explorer.
 ```
 
 `reserveCreated` is the reserve the chain created at genesis (it backs nothing
-by itself); `reserveCreated − reserveHeld` is what circulates.
+by itself); `reserveCreated − reserveHeld` is what circulates. Anything locked
+above what circulates and is owed (`audit.surplus` in `/api/status`) is the
+bridge's own operating capital and kept change, which pays its housekeeping
+fees.
 
 ### `GET /api/activity`
 
-Recent bridge activity: deposits and withdrawals, newest first (up to 20).
+Recent bridge activity: deposits and withdrawals, newest first (up to 100).
 
 ```json
 [
   { "type": "withdrawal", "status": "paid", "amount": "2.00000000", "pays": "1.90000000",
     "to": "D5EQRCnPMXmRvUoZwC7gu7fYspean3PQ9a",
-    "dogecoinvmTxid": "27ca64c0…a1e3", "dogecoinTxid": "1f3cb18e…b7a9", "time": 1790899406 }
+    "dogecoinvmTxid": "27ca64c0…a1e3", "dogecoinTxid": "1f3cb18e…b7a9", "time": 1790899406 },
+  { "type": "deposit", "status": "credited", "amount": "5.00000000", "credited": "4.99000000",
+    "to": "D5EQRCnPMXmRvUoZwC7gu7fYspean3PQ9a",
+    "dogecoinTxid": "959f7afe…b68b", "vout": 0, "confirmations": 6, "required": 6,
+    "creditTxid": "709b55bd…201b", "time": 1790899100 }
 ]
 ```
+
+- A deposit's `status` is `waiting` (confirming, or waiting to be credited),
+  `held` (not credited; refundable), `credited` (with `creditTxid` and
+  `credited`, the amount after `vmFee`) or `refunded` (with `refundTxid`).
+  `to` is the DogecoinVM address it credits, when it names one.
+- A withdrawal's `status` is `waiting` or `paid` (with the Dogecoin
+  `dogecoinTxid`).
 
 ---
 
@@ -259,7 +280,9 @@ A DogecoinVM transaction, decoded and described.
 ```
 
 `kind` is one of `transfer`, `credit` (a bridge deposit credited), `withdrawal`
-(a payment into the reserve), `reserve`, `reward`. `dogecoinTxid` links a
+(a payment into the reserve), `maintenance` (the bridge moving the reserve to
+itself: a `DVMZ` fence, as in the 11 October 2026 clean start, or a `DVMX`
+cancel before a refund; its fee is the bridge's own), `reserve`, `reward`. `dogecoinTxid` links a
 bridge transaction to its Dogecoin side.
 
 ### `GET /api/rawtx/{txid}`
@@ -356,7 +379,8 @@ Rules (alpha; read the current values from `/api/info`):
 Advanced: instead of a personal address, a deposit can pay `pegAddress` with an
 `OP_RETURN` of `DVMD <type> <hash160>` (25 bytes) naming the DogecoinVM
 address. A payment to `pegAddress` without that tag has no destination and is
-held.
+held. Don't use the `DVMC` tag: it marks the operator's own contributions to
+the peg, which are never credited or refunded.
 
 ### `GET /api/deposits/{dogecoinvm-address}`
 
@@ -365,7 +389,7 @@ Deposits made for a DogecoinVM address, and where each one is.
 ```json
 [
   { "txid": "959f7afe…b68b", "vout": 0, "amount": "1.00000000",
-    "confirmations": 1, "required": 1, "status": "credited",
+    "confirmations": 6, "required": 6, "status": "credited",
     "creditTxid": "27ca64c0…a1e3", "credited": "0.99000000" },
   { "txid": "1f3cb18e…b7a9", "vout": 1, "amount": "150.00000000",
     "confirmations": 40, "required": 20, "status": "held",
@@ -375,7 +399,9 @@ Deposits made for a DogecoinVM address, and where each one is.
 
 `status` is `confirming`, `crediting` (enough confirmations; credited within a
 few seconds), `waiting_for_capacity`, `credited`, `held` (with a `reason`) or
-`refunded` (with `refundTxid`).
+`refunded` (with `refundTxid`). `crediting` can last longer when many deposits
+arrive together: the bridge limits how much it credits before a deposit has
+the full `depositConfirmations`, and the rest wait for more confirmations.
 
 ### Withdrawing: a payment into the reserve
 
@@ -389,13 +415,16 @@ A withdrawal is an ordinary DogecoinVM transaction that pays DOGE into
 | Tag | `OP_RETURN` pushing 25 bytes: `"DVMO"` (ASCII) ‖ `type` (1 byte: `0x00` P2PKH, `0x01` P2SH) ‖ the 20-byte hash160 of the **Dogecoin** destination address |
 | Change | back to your own address, as usual |
 
-The bridge pays the Dogecoin address `amount − dogeFee`. Rules:
+The bridge pays the Dogecoin address `amount − dogeFee`. (In rare cases up to
+0.01 DOGE less, to keep the peg's change above Dogecoin's dust limit.) Rules:
 - Exactly one `OP_RETURN` output; with none, or two, the payment isn't a
   withdrawal and isn't paid out (it's held as unclaimed on DogecoinVM).
 - Below `minPegOut`, it isn't paid out either.
 - The Dogecoin destination can't be the bridge's own `pegAddress`.
 - The payout goes out once the payment is final on DogecoinVM (normally
-  within seconds), and arrives with Dogecoin's usual block times.
+  within seconds), and arrives with Dogecoin's usual block times. Payouts go
+  one at a time: while one waits for its Dogecoin block, the next waits for
+  it, usually a minute or two.
 
 Example tag for withdrawing to the made-up `D5R2B6TsTmVihS3WLQMwbpfSsCV9WeqE4v`
 (hash160 `0303…03`):
@@ -525,6 +554,13 @@ address: say so). Track it with `/api/deposits/{address}`.
 **Bridge out:** pay at least `minPegOut` to `reserveAddress` with the `DVMO` tag
 naming the Dogecoin address; track it with `/api/pegout/{txid}`.
 
+## Payment links
+
+DIP 21 (draft) proposes [`dogecoin:` and `dogecoinvm:` payment
+links](https://github.com/MetalBlockchain/dogecoin-vm/blob/dogecoin/docs/dip-0021.md),
+so a link or QR code can say which chain a payment is for. No wallet supports
+it yet.
+
 ## Security
 
 - **Never send a private key, seed or WIF to any server**, ours included.
@@ -544,8 +580,11 @@ naming the Dogecoin address; track it with `/api/pegout/{txid}`.
     tag before signing.
 - **Verify what a server tells you:** input values from raw transactions,
   deposit addresses from the redeem script, withdrawal destinations from the tag.
-- **Alpha:** the bridge's signers are operator-held during the alpha, and amounts
-  are capped. See the [terms](https://metaldoge.com/terms) and the
+- **Alpha:** all three signer keys are held by one operator during the alpha,
+  and amounts are capped. See the [terms](https://metaldoge.com/terms) and the
   [roadmap](https://metaldoge.com/roadmap).
 - Report vulnerabilities privately via
   [GitHub security advisories](https://github.com/MetalBlockchain/dogecoin-vm/security/advisories/new).
+
+<!-- TODO: once the security advisories are published, add: "Past advisories
+     are [published on GitHub](https://github.com/MetalBlockchain/dogecoin-vm/security/advisories)." -->

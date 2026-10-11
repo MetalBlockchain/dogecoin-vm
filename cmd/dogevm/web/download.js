@@ -15,6 +15,10 @@ try {
   $('dl-size').textContent = bytes ? `${(bytes / 1e6).toFixed(1)} MB` : 'unknown';
 } catch {
   for (const id of ['dl-version', 'dl-date', 'dl-size']) $(id).textContent = 'unavailable';
+  const feed = document.createElement('a');
+  feed.href = '/download/macos/appcast.xml';
+  feed.textContent = 'see the update feed';
+  $('dl-version').append(' (', feed, ')');
 }
 
 try {

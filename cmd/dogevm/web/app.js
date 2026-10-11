@@ -181,14 +181,14 @@ document.addEventListener('click', async (e) => {
 async function loadInfo() {
   info = await api('/api/info');
   $('signers').textContent =
-    `Held by ${info.signers.required} of ${info.signers.publicKeys.length} signers. Peg address on Dogecoin: ${info.pegAddress}`;
+    `A ${info.signers.required}-of-${info.signers.publicKeys.length} multisig: during the alpha one operator holds all ${info.signers.publicKeys.length} keys. Peg address on Dogecoin: ${info.pegAddress}`;
   const mainnet = info.dogecoinNetwork === 'mainnet';
   const band = $('network-band');
   band.hidden = false;
   $('import-key').placeholder = mainnet ? 'Q…, 6… or 64 hex characters' : 'c…, 9… or 64 hex characters';
   if (mainnet) {
     $('network-name').textContent = 'alpha';
-    band.textContent = 'Alpha, with real DOGE. Keep amounts small: the bridge is new and has not been audited.';
+    band.textContent = "Alpha, with real DOGE. One operator holds all of the bridge's keys, and it hasn't been audited: keep amounts small.";
     const terms = document.createElement('a');
     terms.href = '/terms';
     terms.textContent = 'Read the alpha terms.';
@@ -1177,7 +1177,7 @@ function renderInflight() {
       held.querySelector('.inflight-detail').append(' ', refundLink());
       cards.push(held);
     } else if (d.status === 'crediting' || d.confirmations >= d.required) {
-      cards.push(card(title, blocks(`${d.txid}:${d.vout}`, d.required, d.required), `Confirmed. Crediting ${gets} now.`));
+      cards.push(card(title, blocks(`${d.txid}:${d.vout}`, d.required, d.required), `Confirmed. Crediting ${gets}, usually within seconds; if many deposits arrive at once, it waits its turn.`));
     } else if (d.status === 'waiting_for_capacity') {
       cards.push(card(title, null, 'Confirmed, and waiting for room under the alpha limit.'));
     } else {
@@ -1193,7 +1193,7 @@ function renderInflight() {
     const final = p.status === 'pending' || p.status === 'paid';
     const paid = p.status === 'paid';
     const detail = paid ? `${show(p.pays)} is on its way; it confirms in the next Dogecoin block, usually within a minute.`
-      : final ? 'The bridge pays it within seconds.' : 'Waiting for it to be final on DogecoinVM, usually under a second.';
+      : final ? 'The bridge pays it within seconds, or after the payout ahead of it confirms.' : 'Waiting for it to be final on DogecoinVM, usually under a second.';
     const c = card(`Withdrawing ${show(w.amount)} to ${savedName(w.to, 'doge') || 'Dogecoin'}`,
       steps([['Final on DogecoinVM', final], ['Paid on Dogecoin', paid], ['In a Dogecoin block', false]]), detail);
     cards.push(paid ? dogeWaiting(c) : c);
