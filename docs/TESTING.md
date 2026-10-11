@@ -1,6 +1,6 @@
 # Running and testing DogecoinVM
 
-## Mainnet beta
+## Mainnet alpha
 
 **https://metaldoge.com** runs DogecoinVM as an L1 on Metal mainnet, pegged to Dogecoin mainnet with real DOGE:
 
@@ -13,7 +13,7 @@
 | Peg address (Dogecoin) | `AAvNfukpAa4iTcRJPetxuxX8XxbC5gFqUM` |
 | JSON-RPC | `https://metaldoge.com/rpc`, user and password `public` |
 
-It is a beta: deposits over 100 DOGE are not credited (they are held for a refund), at most 1,000 DOGE can circulate, deposits need 20 Dogecoin confirmations, and one server holds every peg signer key. It was set up with [`deploy/mainnet.sh`](../deploy/mainnet.sh) and [`cmd/dogevm-l1`](../cmd/dogevm-l1). Anyone can check the L1 on the P-Chain, for example with `platform.getL1Validator` and the validation ID `qPanCREE6TaXz1TFT2qbt9uKvjtHg1AzWNMzYnStYAeJshNmB`.
+It is an alpha: deposits over 100 DOGE are not credited (they are held for a refund; ask through [metaldoge.com/terms#contact](https://metaldoge.com/terms#contact)), at most 4,200 DOGE can circulate, and deposits need 6 Dogecoin confirmations up to 10 DOGE (the mainnet floor: the policy's 1-confirmation tier for up to 1 DOGE is raised to 6), 12 up to 50 DOGE and 20 above that. One operator holds every peg signer key, so you are trusting that operator; the caps and each signer's daily limit are enforced by the signer software and don't limit what someone holding the keys could take. There is one validator and no external audit. It was set up with [`deploy/mainnet.sh`](../deploy/mainnet.sh) and [`cmd/dogevm-l1`](../cmd/dogevm-l1). Anyone can check the L1 on the P-Chain, for example with `platform.getL1Validator` and the validation ID `qPanCREE6TaXz1TFT2qbt9uKvjtHg1AzWNMzYnStYAeJshNmB`.
 
 ## Public testnet (retired)
 
@@ -28,7 +28,7 @@ The hosted test network used to run at **https://metaldoge.com**; the notes belo
   ```
 - **Deposits.** Each DogecoinVM address gets its own Dogecoin testnet deposit address (Deposit tab). Send testnet DOGE there from any wallet, for example straight from a Dogecoin testnet faucet.
 
-It runs one Metal node, Dogecoin Core on Dogecoin testnet, the bridge and the web wallet, set up by [`deploy/provision.sh`](../deploy/provision.sh). The rest of this page runs the same stack on your own machine.
+It ran one Metal node, Dogecoin Core on Dogecoin testnet, the bridge and the web wallet, set up by [`deploy/provision.sh`](../deploy/provision.sh). The rest of this page runs the same stack on your own machine.
 
 ## Local setup
 
@@ -136,3 +136,29 @@ go test ./vm/ ./cmd/... ./btcd/ ./btcd/mempool/
 
 - `vm/`: block lifecycle, peg reserve consensus and a multisig reserve release, run in-process against a real btcd.
 - `cmd/dogevm/`: bridge logic against in-memory chains that run btcd's script engine on every signed input: exactly-once crediting, spoofed tags, personal deposit addresses, a round trip, and halting when insolvent. Also checks the web wallet's `chain.js` against the Go code under Node, when Node is installed.
+
+## Against Dogecoin Core (regtest)
+
+`cmd/dogevm/dogecoincore_test.go` runs the bridge against a real Dogecoin
+Core 1.14 node: a deposit credited, a payout relayed (version 1, BIP125,
+change to the peg), a stuck payout replaced, a payout evicted by a restart
+and resent, and the incremental wallet history across a reorganisation.
+They use `dogecoind` from the PATH, or, with `DOGECOIND_DOCKER` naming a
+Docker context, a `dogecoind:1.14.9` image there; otherwise they are
+skipped.
+
+There is no macOS build of `dogecoind`, so on a Mac build the image from
+the official aarch64 Linux release, checked against its `SHA256SUMS.asc`:
+
+    curl -sSLO https://github.com/dogecoin/dogecoin/releases/download/v1.14.9/dogecoin-1.14.9-aarch64-linux-gnu.tar.gz
+    shasum -a 256 dogecoin-1.14.9-aarch64-linux-gnu.tar.gz   # 6928c895a20d0bcb6d5c7dcec753d35c884a471aaf8ad4242a89a96acb4f2985
+    cat > Dockerfile <<'DOCKER'
+    FROM ubuntu:24.04
+    COPY dogecoin-1.14.9-aarch64-linux-gnu.tar.gz /tmp/d.tgz
+    RUN tar -C /opt -xzf /tmp/d.tgz && mv /opt/dogecoin-1.14.9 /opt/dogecoin && rm /tmp/d.tgz
+    ENV PATH=/opt/dogecoin/bin:$PATH
+    ENTRYPOINT ["dogecoind"]
+    DOCKER
+    colima start dogetest --cpu 2 --memory 2      # its own VM; then: docker context use colima (or your usual context)
+    docker --context colima-dogetest build -t dogecoind:1.14.9 .
+    DOGECOIND_DOCKER=colima-dogetest go test ./cmd/dogevm/ -run 'DogecoinCore|Evicted|Reorg'

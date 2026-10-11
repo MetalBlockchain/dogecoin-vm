@@ -6,9 +6,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +27,10 @@ type check struct {
 // healthChecker runs the checks behind /api/health and dogevm monitor.
 type healthChecker struct {
 	b *bridge
+
+	// vmSeen is when this checker first saw each pending DogecoinVM
+	// transaction of the signers (DogecoinVM doesn't date unconfirmed ones).
+	vmSeen map[chainhash.Hash]time.Time
 
 	// P-Chain API and the L1 validator to watch; empty skips the check.
 	pChainURI    string
@@ -49,9 +56,26 @@ func (h *healthChecker) run(state *pegState, loadErr error) []check {
 	var checks []check
 
 	checks = append(checks, h.pauseCheck())
+	checks = append(checks, h.pegChecks(state, loadErr)...)
+	checks = append(checks, h.dogecoinNode())
+	checks = append(checks, h.walletSize())
+	checks = append(checks, h.dogecoinVM())
+	if h.validationID != "" {
+		checks = append(checks, h.validatorBalance())
+	}
+	return checks
+}
 
-	// The peg.
+// pegChecks are the checks read from both chains: the peg's solvency and
+// the bridge's liveness, or why they couldn't be read.
+func (h *healthChecker) pegChecks(state *pegState, loadErr error) []check {
+	var checks []check
 	switch {
+	case errors.Is(loadErr, errUnresolvedHistory):
+		// The signers refuse this state (Round 11, AA2), so the public check
+		// says so plainly instead of reporting a peg it can't account.
+		checks = append(checks, check{"history", false, loadErr.Error()})
+		checks = append(checks, check{"peg", false, "not checked: Dogecoin history is unresolved"})
 	case loadErr != nil:
 		checks = append(checks, check{"peg", false, "cannot read both chains: " + loadErr.Error()})
 	default:
@@ -60,12 +84,6 @@ func (h *healthChecker) run(state *pegState, loadErr error) []check {
 			formatDoge(a.Locked), formatDoge(a.Circulating), formatDoge(a.PendingPegIns), formatDoge(a.PendingPegOuts))
 		checks = append(checks, check{"peg", a.solvent(), detail})
 		checks = append(checks, h.bridgeLiveness(state))
-	}
-
-	checks = append(checks, h.dogecoinNode())
-	checks = append(checks, h.dogecoinVM())
-	if h.validationID != "" {
-		checks = append(checks, h.validatorBalance())
 	}
 	return checks
 }
@@ -94,7 +112,90 @@ func (h *healthChecker) bridgeLiveness(s *pegState) check {
 			return check{"bridge", false, fmt.Sprintf("peg-out %v is %d blocks old and not paid", p.txid, p.confirmations)}
 		}
 	}
+	// Paid isn't done until it is in a block. A payment or refund still
+	// unconfirmed long after it was sent needs a look: it holds the anchor,
+	// so every later payout waits behind it, and Dogecoin has no fee
+	// replacement to speed it up.
+	stuckAfter := time.Duration(h.stallBlocks) * dogecoinBlockTime
+	for txid, t := range s.unconfirmed {
+		if t.time == 0 {
+			continue
+		}
+		if age := time.Since(time.Unix(t.time, 0)); age > stuckAfter {
+			return check{"bridge", false, fmt.Sprintf("Dogecoin transaction %v has waited %s unconfirmed, holding up later payouts; see RUNBOOK.md, \"A stuck payout\"",
+				txid, age.Round(time.Minute))}
+		}
+	}
+	// A deposit held for a refund, or waiting for room under the cap, waits
+	// on an operator.
+	for _, d := range s.held {
+		// Below the minimum isn't worth a refund's fee, and anyone can send
+		// dust: only alert on what is worth returning.
+		if d.confirmations > h.stallBlocks && d.value >= h.b.minDeposit {
+			return check{"bridge", false, fmt.Sprintf("deposit %v (%s DOGE) is held and owed back: refund it (RUNBOOK.md)", d.outPoint, formatDoge(d.value))}
+		}
+	}
+	// A release or cancellation pending on DogecoinVM blocks every later
+	// one (they chain off the reserve's anchor); DogecoinVM blocks come in
+	// seconds, so one pending for minutes has stalled.
+	if h.vmSeen == nil {
+		h.vmSeen = map[chainhash.Hash]time.Time{}
+	}
+	for txid := range h.vmSeen {
+		if _, still := s.vmUnconfirmed[txid]; !still {
+			delete(h.vmSeen, txid)
+		}
+	}
+	for txid := range s.vmUnconfirmed {
+		first, ok := h.vmSeen[txid]
+		if !ok {
+			h.vmSeen[txid] = time.Now()
+			continue
+		}
+		if age := time.Since(first); age > vmStuckAfter {
+			return check{"bridge", false, fmt.Sprintf("DogecoinVM transaction %v has been pending %s; check the Metal node", txid, age.Round(time.Minute))}
+		}
+	}
+	for _, d := range s.deposits {
+		if _, done := s.released[d.outPoint]; done {
+			continue
+		}
+		over := h.b.maxCirculating > 0 && s.reserveCreated-s.reserveUnspent+d.value > h.b.maxCirculating
+		if over && d.confirmations > h.b.confirmationsFor(d.value)+h.stallBlocks {
+			return check{"bridge", false, fmt.Sprintf("deposit %v (%s DOGE) waits for room under the circulating cap: raise it or refund it", d.outPoint, formatDoge(d.value))}
+		}
+	}
 	return check{"bridge", true, "nothing overdue"}
+}
+
+// vmStuckAfter is how long a DogecoinVM transaction of the signers may stay
+// pending before the bridge check fails.
+const vmStuckAfter = 10 * time.Minute
+
+// dogecoinBlockTime is Dogecoin's target time between blocks.
+const dogecoinBlockTime = time.Minute
+
+// walletAlertTxs is when the wallet's history is large enough to warrant a
+// look: outsiders can add entries by paying the peg's public addresses.
+// Each pass reads only what changed (see walletHistory), but a restart or a
+// reorganisation reads it all, and every entry is held in memory.
+const walletAlertTxs = 100_000
+
+func (h *healthChecker) walletSize() check {
+	dc, ok := h.b.doge.(*dogeChain)
+	if !ok {
+		return check{"wallet", true, "not a Dogecoin Core wallet"}
+	}
+	var info struct {
+		TxCount int64 `json:"txcount"`
+	}
+	if err := dc.rpc.call(&info, "getwalletinfo"); err != nil {
+		return check{"wallet", false, "can't read the Dogecoin wallet: " + err.Error()}
+	}
+	if info.TxCount >= walletAlertTxs {
+		return check{"wallet", false, fmt.Sprintf("%d transactions: find what is filling it (dust sent to deposit addresses?)", info.TxCount)}
+	}
+	return check{"wallet", true, fmt.Sprintf("%d transactions", info.TxCount)}
 }
 
 func (h *healthChecker) dogecoinNode() check {
@@ -134,7 +235,42 @@ func (h *healthChecker) dogecoinVM() check {
 	if err := h.b.vm.(*vmChain).rpc.call(&height, "getblockcount"); err != nil {
 		return check{"dogecoinvm", false, "DogecoinVM is not answering: " + err.Error()}
 	}
+	// The Metal node's own health includes the VM's: answering RPC isn't
+	// enough (a VM latched after a failed accept still answers). Not being
+	// able to read it is a failure too: that is the evidence this check
+	// exists for.
+	if h.pChainURI != "" {
+		if err := metalHealthy(h.pChainURI); err != nil {
+			return check{"dogecoinvm", false, fmt.Sprintf("block %d, but %v", height, err)}
+		}
+	}
 	return check{"dogecoinvm", true, fmt.Sprintf("block %d", height)}
+}
+
+// metalHealthy reads the Metal node's /ext/health, on the host of
+// pChainURI, and fails unless it answers that the node is healthy.
+func metalHealthy(pChainURI string) error {
+	u, err := url.Parse(pChainURI)
+	if err != nil {
+		return fmt.Errorf("the P-Chain URI %q: %w", pChainURI, err)
+	}
+	u.Path = "/ext/health"
+	client := http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(u.String())
+	if err != nil {
+		return fmt.Errorf("the Metal node's health can't be read (%s): %w", u, err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Healthy *bool `json:"healthy"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.Healthy == nil {
+		return fmt.Errorf("the Metal node's health (%s) answered %s without a verdict", u, resp.Status)
+	}
+	if !*body.Healthy {
+		return fmt.Errorf("the Metal node reports unhealthy (%s)", u)
+	}
+	return nil
 }
 
 // validatorBalance checks the L1 validator can keep paying its continuous
@@ -225,12 +361,25 @@ func postTelegram(token, chatID, msg string) error {
 
 // monitor runs the checks every interval and alerts when a check changes
 // state, and again every remind while one is failing.
-func (h *healthChecker) monitor(interval, remind time.Duration, alert alerter) {
+func (h *healthChecker) monitor(interval, remind time.Duration, alert alerter, usage *activity) {
 	last := map[string]bool{}
 	var lastAlert time.Time
 	for {
 		state, err := h.b.load()
 		checks := h.run(state, err)
+		if usage != nil && err == nil {
+			registered, rerr := h.b.registry.list()
+			if rerr == nil {
+				if lines := usage.events(state, len(registered)); len(lines) > 0 {
+					msg := "DogecoinVM bridge activity:"
+					for _, l := range lines {
+						msg += "\n- " + l
+					}
+					log.Print(msg)
+					alert.send(msg)
+				}
+			}
+		}
 
 		var changed []string
 		for _, c := range checks {
@@ -301,6 +450,7 @@ func cmdMonitor(args []string) error {
 	test := fs.Bool("test-alert", false, "send a test alert and exit")
 	interval := fs.Duration("interval", time.Minute, "time between checks")
 	remind := fs.Duration("remind", 6*time.Hour, "repeat an alert this often while a check fails")
+	notify := fs.Bool("activity", true, "also announce bridge use (deposits, credits, withdrawals, payments, refunds, new deposit addresses)")
 	once := fs.Bool("once", false, "run the checks once, print them, and exit non-zero if one fails")
 	s.register(fs)
 	b := bridgeFlags(fs)
@@ -323,6 +473,8 @@ func cmdMonitor(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
+	b.readUnsettled(*signersPath)
 
 	if *once {
 		state, err := b.load()
@@ -345,6 +497,10 @@ func cmdMonitor(args []string) error {
 		alert.send("DogecoinVM bridge: test alert. Alerts are working.")
 		return nil
 	}
-	h.monitor(*interval, *remind, alert)
+	var usage *activity
+	if *notify {
+		usage = newActivity()
+	}
+	h.monitor(*interval, *remind, alert, usage)
 	return nil
 }

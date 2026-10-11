@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
+	"strings"
+	"sync"
 
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/btcutil"
 	"github.com/MetalBlockchain/dogecoin-vm/btcd/chaincfg/chainhash"
@@ -37,6 +40,104 @@ type chain interface {
 	unspent(addresses []btcutil.Address, minConf int64) ([]utxo, error)
 	// send broadcasts tx.
 	send(tx *wire.MsgTx) (chainhash.Hash, error)
+}
+
+// conflictLister is a chain whose wallet can list the transactions that
+// conflict with one in a block (chainTx.confirmations is minus that one's
+// depth).
+type conflictLister interface {
+	conflictedFor(addresses []btcutil.Address) ([]chainTx, error)
+}
+
+// confirmer is a chain that can say whether a transaction is in a block.
+type confirmer interface {
+	confirmed(txid chainhash.Hash) (bool, error)
+}
+
+// confirmedOn returns a check of whether a transaction is in a block on c,
+// or nil if c can't tell. An error counts as not known to be confirmed.
+func confirmedOn(c chain) func(string) bool {
+	cc, ok := c.(confirmer)
+	if !ok {
+		return nil
+	}
+	return func(txid string) bool {
+		h, err := chainhash.NewHashFromStr(txid)
+		if err != nil {
+			return false
+		}
+		yes, err := cc.confirmed(*h)
+		return err == nil && yes
+	}
+}
+
+// utxoSetter is a chain whose node can say whether an output is still in
+// its UTXO set: in a block and not spent by one.
+type utxoSetter interface {
+	inUTXOSet(op wire.OutPoint) (bool, error)
+}
+
+// unspentOn returns a check of whether an output is still in c's UTXO set,
+// or nil if c can't tell. An error counts as still unspent: the checks that
+// use it then refuse, which is the safe side.
+func unspentOn(c chain) func(wire.OutPoint) bool {
+	uc, ok := c.(utxoSetter)
+	if !ok {
+		return nil
+	}
+	return func(op wire.OutPoint) bool {
+		yes, err := uc.inUTXOSet(op)
+		return err != nil || yes
+	}
+}
+
+// gettxoutInBlock asks a node's UTXO set (not a wallet) whether op is in a
+// block and unspent by any block; a spend still in the mempool doesn't
+// count.
+func gettxoutInBlock(rpc *rpcClient, op wire.OutPoint) (bool, error) {
+	var result *struct {
+		Confirmations int64 `json:"confirmations"`
+	}
+	if err := rpc.call(&result, "gettxout", op.Hash.String(), op.Index, false); err != nil {
+		return false, err
+	}
+	return result != nil && result.Confirmations > 0, nil
+}
+
+func (c *vmChain) inUTXOSet(op wire.OutPoint) (bool, error)   { return gettxoutInBlock(c.rpc, op) }
+func (c *dogeChain) inUTXOSet(op wire.OutPoint) (bool, error) { return gettxoutInBlock(c.rpc, op) }
+
+// confirmed reports whether DogecoinVM has txid in a block (its node keeps
+// a transaction index).
+func (c *vmChain) confirmed(txid chainhash.Hash) (bool, error) {
+	var t struct {
+		Confirmations int64 `json:"confirmations"`
+	}
+	if err := c.rpc.call(&t, "getrawtransaction", txid.String(), 1); err != nil {
+		return false, err
+	}
+	return t.Confirmations > 0, nil
+}
+
+// confirmed reports whether Dogecoin has txid in a block (the node keeps a
+// transaction index).
+func (c *dogeChain) confirmed(txid chainhash.Hash) (bool, error) {
+	var t struct {
+		Confirmations int64 `json:"confirmations"`
+	}
+	if err := c.rpc.call(&t, "getrawtransaction", txid.String(), 1); err != nil {
+		return false, err
+	}
+	return t.Confirmations > 0, nil
+}
+
+// resend hands tx back to the Dogecoin node; one it already has is fine.
+func (c *dogeChain) resend(tx *wire.MsgTx) error {
+	_, err := sendRaw(c.rpc, tx)
+	if err != nil && (strings.Contains(err.Error(), "already") || strings.Contains(err.Error(), "txn-mempool-conflict")) {
+		return nil
+	}
+	return err
 }
 
 func decodeTx(hexTx string) (*wire.MsgTx, error) {
@@ -153,6 +254,15 @@ func (c *vmChain) send(tx *wire.MsgTx) (chainhash.Hash, error) {
 	return sendRaw(c.rpc, tx)
 }
 
+// resend hands tx back to DogecoinVM's node; one it already has is fine.
+func (c *vmChain) resend(tx *wire.MsgTx) error {
+	_, err := sendRaw(c.rpc, tx)
+	if err != nil && (strings.Contains(err.Error(), "already") || strings.Contains(err.Error(), "exists")) {
+		return nil
+	}
+	return err
+}
+
 func sendRaw(rpc *rpcClient, tx *wire.MsgTx) (chainhash.Hash, error) {
 	var txid string
 	if err := rpc.call(&txid, "sendrawtransaction", encodeTx(tx)); err != nil {
@@ -169,6 +279,13 @@ func sendRaw(rpc *rpcClient, tx *wire.MsgTx) (chainhash.Hash, error) {
 // be imported into its wallet (watch-only is enough) with importaddress.
 type dogeChain struct {
 	rpc *rpcClient
+
+	mu    sync.Mutex
+	hist  *walletHistory
+	known map[string]*wire.MsgTx // wallet transactions read so far, by txid: their bytes never change
+	// dead keeps unsettled transactions on disk (deadhistory.go); nil
+	// keeps nothing (tests, and commands that read no cutover).
+	dead *deadHistory
 }
 
 // importTx adds one transaction, already in a block, to the wallet without a
@@ -194,35 +311,70 @@ func (c *dogeChain) watch(address btcutil.Address, rescan bool) error {
 
 func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
 	scripts := scriptSet(addresses)
-	var entries []struct {
-		TxID    string `json:"txid"`
-		Address string `json:"address"`
-	}
-	// listtransactions account count skip include_watchonly
-	if err := c.rpc.call(&entries, "listtransactions", "*", 1_000_000, 0, true); err != nil {
+	tip, entries, err := c.history()
+	if err != nil {
 		return nil, err
 	}
-
-	seen := map[string]bool{}
+	ids := make([]string, 0, len(entries))
+	for txid := range entries {
+		ids = append(ids, txid)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		a, b := entries[ids[i]], entries[ids[j]]
+		if a.time != b.time {
+			return a.time < b.time
+		}
+		return ids[i] < ids[j]
+	})
 	var txs []chainTx
-	for _, e := range entries {
-		if seen[e.TxID] {
-			continue
-		}
-		seen[e.TxID] = true
-
-		var t struct {
-			Hex           string `json:"hex"`
-			Confirmations int64  `json:"confirmations"`
-			Time          int64  `json:"time"`
-		}
-		if err := c.rpc.call(&t, "gettransaction", e.TxID, true); err != nil {
-			return nil, err
-		}
-		if t.Confirmations < 0 {
+	for _, txid := range ids {
+		e := entries[txid]
+		if e.conflicted {
 			continue // conflicts with a transaction in a block: it won't confirm
 		}
-		tx, err := decodeTx(t.Hex)
+		tx, err := c.walletTx(txid)
+		if err != nil {
+			return nil, err
+		}
+		ok, err := touches(tx, scripts, c)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		var confirmations int64
+		if e.height > 0 {
+			confirmations = tip - e.height + 1
+		}
+		txs = append(txs, chainTx{tx: tx, confirmations: confirmations, time: e.time})
+	}
+	return txs, nil
+}
+
+// conflictedFor returns the wallet's transactions that pay to or spend from
+// any of addresses and conflict with a transaction in a block: txsFor
+// leaves them out, as they can't confirm unless a reorganisation undoes
+// that block. Each one's confirmations is minus the depth of the block
+// transaction it conflicts with. A cutover (cutover.go) counts their
+// outputs too: a signature given before it may spend one, and it is dead
+// only once that conflict is deep.
+func (c *dogeChain) conflictedFor(addresses []btcutil.Address) ([]chainTx, error) {
+	scripts := scriptSet(addresses)
+	_, entries, err := c.history()
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0)
+	for txid, e := range entries {
+		if e.conflicted {
+			ids = append(ids, txid)
+		}
+	}
+	sort.Strings(ids)
+	var txs []chainTx
+	for _, txid := range ids {
+		tx, err := c.walletTx(txid)
 		if err != nil {
 			return nil, err
 		}
@@ -231,10 +383,245 @@ func (c *dogeChain) txsFor(addresses []btcutil.Address) ([]chainTx, error) {
 			return nil, err
 		}
 		if ok {
-			txs = append(txs, chainTx{tx: tx, confirmations: t.Confirmations, time: t.Time})
+			e := entries[txid]
+			txs = append(txs, chainTx{tx: tx, confirmations: -max(e.conflictDepth, 1), time: e.time})
 		}
 	}
 	return txs, nil
+}
+
+// walletTx is wallet transaction txid, read from the node once.
+func (c *dogeChain) walletTx(txid string) (*wire.MsgTx, error) {
+	c.mu.Lock()
+	tx, ok := c.known[txid]
+	c.mu.Unlock()
+	if ok {
+		return tx, nil
+	}
+	var t struct {
+		Hex string `json:"hex"`
+	}
+	if err := c.rpc.call(&t, "gettransaction", txid, true); err != nil {
+		return nil, err
+	}
+	tx, err := decodeTx(t.Hex)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if c.known == nil {
+		c.known = map[string]*wire.MsgTx{}
+	}
+	c.known[txid] = tx
+	c.mu.Unlock()
+	return tx, nil
+}
+
+// walletHistory is this process's copy of the wallet's transaction list.
+// Reading the whole list on every pass would cost time in proportion to the
+// wallet's history, which anyone can lengthen by paying the peg's public
+// addresses, and listing it in one call stops at a cap; so after the first
+// read, each pass reads only what changed since the block the last one
+// ended at (listsinceblock). Dogecoin Core 1.14 doesn't say which
+// transactions a reorganisation took out of blocks, so when the block the
+// last read ended at is no longer on the main chain, the whole list is read
+// again; so is a wallet that gained transactions the read didn't show (an
+// import of an old payment).
+type walletHistory struct {
+	last    string // the block the last read ended at
+	entries map[string]historyEntry
+}
+
+type historyEntry struct {
+	height     int64 // the block holding it; 0 if none
+	conflicted bool  // conflicts with a transaction in a block
+	// conflictDepth is, for a conflicted transaction, the confirmations of
+	// the block transaction it conflicts with (Dogecoin Core lists it with
+	// that many negative confirmations).
+	conflictDepth int64
+	time          int64
+}
+
+// errUnresolvedHistory marks a history read refused because a transaction
+// the books need is missing from the wallet (Round 11, AA2).
+var errUnresolvedHistory = errors.New("unresolved Dogecoin history")
+
+// history brings the wallet history up to date and returns the tip's height
+// and a copy of every entry, with every unsettled transaction the wallet no
+// longer lists added back as conflicted (deadhistory.go).
+func (c *dogeChain) history() (int64, map[string]historyEntry, error) {
+	tip, entries, err := c.walletEntries()
+	if err != nil || c.dead == nil {
+		return tip, entries, err
+	}
+	gone, err := c.dead.sync(tip, entries, func(txid string) (string, error) {
+		tx, err := c.walletTx(txid)
+		if err != nil {
+			return "", err
+		}
+		return encodeTx(tx), nil
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	// A dropped transaction comes back as conflicted at the current depth of
+	// the best evidence it can never be mined (deadproof.go): a spend of one
+	// of its inputs, from the wallet or an operator's proof, read fresh on
+	// every read, as a reorganisation can make it shallower again. It stays
+	// in the file and in history even once that evidence is rootDepth deep
+	// (Round 8, X1): a cutover clears its recorded outputs only by seeing
+	// that conflict (chainView.cleared), so deleting the record would leave
+	// them owed for good. The file keeps it as a tombstone; a reorganisation
+	// that makes the evidence shallow again shows it as owed again.
+	// Dropped transactions added back below are never in a block, so the
+	// wallet scan in droppedDepth skips them.
+	for txid, rec := range gone {
+		tx, err := decodeTx(rec.Hex)
+		if err != nil {
+			return 0, nil, fmt.Errorf("unsettled transaction %s: %w", txid, err)
+		}
+		depth, err := c.droppedDepth(tip, tx, entries, rec.proofs())
+		if err != nil {
+			return 0, nil, fmt.Errorf("unsettled transaction %s: %w", txid, err)
+		}
+		// Only evidence read now counts (Round 9, Y6): rec.Settled (the
+		// wallet once listed it conflicted rootDepth deep) is a note, not a
+		// depth, so a coin is never cleared on memory alone.
+		//
+		// A transaction that was mined (the wallet listed it in a block, or
+		// a block transaction the wallet lists spends one of its outputs)
+		// and that nothing shows conflicted is not dropped: the wallet lost
+		// it. Its customer claim (a deposit, a payout, a refund) is out of
+		// the books while a spend of its output can clear a cutover coin,
+		// so nothing is read until it is imported (Round 11, AA2).
+		if depth == 0 {
+			spender, err := c.listedSpender(tx, entries)
+			if err != nil {
+				return 0, nil, fmt.Errorf("unsettled transaction %s: %w", txid, err)
+			}
+			if rec.Mined || spender != "" {
+				why := "the wallet listed it in a block"
+				if spender != "" {
+					why = "block transaction " + spender + " spends its output"
+				}
+				return 0, nil, fmt.Errorf("%w: transaction %s was mined (%s) but the wallet no longer lists it, and nothing shows it conflicted: "+
+					"its claim is missing from the books, so nothing is signed or accounted until it is imported (importprunedfunds; RUNBOOK \"Mined but missing\")", errUnresolvedHistory, txid, why)
+			}
+		}
+		c.mu.Lock()
+		if c.known == nil {
+			c.known = map[string]*wire.MsgTx{}
+		}
+		c.known[txid] = tx
+		c.mu.Unlock()
+		entries[txid] = historyEntry{conflicted: true, conflictDepth: depth, time: rec.Time}
+	}
+	return tip, entries, nil
+}
+
+// listedSpender is a transaction the wallet lists in a block that spends
+// an output of tx, or "" if there is none.
+func (c *dogeChain) listedSpender(tx *wire.MsgTx, entries map[string]historyEntry) (string, error) {
+	hash := tx.TxHash()
+	for txid, e := range entries {
+		if e.height == 0 || e.conflicted {
+			continue
+		}
+		spender, err := c.walletTx(txid)
+		if err != nil {
+			return "", err
+		}
+		for _, in := range spender.TxIn {
+			if in.PreviousOutPoint.Hash == hash {
+				return txid, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// walletEntries brings the wallet history up to date and returns the tip's
+// height and a copy of every entry the wallet lists.
+func (c *dogeChain) walletEntries() (int64, map[string]historyEntry, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tip, err := c.readHistory(false)
+	if err != nil {
+		return 0, nil, err
+	}
+	var info struct {
+		TxCount int `json:"txcount"`
+	}
+	if err := c.rpc.call(&info, "getwalletinfo"); err != nil {
+		return 0, nil, err
+	}
+	if info.TxCount != len(c.hist.entries) {
+		if tip, err = c.readHistory(true); err != nil {
+			return 0, nil, err
+		}
+	}
+	entries := make(map[string]historyEntry, len(c.hist.entries))
+	for txid, e := range c.hist.entries {
+		entries[txid] = e
+	}
+	return tip, entries, nil
+}
+
+// readHistory reads what changed since the last read, or everything if
+// full, there was none, or the block that read ended at is no longer on the
+// main chain, and returns the height of the block it ended at.
+func (c *dogeChain) readHistory(full bool) (int64, error) {
+	if c.hist == nil {
+		c.hist = &walletHistory{}
+	}
+	if !full && c.hist.last != "" {
+		var at struct {
+			Confirmations int64 `json:"confirmations"`
+		}
+		if err := c.rpc.call(&at, "getblockheader", c.hist.last); err != nil || at.Confirmations < 1 {
+			full = true // reorganised away (or unreadable): start again
+		}
+	} else {
+		full = true
+	}
+	from := c.hist.last
+	if full {
+		from = ""
+	}
+	var since struct {
+		Transactions []struct {
+			TxID          string `json:"txid"`
+			Confirmations int64  `json:"confirmations"`
+			Time          int64  `json:"time"`
+		} `json:"transactions"`
+		LastBlock string `json:"lastblock"`
+	}
+	// listsinceblock blockhash target_confirmations include_watchonly
+	if err := c.rpc.call(&since, "listsinceblock", from, 1, true); err != nil {
+		return 0, err
+	}
+	var header struct {
+		Height int64 `json:"height"`
+	}
+	if err := c.rpc.call(&header, "getblockheader", since.LastBlock); err != nil {
+		return 0, err
+	}
+	entries := c.hist.entries
+	if full || entries == nil {
+		entries = map[string]historyEntry{}
+	}
+	for _, e := range since.Transactions {
+		h := historyEntry{conflicted: e.Confirmations < 0, time: e.Time}
+		if h.conflicted {
+			h.conflictDepth = -e.Confirmations
+		}
+		if e.Confirmations > 0 {
+			h.height = header.Height - e.Confirmations + 1
+		}
+		entries[e.TxID] = h // one entry per output; they agree
+	}
+	c.hist.entries, c.hist.last = entries, since.LastBlock
+	return header.Height, nil
 }
 
 // touches reports whether tx pays to one of scripts or spends an output
@@ -251,15 +638,21 @@ func touches(tx *wire.MsgTx, scripts map[string]bool, c *dogeChain) (bool, error
 		if in.PreviousOutPoint.Hash == (chainhash.Hash{}) {
 			continue // a coinbase
 		}
-		// Needs Dogecoin Core's -txindex for outputs the wallet did not
-		// create.
-		var prevHex string
-		if err := c.rpc.call(&prevHex, "getrawtransaction", in.PreviousOutPoint.Hash.String(), 0); err != nil {
-			return false, fmt.Errorf("reading %v, which wallet transaction %v spends (is -txindex on?): %w", in.PreviousOutPoint.Hash, tx.TxHash(), err)
-		}
-		prevTx, err := decodeTx(prevHex)
-		if err != nil {
-			return false, err
+		// A transaction the unsettled file kept is known already (the
+		// wallet may have lost it). Otherwise this needs Dogecoin Core's
+		// -txindex for outputs the wallet did not create.
+		c.mu.Lock()
+		prevTx := c.known[in.PreviousOutPoint.Hash.String()]
+		c.mu.Unlock()
+		if prevTx == nil {
+			var prevHex string
+			if err := c.rpc.call(&prevHex, "getrawtransaction", in.PreviousOutPoint.Hash.String(), 0); err != nil {
+				return false, fmt.Errorf("reading %v, which wallet transaction %v spends (is -txindex on?): %w", in.PreviousOutPoint.Hash, tx.TxHash(), err)
+			}
+			var err error
+			if prevTx, err = decodeTx(prevHex); err != nil {
+				return false, err
+			}
 		}
 		if int(in.PreviousOutPoint.Index) < len(prevTx.TxOut) &&
 			scripts[string(prevTx.TxOut[in.PreviousOutPoint.Index].PkScript)] {

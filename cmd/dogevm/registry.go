@@ -14,6 +14,12 @@ import (
 // deposit addresses, so the bridge knows which Dogecoin addresses to watch.
 // It is a JSON array of hex "kind || hash160" strings. Losing it loses no
 // funds: re-registering a destination recreates the same address.
+//
+// The bridge and the web server each add to the same file, from separate
+// processes, so an addition holds an exclusive lock on a sibling file
+// (deposits.json.lock, in the registry's directory, which both may write)
+// across reading the file and replacing it: otherwise two at once could
+// each write the list without the other's entry.
 type depositRegistry struct {
 	path string
 	mu   sync.Mutex
@@ -55,11 +61,45 @@ func (r *depositRegistry) read() ([]destination, error) {
 	return dests, nil
 }
 
+// has reports whether d is registered.
+func (r *depositRegistry) has(d destination) (bool, error) {
+	dests, err := r.list()
+	if err != nil {
+		return false, err
+	}
+	for _, existing := range dests {
+		if existing == d {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// lock takes the registry's cross-process lock; the returned function
+// releases it.
+func (r *depositRegistry) lock() (func(), error) {
+	f, err := os.OpenFile(r.path+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("locking the deposit registry: %w", err)
+	}
+	if err := lockFile(f); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("locking the deposit registry: %w", err)
+	}
+	return func() { _ = unlockFile(f); f.Close() }, nil
+}
+
 // add records d, reporting whether it was new.
 func (r *depositRegistry) add(d destination) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	unlock, err := r.lock()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 
+	// Read under the lock: what another process added is in this copy.
 	dests, err := r.read()
 	if err != nil {
 		return false, err
@@ -89,9 +129,19 @@ func (r *depositRegistry) add(d destination) (bool, error) {
 		os.Remove(tmp.Name())
 		return false, err
 	}
+	// Durable before it is visible: the file's bytes, then the rename.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return false, err
+	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
 		return false, err
 	}
-	return true, os.Rename(tmp.Name(), r.path)
+	if err := os.Rename(tmp.Name(), r.path); err != nil {
+		os.Remove(tmp.Name())
+		return false, err
+	}
+	return true, syncDir(filepath.Dir(r.path))
 }

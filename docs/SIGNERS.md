@@ -42,8 +42,13 @@ Each signer runs `dogevm signer` with one key. For every proposal it:
    credited twice through this signer.
 5. **Applies its daily limit**, if one is set (`-max-daily`).
 
-A compromised coordinator can therefore delay transfers but can't move
-locked DOGE. That would take `Required` signers.
+With signers run by independent operators, each on their own nodes, a
+compromised coordinator can therefore delay transfers but can't move locked
+DOGE. That would take `Required` signers.
+
+On metaldoge.com each key has run in its own signer service since 27
+September 2026 (set fingerprint `0cb9-3ab1-d970-1cf9-8024` since 1 October
+2026). During the alpha, one operator holds all of the bridge's signing keys, so you are trusting that operator. Caps and daily limits are enforced by the signer software; they don't limit what someone holding the keys could take. Moving the keys to independent operators is planned.
 
 ## The setup ceremony
 
@@ -72,7 +77,7 @@ dogevm signer-setup init            # asks: name, URL, make a key or import one
 dogevm signer-setup coordinator
 dogevm signer-setup assemble -required 2 -coordinator-key PUB -coordinator-tls PIN \
   -doge-network mainnet -vm-network mainnet \
-  -confirmations 20 -max-deposit 10000000000 -max-circulating 100000000000 \
+  -confirmations 20 -max-deposit 10000000000 -max-circulating 420000000000 \
   alice.json bob.json carol.json
 # → sends signers.json to every operator, and reads the fingerprint out on a call
 
@@ -105,7 +110,17 @@ that short form.
 
 ### What each operator runs
 
-- **The key**, which never leaves the machine. Back it up offline.
+- **The key**, which never leaves the machine. Back it up offline. `init`
+  encrypts it with a passphrase (age, scrypt), so a copy of the file alone,
+  in a backup or a disk image, is useless; `age -d` decrypts it with the
+  passphrase, without this tool. The service gets the passphrase as a
+  systemd credential, `join` says how: `systemd-creds encrypt
+  --with-key=auto` seals it to the machine's TPM where it has one, and to
+  its host key otherwise (which protects a copied file, not a machine whose
+  root is compromised). A key written before encryption still loads, with a
+  warning; `dogevm signer-key encrypt -key-file FILE` encrypts it in place
+  (then delete unencrypted copies, including in backups). The coordinator
+  key only signs requests, so it stays unencrypted.
 - **A Dogecoin Core node** (`-txindex`, with a wallet for watch-only
   addresses) and **a DogecoinVM node**. These are what make the signer
   independent: it checks everything against its own nodes. A signer that
@@ -135,7 +150,17 @@ that short form.
   made before logs came with keys, that has never signed, starts one with
   `dogevm signer-log init -signers FILE -key-file FILE` (it refuses if the
   chains show the key has signed). `dogevm signer-log check` lists what a
-  log lacks without changing anything; run it before upgrading a signer.
+  log lacks (a missing log reads as empty) without changing anything; run it
+  before upgrading a signer. A key that signed before signers kept logs (the
+  bridge once signed with every key itself) runs `dogevm signer-log adopt`
+  once: it logs each transaction in a block that carries the key's
+  signature, under the action its tags name, and adopts nothing if any such
+  transaction isn't in a block yet.
+
+Each new deposit address a signer is told about, by `register` or in a
+proposal, is one more address its node watches for good, so a signer
+starts watching at most `-max-registrations` new ones an hour (600 by
+default); the coordinator retries the rest later.
 
 The policy is part of the signer set, so the coordinator and every signer
 use the same one. A policy flag that disagrees with it is an error.

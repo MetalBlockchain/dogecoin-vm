@@ -5,12 +5,12 @@ A Dogecoin virtual machine for [Metal Blockchain](https://github.com/MetalBlockc
 DogecoinVM is a fork of [MetalBlockchain/btcvm](https://github.com/MetalBlockchain/btcvm), which embeds [btcd](https://github.com/btcsuite/btcd) as the ledger and script engine. It is a second ledger for existing DOGE, not a new coin:
 
 - **No premine and no block reward.** The genesis blocks pay nothing, and the coinbase can only claim transaction fees. DOGE enters the ledger only through a two-way peg with Dogecoin ([docs/BRIDGE.md](docs/BRIDGE.md)).
-- **Same addresses and keys as Dogecoin.** A `D…` address, WIF key or `dgpv`/`dgub` extended key is the same on both chains.
+- **Same addresses and keys as Dogecoin.** A `D…` address, WIF key or `dgpv`/`dgub` extended key is the same on both chains. So are the transaction format and signing, so a wallet's Dogecoin signing code works as is; what a wallet needs is a DogecoinVM data source (the JSON-RPC or the site's API) in place of the Dogecoin network.
 - **No change to Dogecoin itself.** Dogecoin keeps running exactly as it does today.
 
-> **Status: beta.** The code has not been audited. Keep amounts small.
+> **Status: alpha.** The code has not been audited, the chain has one validator, and one operator holds every peg signer key. Keep amounts small.
 
-**Live:** **https://metaldoge.com** runs DogecoinVM as an L1 on Metal mainnet, pegged to Dogecoin mainnet, as a capped beta with real DOGE (deposits up to 100 DOGE, at most 1,000 DOGE circulating). JSON-RPC is at `/rpc`. [docs/TESTING.md](docs/TESTING.md) lists its IDs and covers running the whole stack locally.
+**Live:** **https://metaldoge.com** runs DogecoinVM as an L1 on Metal mainnet, pegged to Dogecoin mainnet, as a capped alpha with real DOGE (deposits up to 100 DOGE, at most 4,200 DOGE circulating). During the alpha, one operator holds all of the bridge's signing keys, so you are trusting that operator. Caps and daily limits are enforced by the signer software; they don't limit what someone holding the keys could take. Moving the keys to independent operators is planned. The [alpha terms](https://metaldoge.com/terms) cover the rest, including how to ask for a refund. JSON-RPC is at `/rpc`. [docs/TESTING.md](docs/TESTING.md) lists its IDs and covers running the whole stack locally.
 
 ## Networks
 
@@ -53,13 +53,15 @@ As a result, btcd's chain tip is always the last accepted block. Blocks propagat
 
 A peg reserve, created by consensus in the chain's first blocks and locked to an m-of-n signer multisig, backs every DOGE on DogecoinVM. The `dogevm` CLI ([`cmd/dogevm`](cmd/dogevm)) is a wallet and the bridge:
 
-- **Peg-in:** a Dogecoin deposit to the peg address is credited from the reserve.
+- **Peg-in:** a Dogecoin deposit to the user's personal deposit address (or to the peg address with a `DVMD` tag) is credited from the reserve, after 6 to 20 Dogecoin confirmations depending on the amount on metaldoge.com (on mainnet the bridge never credits a deposit with fewer than 6).
 - **Peg-out:** DOGE paid back into the reserve is released on Dogecoin.
 - **Audit:** `dogevm audit` checks that DOGE locked on Dogecoin covers everything circulating on DogecoinVM.
 
 The peg is federated: the signers are trusted. See [docs/BRIDGE.md](docs/BRIDGE.md) for the design, message format and trust model.
 
-The signers can run separately, each with one key on its own machine, checking every transaction against its own view of both chains before signing. A compromised bridge process can then delay transfers but can't move locked DOGE. See [docs/SIGNERS.md](docs/SIGNERS.md).
+The signers can run separately, each with one key on its own machine, checking every transaction against its own view of both chains before signing. With independent operators, a compromised bridge process can then delay transfers but can't move locked DOGE. See [docs/SIGNERS.md](docs/SIGNERS.md).
+
+On metaldoge.com each key has run in its own signer service since 27 September 2026, and the bridge process holds none. The protection above also needs independent operators, which isn't the case yet: during the alpha, one operator holds all of the bridge's signing keys, so you are trusting that operator. Caps and daily limits are enforced by the signer software; they don't limit what someone holding the keys could take. Moving the keys to independent operators is planned.
 
 ## Status and roadmap
 
@@ -73,8 +75,9 @@ completed its first round trip:
 | Withdrawal, 5 DOGE | DogecoinVM | [`4a447aff…6c3852`](https://metaldoge.com/explorer#/tx/4a447affd54af5dca7feb45195e3e479bd7a265fb078b31d11f4d218d66c3852) |
 | Payout, 4.9 DOGE | Dogecoin | [`8be21486…ec9737`](https://blockchair.com/dogecoin/transaction/8be21486441207524403742b3c0c9023b5764fb4e1f12ef0e9f493d19aec9737) |
 
-Next is removing single points of failure: moving the bridge onto separate
-signers, bringing in independent operators, and more validators. Then an
+Next is removing single points of failure. The bridge already runs on
+separate signer services (since 27 September 2026); next come independent
+operators and more validators. Then an
 external audit, and later crediting deposits on Dogecoin proofs rather than
 signatures. The full roadmap is at
 [metaldoge.com/roadmap](https://metaldoge.com/roadmap).
@@ -92,7 +95,7 @@ The VM targets metalgo v1.13.5 (rpcchainvm protocol 43). Its VM ID is `mEUwHwfd8
 
 Some vendored btcd tests fail the same way on upstream btcvm, because proof of work is disabled there. Examples are `TestFullBlocks` and `TestUtxoCacheFlush`.
 
-See [`docs/README.md`](docs/README.md) for the Makefile targets that build the plugin and run a local five-node network with `metal-network-runner`.
+[`docs/README.md`](docs/README.md) indexes the docs and the Makefile targets; [docs/TESTING.md](docs/TESTING.md) runs a local network with `scripts/devnet.sh`.
 
 ## License
 

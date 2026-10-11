@@ -146,9 +146,16 @@ func (b *BlockAdapter) Bytes() []byte {
 
 // Verify checks that the block is valid on top of the last accepted block. It
 // does not modify btcd's chain state.
+// errBroken: accepting a block failed part-way (VM.broken).
+var errBroken = errors.New("accepting a block failed part-way; restart the node so the chain reloads from disk")
+
 func (b *BlockAdapter) Verify(ctx context.Context) error {
 	b.vm.blocksMu.Lock()
 	defer b.vm.blocksMu.Unlock()
+
+	if b.vm.broken.Load() {
+		return errBroken
+	}
 
 	if b.parentID != b.vm.lastAccepted {
 		return fmt.Errorf("%w: parent %s, last accepted %s",
@@ -198,18 +205,33 @@ func (b *BlockAdapter) accept() error {
 			errParentNotAccepted, b.id, b.parentID, b.vm.lastAccepted)
 	}
 
+	if b.vm.broken.Load() {
+		return errBroken
+	}
 	isMainChain, isOrphan, err := b.vm.btcdAdapter.ProcessBlockNoPoW(b.btcBlock)
 	if err != nil {
+		// A rule violation is found before btcd changes anything; any
+		// other failure (the database, say) may leave it half done.
+		var rule blockchain.RuleError
+		if !errors.As(err, &rule) {
+			b.vm.brokenBy(fmt.Errorf("connecting accepted block %s: %w", b.id, err))
+		}
 		return fmt.Errorf("failed to connect accepted block %s: %w", b.id, err)
 	}
 	if isOrphan || !isMainChain {
-		return fmt.Errorf("accepted block %s did not become the chain tip (orphan=%t, mainChain=%t)",
+		// btcd stored it, but not as the tip: what it has and what this VM
+		// has accepted no longer agree.
+		err := fmt.Errorf("accepted block %s did not become the chain tip (orphan=%t, mainChain=%t)",
 			b.id, isOrphan, isMainChain)
+		b.vm.brokenBy(err)
+		return err
 	}
 	// Accepted is final: write it to disk before saying so, so a crash or
 	// a kill can't take it back.
 	if err := b.vm.btcdAdapter.Persist(); err != nil {
-		return fmt.Errorf("failed to persist accepted block %s: %w", b.id, err)
+		err = fmt.Errorf("failed to persist accepted block %s: %w", b.id, err)
+		b.vm.brokenBy(err)
+		return err
 	}
 
 	delete(b.vm.verifiedBlocks, b.id)

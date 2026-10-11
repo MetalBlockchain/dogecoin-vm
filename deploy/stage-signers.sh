@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stages separate signer services on this host from the live signer set, as
-# a rehearsal for Phase 2: one directory per key, a keyless coordinator, and
+# a rehearsal for Phase 3: one directory per key, a keyless coordinator, and
 # a service file for each signer. It starts nothing and doesn't touch the
 # running bridge. docs/SIGNERS.md ("Moving an existing deployment") and
 # docs/FIRST-ROUND-TRIP.md cover the switch itself.
@@ -28,11 +28,12 @@ SOURCE=${SOURCE-/var/lib/metal-main/secrets/signers.json}
 STAGE=${STAGE-/var/lib/metal-main/secrets/separate-signers}
 DOGEVM=${DOGEVM-/opt/dogevm/bin/dogevm}
 BRIDGE_ENV=${BRIDGE_ENV-/var/lib/metal-main/secrets/bridge.env}
-REGISTRY=${REGISTRY-/var/lib/metal-main/secrets/deposits.json}
+REGISTRY=${REGISTRY-/var/lib/metal-main/web/deposits.json}
+[[ -f $REGISTRY ]] || REGISTRY=/var/lib/metal-main/secrets/deposits.json # before move-web-state.sh
 RUN_AS=${RUN_AS-dogevm}
-MAX_DAILY=${MAX_DAILY-1000}
+MAX_DAILY=${MAX_DAILY-4200}
 NETWORK=${NETWORK-mainnet}
-POLICY=${POLICY--confirmations 20 -confirmation-tiers 1:1,10:6,50:12 -max-deposit 10000000000 -max-circulating 100000000000 -doge-fee 10000000}
+POLICY=${POLICY--confirmations 20 -confirmation-tiers 1:1,10:6,50:12 -max-deposit 10000000000 -max-circulating 420000000000 -doge-fee 10000000}
 
 die() { echo "stage-signers: $*" >&2; exit 1; }
 as() { if [ -n "$RUN_AS" ]; then sudo -u "$RUN_AS" "$@"; else "$@"; fi; }
@@ -52,13 +53,15 @@ echo "Staging $required of $total signers in $STAGE"
 mkdir -m 700 "$STAGE"
 [ -n "$RUN_AS" ] && chown "$RUN_AS" "$STAGE"
 
-# 1. One signer per key, in the live set's order.
+# 1. One signer per key, in the live set's order. The keys come from a
+#    plaintext set file, so they stay plaintext here; keys born on
+#    operators' own machines (signer-setup init) are encrypted.
 cards=()
 for ((i = 0; i < total; i++)); do
   n=$((i + 1))
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["privateKeys"][int(sys.argv[2])])' "$SOURCE" "$i" |
     as "$DOGEVM" signer-setup init -yes -dir "$STAGE/signer$n" -name "Signer $n" \
-      -url "http://127.0.0.1:970$n" -import-key-stdin 2>/dev/null >/dev/null
+      -url "http://127.0.0.1:970$n" -import-key-stdin -plaintext-key 2>/dev/null >/dev/null
   cards+=("$STAGE/signer$n/card.json")
 done
 

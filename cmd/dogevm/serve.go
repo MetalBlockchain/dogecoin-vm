@@ -58,6 +58,8 @@ type server struct {
 	heavy chan struct{}
 
 	registerLimit *rateLimit
+	txLimit       *rateLimit // transactions submitted per client
+	txTotal       *rateLimit // transactions submitted in all
 }
 
 // dogeSync is the part of Dogecoin Core's getblockchaininfo the page shows
@@ -108,6 +110,10 @@ func (srv *server) refresh() {
 	srv.snapshot = snap
 	srv.mu.Unlock()
 }
+
+// staleHealth is how old the health checks may be before /api/health
+// reports them as stale.
+const staleHealth = 5 * time.Minute
 
 func (srv *server) current() *snapshot {
 	srv.mu.RLock()
@@ -184,7 +190,7 @@ func (srv *server) info(*http.Request) (any, error) {
 		"reserveAddress":       reserveAddr.EncodeAddress(),
 		"signers":              map[string]any{"required": srv.b.signers.Required, "publicKeys": srv.b.signers.PublicKeys},
 		"depositConfirmations": srv.b.depositConfirmations,
-		"confirmationTiers":    tiersForAPI(srv.b.confirmationTiers),
+		"confirmationTiers":    tiersForAPI(srv.b.creditTiers()),
 		"vmFee":                formatDoge(srv.b.vmFee),
 		"dogeFee":              formatDoge(srv.b.dogeFee),
 		"minDeposit":           formatDoge(srv.b.minDeposit),
@@ -269,8 +275,14 @@ func (srv *server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// A Dogecoin node catching up, or a deliberate pause, is degraded, not
 	// down: uptime monitors should not page for them.
+	// The checks are as of the last refresh: if refreshing has stalled,
+	// they say nothing about now.
+	checks := snap.checks
+	if age := time.Since(snap.updated); age > staleHealth {
+		checks = append([]check{{"fresh", false, fmt.Sprintf("these checks are %s old: the web server's refresh has stalled", age.Round(time.Second))}}, checks...)
+	}
 	status := "ok"
-	for _, c := range snap.checks {
+	for _, c := range checks {
 		if c.OK {
 			continue
 		}
@@ -286,7 +298,7 @@ func (srv *server) healthHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok": status == "ok", "status": status, "checks": snap.checks, "updated": snap.updated.UTC().Format(time.RFC3339),
+		"ok": status == "ok", "status": status, "checks": checks, "updated": snap.updated.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -450,6 +462,11 @@ func (srv *server) broadcast(r *http.Request) (any, error) {
 	if err := decodeBody(r, &body); err != nil {
 		return nil, err
 	}
+	// Anyone can submit transactions here: a few a second per client, and a
+	// ceiling for all, so spam has to come from many networks.
+	if !srv.allowTx(r) {
+		return nil, &apiError{http.StatusTooManyRequests, "too many transactions; try again in a minute"}
+	}
 	tx, err := decodeTx(body.Hex)
 	if err != nil {
 		return nil, badRequest("invalid transaction: %v", err)
@@ -611,15 +628,18 @@ func (srv *server) faucetClaim(r *http.Request) (any, error) {
 }
 
 // clientIP is the request's client address. Behind a local reverse proxy it
-// is the first X-Forwarded-For entry.
+// is the last X-Forwarded-For entry, the one that proxy added.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			return strings.TrimSpace(strings.Split(fwd, ",")[0])
+		// The last entry is the one the local proxy added; earlier ones
+		// come from the client and could be anything.
+		if fwd := r.Header.Values("X-Forwarded-For"); len(fwd) > 0 {
+			parts := strings.Split(fwd[len(fwd)-1], ",")
+			return strings.TrimSpace(parts[len(parts)-1])
 		}
 	}
 	return host
@@ -637,10 +657,32 @@ func newRateLimit(n int, window time.Duration) *rateLimit {
 	return &rateLimit{n: n, window: window, events: map[string][]time.Time{}}
 }
 
+// allowTx counts a submitted transaction against its client's IPv4 address
+// or IPv6 /64, and against everyone's.
+func (srv *server) allowTx(r *http.Request) bool {
+	if srv.txLimit == nil {
+		return true
+	}
+	key := clientIP(r)
+	if ip := net.ParseIP(key); ip != nil && ip.To4() == nil {
+		key = ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+	}
+	return srv.txLimit.allow(key) && srv.txTotal.allow("")
+}
+
 func (l *rateLimit) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
+	// Forget clients quiet for a whole window, so many one-off clients
+	// can't grow the table without bound.
+	if len(l.events) > 10_000 {
+		for k, ts := range l.events {
+			if len(ts) == 0 || now.Sub(ts[len(ts)-1]) >= l.window {
+				delete(l.events, k)
+			}
+		}
+	}
 	recent := l.events[key][:0]
 	for _, t := range l.events[key] {
 		if now.Sub(t) < l.window {
@@ -696,6 +738,7 @@ func cmdServe(args []string) error {
 	faucetAmount := flags.String("faucet-amount", "100", "DOGE per faucet claim")
 	chainID := flags.String("chain-id", "", "the DogecoinVM chain's ID on Metal, shown on the page")
 	dogeIndexPath := flags.String("doge-index", "", "directory for the wallet's Dogecoin address index (default: dogeindex next to -signers; \"off\" disables Dogecoin balances)")
+	finalityPath := flags.String("finality", "", "file for the finality samples the site shows (default: finality.json next to -doge-index); its directory must be writable")
 	s.register(flags)
 	b := bridgeFlags(flags)
 	health := &healthChecker{b: b}
@@ -717,6 +760,8 @@ func cmdServe(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
+	b.readUnsettled(*signersPath)
 
 	srv := &server{
 		b:             b,
@@ -725,6 +770,8 @@ func cmdServe(args []string) error {
 		vm:            b.vm.(*vmChain),
 		doge:          b.doge.(*dogeChain),
 		registerLimit: newRateLimit(30, time.Hour),
+		txLimit:       newRateLimit(30, time.Minute),
+		txTotal:       newRateLimit(600, time.Minute),
 		prevOuts:      map[wire.OutPoint]*wire.TxOut{},
 		heavy:         make(chan struct{}, 8),
 	}
@@ -774,7 +821,10 @@ func cmdServe(args []string) error {
 			return fmt.Errorf("opening the Dogecoin index: %w", err)
 		}
 		srv.dogeIdx = idx
-		srv.finality = newFinalityMeter(filepath.Join(filepath.Dir(*dogeIndexPath), "finality.json"))
+		if *finalityPath == "" {
+			*finalityPath = filepath.Join(filepath.Dir(*dogeIndexPath), "finality.json")
+		}
+		srv.finality = newFinalityMeter(*finalityPath)
 		go idx.run(make(chan struct{}))
 	}
 

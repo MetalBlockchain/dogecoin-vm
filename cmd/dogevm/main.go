@@ -56,6 +56,8 @@ Bridge (peg signers):
   dogevm refund -signers FILE -list           deposits that are held or not yet credited
   dogevm refund -signers FILE -deposit TXID:VOUT [-to DOGEADDR]
       return a held deposit, less the Dogecoin fee, to its sender (or -to)
+  dogevm bridge -signers FILE -fence dogecoin|dogecoinvm
+      propose the next cutover fence there, or replace a stuck one (RUNBOOK, "Cutover")
   dogevm monitor -signers FILE [-webhook URL]  alert when a health check fails
   dogevm pause -signers FILE -reason TEXT     emergency stop: sign and pay nothing (a signer: -dir DIR)
   dogevm resume -signers FILE                 end a pause
@@ -63,9 +65,15 @@ Bridge (peg signers):
   dogevm signer-setup STEP                    set up separate signers: init, coordinator, assemble, join, check
   dogevm signer-key -out FILE                 new key for one separate signer; prints its public key
   dogevm signer -signers FILE -key-file FILE  run one separate signer (see docs/SIGNERS.md)
-  dogevm signer-log check|init -signers FILE -key-file FILE
-                                              check a signer's log against the chains, or start the
-                                              log of a key that has never signed
+  dogevm signer-log check|init|adopt|anchors|cutover|status -signers FILE -key-file FILE
+                                              check a signer's log against the chains, start the
+                                              log of a key that has never signed, or run a cutover
+  dogevm coverage -signers FILE               what a cutover on this node would record (registry hash,
+                                              unsettled coins); compare across nodes before a cutover
+  dogevm inventory -signers FILE              every coin of the set on both chains, the fences and their
+                                              fees, the surplus they need; -require-ready before adopting
+  dogevm unsettled list|prove -signers FILE   a node's unsettled Dogecoin transactions; record proof a
+                                              dropped one can never be mined (RUNBOOK, "Cutover")
 
 Personal deposit addresses are recorded in -deposits (default deposits.json
 next to the signers file) so the bridge knows to watch them.
@@ -138,6 +146,9 @@ func main() {
 		"signer":          cmdSigner,
 		"signer-key":      cmdSignerKey,
 		"signer-log":      cmdSignerLog,
+		"unsettled":       cmdUnsettled,
+		"coverage":        cmdCoverage,
+		"inventory":       cmdInventory,
 		"signer-setup":    cmdSignerSetup,
 		"signers-check":   cmdSignersCheck,
 		"pause":           cmdPause,
@@ -418,18 +429,24 @@ func cmdSignersCheck(args []string) error {
 // bridgeFlags registers the bridge's policy flags on fs.
 func bridgeFlags(fs *flag.FlagSet) *bridge {
 	b := &bridge{
+		// Logs go to stderr: the commands that print JSON (signer-log
+		// status, inventory, coverage) keep stdout parseable, even when
+		// loading a log starts a cutover and says so.
 		logf: func(format string, args ...any) {
-			fmt.Printf("%s "+format+"\n", append([]any{time.Now().Format(time.RFC3339)}, args...)...)
+			fmt.Fprintf(os.Stderr, "%s "+format+"\n", append([]any{time.Now().Format(time.RFC3339)}, args...)...)
 		},
 	}
 	fs.Int64Var(&b.depositConfirmations, "confirmations", 6, "Dogecoin confirmations before a deposit is credited")
 	fs.StringVar(&b.tiersFlag, "confirmation-tiers", "", `fewer confirmations for smaller deposits, as DOGE:CONFIRMATIONS pairs, e.g. "1:1,10:6,50:12"; larger deposits need -confirmations`)
 	fs.Int64Var(&b.vmFee, "vm-fee", koinuPerDoge/100, "koinu deducted from each credit for the DogecoinVM fee")
 	fs.Int64Var(&b.dogeFee, "doge-fee", koinuPerDoge, "koinu deducted from each peg-out for the Dogecoin fee")
+	fs.DurationVar(&b.bumpAfter, "bump-after", 30*time.Minute, "replace a payout or refund still unconfirmed after this long with one paying another -doge-fee (0: never)")
+	fs.DurationVar(&b.fenceBumpAfter, "fence-bump-after", 30*time.Minute, "replace a cutover fence still unconfirmed on Dogecoin after this long with one paying another fence fee (0: never)")
 	fs.Int64Var(&b.minDeposit, "min-deposit", koinuPerDoge, "smallest deposit credited, in koinu")
 	fs.Int64Var(&b.minPegOut, "min-peg-out", 2*koinuPerDoge, "smallest peg-out paid, in koinu")
 	fs.Int64Var(&b.maxDeposit, "max-deposit", 0, "largest deposit credited, in koinu; larger ones are held for refund (0: no cap)")
 	fs.Int64Var(&b.maxCirculating, "max-circulating", 0, "most DOGE, in koinu, the bridge lets circulate on DogecoinVM (0: no cap)")
+	fs.Int64Var(&b.maxShallow, "max-shallow", 0, "most credited, in total, from deposits short of -confirmations, in koinu (0: the largest confirmation tier's amount)")
 	fs.StringVar(&b.cosignersPath, "cosigners", "", "JSON list of remote signers, [{\"url\": ...}] (from dogevm signer-setup assemble)")
 	fs.StringVar(&b.coordinatorKeyPath, "coordinator-key-file", "", "the coordinator key, to sign requests to the signers (from dogevm signer-setup coordinator)")
 	fs.StringVar(&b.coordinatorTLSCert, "coordinator-tls-cert", "", "the coordinator's transport certificate, for signers over TLS (default: tls.crt next to -coordinator-key-file)")
@@ -464,6 +481,9 @@ func (b *bridge) connect(s *settings, signers *signerSet) error {
 	b.confirmationTiers = tiers
 	if err := b.applyPolicy(signers.Policy); err != nil {
 		return err
+	}
+	if s.dogeNet == "mainnet" {
+		b.confFloor = minMainnetConfirmations
 	}
 	if b.cosignersPath != "" {
 		var err error
@@ -602,6 +622,7 @@ func cmdDepositAddress(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 	if err := b.connect(&s, signers); err != nil {
 		return err
 	}
@@ -633,6 +654,7 @@ func cmdBridge(args []string) error {
 	once := fs.Bool("once", false, "process what is pending, then exit")
 	interval := fs.Duration("interval", 10*time.Second, "longest wait between polls; a new block on either chain starts the next one at once")
 	rescan := fs.Bool("rescan", false, "rescan Dogecoin for past deposits when importing the peg address")
+	fenceChain := fs.String("fence", "", "propose the next cutover fence on this chain (dogecoin or dogecoinvm), or the replacement of a stuck one; print it and exit (works while paused; RUNBOOK.md, \"Cutover\")")
 	s.register(fs)
 	b := bridgeFlags(fs)
 	if err := fs.Parse(args); err != nil {
@@ -652,8 +674,18 @@ func cmdBridge(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.unsettledPath = unsettledFor(*signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 	if err := watchPeg(b, *rescan); err != nil {
 		return fmt.Errorf("importing the peg address into Dogecoin Core: %w", err)
+	}
+	if *fenceChain != "" {
+		txid, err := b.proposeFence(*fenceChain)
+		if err != nil {
+			return err
+		}
+		printJSON(map[string]string{"chain": *fenceChain, "fenceTxid": txid.String()})
+		return nil
 	}
 
 	lastErr := ""
@@ -711,6 +743,8 @@ func cmdAudit(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
+	b.readUnsettled(*signersPath)
 	if err := watchPeg(b, false); err != nil {
 		return err
 	}
@@ -796,6 +830,7 @@ func cmdRefund(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 
 	if *list {
 		state, err := b.load()

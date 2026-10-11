@@ -33,8 +33,10 @@ type blockBuilder struct {
 	vm *VM
 
 	// Synchronization
-	lock          sync.Mutex
-	pendingSignal *sync.Cond // Signal when transactions are pending
+	lock sync.Mutex
+	// wake holds at most one pending wake-up for waitForNeedToBuild. A
+	// signal sent while nobody waits stays in it, so none is lost.
+	wake chan struct{}
 
 	// Transaction event channel
 	txSubmitChan chan struct{}
@@ -55,8 +57,8 @@ func newBlockBuilder(vm *VM) *blockBuilder {
 		vm:           vm,
 		txSubmitChan: make(chan struct{}, txSubmitChannelSize),
 		shutdownChan: vm.shutdownChan,
+		wake:         make(chan struct{}, 1),
 	}
-	b.pendingSignal = sync.NewCond(&b.lock)
 	return b
 }
 
@@ -96,7 +98,10 @@ func (b *blockBuilder) signalCanBuild() {
 	b.hasPendingTxs = true
 	b.lock.Unlock()
 
-	b.pendingSignal.Broadcast()
+	select {
+	case b.wake <- struct{}{}:
+	default: // one is already pending
+	}
 }
 
 // needToBuild returns true if there are pending transactions and no verified
@@ -180,58 +185,38 @@ func (b *blockBuilder) handleBuildAttempt(parentHash chainhash.Hash) {
 	}
 }
 
-// waitForNeedToBuild blocks until transactions are pending
+// recheckEvery is how often waitForNeedToBuild looks again without a
+// signal: a block leaving consensus, say, can make building needed again
+// with no new transaction to announce it.
+const recheckEvery = 500 * time.Millisecond
+
+// waitForNeedToBuild blocks until there is something to build, ctx is done,
+// or the VM shuts down. It checks the condition without holding b.lock
+// (needToBuild reads the chain and mempool), and a wake-up sent at any
+// moment, even before it starts waiting, is kept in b.wake.
 func (b *blockBuilder) waitForNeedToBuild(ctx context.Context) error {
-	b.lock.Lock()
-	defer b.lock.Unlock()
-
-	for !b.hasPendingTxs && !b.needToBuild() {
-		b.vm.ctx.Log.Debug("no transactions in mempool, waiting for signal")
-
-		// Create a channel that will be closed when the condition is signaled
-		signaled := make(chan struct{})
-
-		// Start a goroutine to wait on the condition variable
-		go func() {
-			b.lock.Lock()
-			defer b.lock.Unlock()
-			b.pendingSignal.Wait()
-			close(signaled)
-		}()
-
-		// Temporarily release the lock so the goroutine can acquire it
+	tick := time.NewTicker(recheckEvery)
+	defer tick.Stop()
+	for {
+		b.lock.Lock()
+		pending := b.hasPendingTxs
 		b.lock.Unlock()
-
-		// Wait for either the signal or context cancellation
+		if pending || b.needToBuild() {
+			b.lock.Lock()
+			b.hasPendingTxs = false
+			b.lock.Unlock()
+			b.vm.ctx.Log.Debug("transactions available in mempool")
+			return nil
+		}
 		select {
-		case <-signaled:
-			// Condition was signaled, re-acquire lock and check condition
-			b.lock.Lock()
-			// Continue loop to re-check the condition
-
+		case <-b.wake:
+		case <-tick.C:
 		case <-ctx.Done():
-			// Context was cancelled, broadcast to wake up the waiting goroutine
-			b.pendingSignal.Broadcast()
-			// Wait for the goroutine to finish to prevent leak
-			<-signaled
-			// Re-acquire lock before returning
-			b.lock.Lock()
 			return ctx.Err()
-
 		case <-b.shutdownChan:
-			// Shutdown requested, broadcast to wake up the waiting goroutine
-			b.pendingSignal.Broadcast()
-			// Wait for the goroutine to finish to prevent leak
-			<-signaled
-			// Re-acquire lock before returning
-			b.lock.Lock()
 			return context.Canceled
 		}
 	}
-
-	b.vm.ctx.Log.Debug("transactions available in mempool")
-	b.hasPendingTxs = false
-	return nil
 }
 
 // waitForEvent waits for an event that requires block building

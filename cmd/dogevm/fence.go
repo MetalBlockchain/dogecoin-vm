@@ -10,9 +10,9 @@ package main
 // signs nothing until its operator restores the log and removes the marker.
 //
 // This catches a stale log once anything signed after it reaches a chain. A
-// signature the coordinator holds back is not visible to it; until
-// DogecoinVM has the anchor rule (every transaction on a chain spends its
-// oldest coin), nothing else keeps that from confirming alongside another.
+// signature the coordinator holds back is not visible to it; the anchor
+// rule (every transaction on a chain spends the tip of its line, lineage.go)
+// keeps such a transaction from confirming alongside another.
 
 import (
 	"bytes"
@@ -112,6 +112,179 @@ func (c *cosigner) unlogged(s *pegState) []string {
 	return missing
 }
 
+// adoptedKey is the log key of a transaction's action, read from its tags.
+func adoptedKey(tx *wire.MsgTx) (string, bool) {
+	var a action
+	if op, ok := parseRelease(tx); ok {
+		a = action{Kind: actionRelease, Deposit: op.String()}
+	} else if id, ok := parsePayment(tx); ok {
+		a = action{Kind: actionPayout, PegOut: id.String()}
+	} else if op, ok := parseRefund(tx); ok {
+		a = action{Kind: actionRefund, Deposit: op.String()}
+	} else if op, ok := parseCancel(tx); ok {
+		a = action{Kind: actionCancel, Deposit: op.String()}
+	} else if op, ok := parseFence(tx); ok {
+		a = action{Kind: actionFence, Deposit: op.String()}
+	} else {
+		return "", false
+	}
+	key, err := a.key()
+	return key, err == nil
+}
+
+// adopt adds to c's log each transaction the chains show this key signed and
+// the log lacks, under the action it did: for a key that signed before
+// signers kept logs (the bridge once signed with every key itself). Only
+// transactions in a block are adopted, dated when they were; one that isn't,
+// or whose action its tags don't say, is left to investigate, and then
+// nothing is written.
+func (c *cosigner) adopt(s *pegState) ([]string, error) {
+	missing := c.unlogged(s)
+	if len(missing) == 0 {
+		return nil, c.adoptCutover(s)
+	}
+	byID := map[string]chainTx{}
+	for _, t := range append(append([]chainTx{}, s.vmTxs...), s.dogeTxs...) {
+		byID[t.tx.TxHash().String()] = t
+	}
+	keys := make([]string, len(missing))
+	for i, id := range missing {
+		t := byID[id]
+		if t.confirmations <= 0 {
+			return nil, fmt.Errorf("%s is not in a block: an unlogged signature that may still confirm is never adopted; find out who signed it", id)
+		}
+		key, ok := adoptedKey(t.tx)
+		if !ok {
+			return nil, fmt.Errorf("%s: its tags don't say which action it did", id)
+		}
+		keys[i] = key
+	}
+	for i, id := range missing {
+		t := byID[id]
+		a := c.log.Actions[keys[i]]
+		if a == nil {
+			a = &loggedAction{First: t.time}
+			c.log.Actions[keys[i]] = a
+		}
+		entry := loggedTx{Txid: unsignedHash(t.tx).String(), Signed: []string{id}}
+		for _, in := range t.tx.TxIn {
+			entry.Inputs = append(entry.Inputs, in.PreviousOutPoint.String())
+		}
+		a.Txs = append(a.Txs, entry)
+	}
+	return missing, c.adoptCutover(s)
+}
+
+// adoptCutover finishes an adopted log: its anchors start where the lines
+// are now, and, in the same write, it starts a cutover. A log rebuilt from
+// the chains knows nothing of signatures kept back, so it signs only
+// fences until they are dead (cutover.go).
+func (c *cosigner) adoptCutover(s *pegState) error {
+	if _, err := c.fillAnchors(s); err != nil {
+		return err
+	}
+	c.log.History = ""
+	return c.startCutover(s)
+}
+
+// tips is the tip of each chain's anchor line in s (lineage.go), by chain;
+// a chain whose line has no root yet is left out.
+func tips(s *pegState) (map[string]string, error) {
+	out := map[string]string{}
+	for chain, line := range map[string]*lineage{chainDogecoin: s.pegLine, chainDogecoinVM: s.reserveLine} {
+		if line == nil {
+			continue
+		}
+		tip, _, _, ok, err := line.tip()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", chain, err)
+		}
+		if ok {
+			out[chain] = tip.String()
+		}
+	}
+	return out, nil
+}
+
+// fillAnchors sets each chain's anchor in c's log that is empty to the tip
+// of that chain's line, and checks each one already there leads to the
+// tip; it changes nothing on a failure. Run by adopt and by signer-log
+// anchors -set: every signer of a set must end up with the same anchors
+// (deploy/upgrade-bridge.sh compares them), or one could follow a line of
+// its own. An anchor that no longer leads to the tip (the line ended at a
+// spend that paid nothing back, or a reorganisation took the coin) is
+// recovered by a cutover (with a reviewed release since Round 11, AA1), not by moving the anchor:
+// its fences spend every coin the set holds, the old anchor included, so
+// whatever this signer signed from it can't confirm (RUNBOOK.md, "Anchor
+// lineage").
+func (c *cosigner) fillAnchors(s *pegState) (map[string]string, error) {
+	t, err := tips(s)
+	if err != nil {
+		return nil, err
+	}
+	set := map[string]string{}
+	for chain, tip := range t {
+		op, err := parseOutPoint(tip)
+		if err != nil {
+			return nil, err
+		}
+		line := s.pegLine
+		if chain == chainDogecoinVM {
+			line = s.reserveLine
+		}
+		probe := wire.NewMsgTx(1)
+		probe.AddTxIn(wire.NewTxIn(&op, nil, nil))
+		if c.log.Anchors[chain] != "" {
+			if err := c.log.anchorMoved(chain, probe, nil, line); err != nil {
+				return nil, fmt.Errorf("%s: the log's anchor doesn't lead to the line's tip %v: %w (recover with a reviewed release; RUNBOOK.md, \"Anchor lineage\")", chain, op, err)
+			}
+			continue
+		}
+		set[chain] = tip
+	}
+	if c.log.Anchors == nil {
+		c.log.Anchors = map[string]string{}
+	}
+	for chain, tip := range set {
+		c.log.Anchors[chain] = tip
+	}
+	return t, nil
+}
+
+// walkedTips is, per chain, where the log's anchor leads following the
+// line forward along confirmed spends (lineage.next, never a restart): the
+// coin this signer would accept as the anchor now. It is the line's tip
+// for a signer that agrees with the others; deploy/upgrade-bridge.sh
+// compares it with the coordinator's tips. An anchor that leads nowhere
+// shows as "error: ...".
+func walkedTips(l *signingLog, s *pegState) map[string]string {
+	out := map[string]string{}
+	for chain, line := range map[string]*lineage{chainDogecoin: s.pegLine, chainDogecoinVM: s.reserveLine} {
+		last := l.Anchors[chain]
+		if last == "" || line == nil {
+			continue
+		}
+		cur, err := parseOutPoint(last)
+		if err != nil {
+			out[chain] = "error: " + err.Error()
+			continue
+		}
+		for range len(line.coins) + 2 {
+			next, more, err := line.next(cur)
+			if err != nil {
+				out[chain] = "error: " + err.Error()
+				break
+			}
+			if !more {
+				out[chain] = cur.String()
+				break
+			}
+			cur = next
+		}
+	}
+	return out
+}
+
 // txids is every transaction in the log, by its unsigned txid.
 func (l *signingLog) txids() map[string]bool {
 	ids := map[string]bool{}
@@ -165,6 +338,30 @@ func (c *cosigner) fence(s *pegState) error {
 	return nil
 }
 
+// printTips prints the tips of the anchor lines as the coordinator's nodes
+// see them.
+func printTips(b *bridge, s *settings, signersPath, depositsPath string) error {
+	signers, err := readSignerSet(signersPath)
+	if err != nil {
+		return err
+	}
+	if err := b.connect(s, signers); err != nil {
+		return err
+	}
+	b.registry = registryFor(depositsPath, signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(signersPath), "contributions.txt")
+	state, err := b.load()
+	if err != nil {
+		return err
+	}
+	t, err := tips(state)
+	if err != nil {
+		return err
+	}
+	printJSON(map[string]any{"tips": t})
+	return nil
+}
+
 // syncDir makes a rename or a new file in dir durable.
 func syncDir(dir string) error {
 	d, err := os.Open(dir)
@@ -181,13 +378,19 @@ func syncDir(dir string) error {
 // signature that the log lacks, and changes nothing: run it before
 // upgrading a signer to a version that quarantines on them.
 //
+// adopt adds to the log (starting it if need be) what the key signed before
+// signers kept logs: every transaction in a block that carries its signature
+// and the log lacks, under the action its tags name. It adopts nothing if
+// any such transaction isn't in a block, or doesn't say its action.
+//
 // init starts a log for a key that has none: a key made before signer keys
 // came with a log, that has never signed. It refuses if the chains show a
 // transaction the key signed: that key's log was lost, and must be restored
 // from a backup instead.
 func cmdSignerLog(args []string) error {
-	const usage = "usage: dogevm signer-log check|init -signers FILE -key-file FILE [-log FILE]"
-	if len(args) == 0 || (args[0] != "init" && args[0] != "check") {
+	const usage = "usage: dogevm signer-log check|init|adopt|anchors|cutover|status -signers FILE -key-file FILE [-log FILE]"
+	steps := map[string]bool{"init": true, "check": true, "adopt": true, "anchors": true, "cutover": true, "status": true}
+	if len(args) == 0 || !steps[args[0]] {
 		return errors.New(usage)
 	}
 	step := args[0]
@@ -197,13 +400,27 @@ func cmdSignerLog(args []string) error {
 	keyFile := fs.String("key-file", "", "this signer's private key")
 	depositsPath := fs.String("deposits", "", "this signer's deposit address registry (default: deposits.json next to -signers)")
 	logPath := fs.String("log", "", "signing log (default: signing-log.json next to -key-file)")
+	setAnchors := fs.Bool("set", false, "anchors: set the log's empty anchors to the lines' tips")
 	s.register(fs)
 	b := bridgeFlags(fs)
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
+	// A log checked or rebuilt against the wrong network would be wrong, and
+	// the networks default to testnet: name them, by flag or environment
+	// (a signer's signer.env sets both).
+	named := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { named[f.Name] = true })
+	if !named["doge-network"] && os.Getenv("DOGECOIN_NETWORK") == "" || !named["vm-network"] && os.Getenv("DOGEVM_NETWORK") == "" {
+		return errors.New("name the networks: -doge-network and -vm-network, or DOGECOIN_NETWORK and DOGEVM_NETWORK (a signer's signer.env sets both)")
+	}
 	if err := s.resolve(); err != nil {
 		return err
+	}
+	if step == "anchors" && *keyFile == "" {
+		// The coordinator's view: the lines' tips alone, to compare with
+		// the signers'.
+		return printTips(b, &s, *signersPath, *depositsPath)
 	}
 	if err := required(map[string]string{"signers": *signersPath, "key-file": *keyFile}); err != nil {
 		return err
@@ -211,13 +428,37 @@ func cmdSignerLog(args []string) error {
 	if *logPath == "" {
 		*logPath = filepath.Join(filepath.Dir(*keyFile), "signing-log.json")
 	}
+	// status writes only when it can have the log to itself: with the
+	// signer running, the signer finishes its own cutover (on its next
+	// request or HTTP /status), and status just reads.
+	canAdvance := false
+	if step == "status" {
+		lock, err := lockSigningLog(*logPath)
+		switch {
+		case err == nil:
+			defer lock.Close()
+			canAdvance = true
+		case !errors.Is(err, errSignerRunning):
+			return err
+		}
+	}
+	if step == "init" || step == "adopt" || step == "cutover" || step == "anchors" && *setAnchors {
+		// These write the log: the signer must be stopped, or one of its
+		// signatures could be written over (lockSigningLog). Taken before
+		// the log is read.
+		lock, err := lockSigningLog(*logPath)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+	}
 	log := &signingLog{path: *logPath, Actions: map[string]*loggedAction{}}
 	if step == "init" {
 		if _, err := os.Lstat(*logPath); err == nil {
 			return fmt.Errorf("%s already exists", *logPath)
 		}
-	} else {
-		var err error
+	} else if _, err := os.Lstat(*logPath); err == nil {
+		// check: a missing log reads as empty, to show what init would find.
 		if log, err = openSigningLog(*logPath); err != nil {
 			return err
 		}
@@ -237,6 +478,8 @@ func cmdSignerLog(args []string) error {
 		return err
 	}
 	b.registry = registryFor(*depositsPath, *signersPath)
+	b.unsettledPath = unsettledFor(*signersPath)
+	b.contributionsPath = filepath.Join(filepath.Dir(*signersPath), "contributions.txt")
 	if err := watchPeg(b, false); err != nil {
 		return err
 	}
@@ -245,10 +488,75 @@ func cmdSignerLog(args []string) error {
 		return err
 	}
 	c := &cosigner{b: b, key: key, log: log}
+	if step == "anchors" {
+		if _, err := os.Lstat(*logPath); err != nil {
+			return fmt.Errorf("there is no signing log at %s", *logPath)
+		}
+		var t map[string]string
+		if *setAnchors {
+			if t, err = c.fillAnchors(state); err != nil {
+				return err
+			}
+			if err := log.write(); err != nil {
+				return err
+			}
+		} else if t, err = tips(state); err != nil {
+			return err
+		}
+		printJSON(map[string]any{"signingLog": *logPath, "anchors": log.Anchors, "tips": t,
+			"walked": walkedTips(log, state), "history": log.History, "cutoverLeft": c.cutoverLeft(state)})
+		return nil
+	}
+	if step == "cutover" || step == "status" {
+		if _, err := os.Lstat(*logPath); err != nil {
+			return fmt.Errorf("there is no signing log at %s", *logPath)
+		}
+		switch {
+		case step == "cutover":
+			if err := c.startCutover(state); err != nil {
+				return err
+			}
+		case step == "status" && canAdvance:
+			// Round 7, W10: a cutover whose every coin is cleared is
+			// finished here too (history "fenced"), not only on the
+			// signer's next request; so status shows where it stands.
+			if _, err := c.advanceCutover(state); err != nil {
+				return err
+			}
+		}
+		t, err := tips(state)
+		if err != nil {
+			return err
+		}
+		printJSON(map[string]any{"signingLog": *logPath, "history": log.History, "cutoverEpoch": log.CutoverEpoch,
+			"cutoverLeft": c.cutoverLeft(state), "cutoverPending": c.cutoverPending(state),
+			"anchors": log.Anchors, "lineageTips": t})
+		return nil
+	}
 	missing := c.unlogged(state)
+	if step == "adopt" {
+		adopted, err := c.adopt(state)
+		if err != nil {
+			return err
+		}
+		// Written even when the chains show nothing to adopt: a signer won't
+		// start without its log.
+		if err := log.write(); err != nil {
+			return err
+		}
+		printJSON(map[string]any{"signingLog": *logPath, "adopted": adopted})
+		return nil
+	}
 	if step == "check" {
-		printJSON(map[string]any{"signingLog": *logPath, "quarantined": c.quarantined(), "unlogged": missing})
-		if len(missing) > 0 {
+		_, statErr := os.Lstat(*logPath)
+		quarantined := c.quarantined()
+		printJSON(map[string]any{"signingLog": *logPath, "exists": statErr == nil, "quarantined": quarantined, "unlogged": missing})
+		switch {
+		case statErr != nil:
+			return fmt.Errorf("there is no signing log at %s", *logPath)
+		case quarantined != "":
+			return fmt.Errorf("this signer is quarantined: %s", quarantined)
+		case len(missing) > 0:
 			return fmt.Errorf("the log lacks %d transaction(s) the chains show this key signed", len(missing))
 		}
 		return nil

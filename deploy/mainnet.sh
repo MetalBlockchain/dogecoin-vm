@@ -34,7 +34,7 @@ DOGE_CONF=/var/lib/dogecoin-main/dogecoin.conf
 DOMAIN=${DOMAIN:-metaldoge.com}
 NODE_API=http://127.0.0.1:9660
 MAX_DEPOSIT=${MAX_DEPOSIT:-100}
-MAX_CIRCULATING=${MAX_CIRCULATING:-1000}
+MAX_CIRCULATING=${MAX_CIRCULATING:-4200}
 CONFIRMATIONS=${CONFIRMATIONS:-20}
 VALIDATOR_BALANCE=${VALIDATOR_BALANCE:-5}
 
@@ -125,8 +125,20 @@ ENV
     chown dogevm:dogevm "$public"
   fi
   # The registry is pinned, so it doesn't move when the signer set does
-  # (it defaults to the folder of -signers, which would be empty).
-  local policy="-deposits $SECRETS/deposits.json -confirmations $CONFIRMATIONS \
+  # (it defaults to the folder of -signers, which would be empty). It and
+  # the finality samples live in a directory of their own, the only one
+  # the sandboxed web server writes (deploy/sandbox-units.sh).
+  install -d -m 700 -o dogevm -g dogevm "$STATE/web"
+  if [[ -f $SECRETS/deposits.json && ! -f $STATE/web/deposits.json ]]; then
+    mv "$SECRETS/deposits.json" "$STATE/web/deposits.json" # a host set up before
+  fi
+  for old in "$SECRETS/dogeindex" "$STATE/dogeindex"; do # its index, likewise
+    if [[ -d $old && ! -e $STATE/web/dogeindex ]]; then mv "$old" "$STATE/web/dogeindex"; fi
+  done
+  if [[ -f $STATE/finality.json && ! -e $STATE/web/finality.json ]]; then
+    mv "$STATE/finality.json" "$STATE/web/finality.json"
+  fi
+  local policy="-deposits $STATE/web/deposits.json -confirmations $CONFIRMATIONS \
 -max-deposit $(koinu "$MAX_DEPOSIT") -max-circulating $(koinu "$MAX_CIRCULATING") -doge-fee $(koinu 0.1) -confirmation-tiers 1:1,10:6,50:12"
   local health="-validation-id $(jq -r .validationID "$STATE/chain.json") -pchain-uri $NODE_API/ext/bc/P"
   [[ -f "$SECRETS/alert-webhook" ]] && health="$health -webhook $(cat "$SECRETS/alert-webhook")"
@@ -135,7 +147,8 @@ ENV
     alerts="-telegram-token-file $SECRETS/telegram-token -telegram-chat $(cat "$SECRETS/telegram-chat")"
   for unit in bridge web monitor; do
     local exec="$BIN/dogevm bridge -signers $keyed $coordinate $policy -interval 30s"
-    [[ $unit == web ]] && exec="$BIN/dogevm serve -signers $public $policy ${health% -webhook*} -doge-index $STATE/dogeindex -listen 127.0.0.1:8081"
+    # -chain-id fills /api/info's chainID (2hFCfzdMmfXBxYgvvdL7BYiJAxdejyn4AksMYUM2eM5gN7Xrjy on metaldoge.com).
+    [[ $unit == web ]] && exec="$BIN/dogevm serve -signers $public $policy -chain-id $chain ${health% -webhook*} -doge-index $STATE/web/dogeindex -finality $STATE/web/finality.json -listen 127.0.0.1:8081"
     [[ $unit == monitor ]] && exec="$BIN/dogevm monitor -signers $public $policy $health $alerts"
     cat >"/etc/systemd/system/dogevm-$unit-main.service" <<UNIT
 [Unit]

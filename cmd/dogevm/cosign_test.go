@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -42,6 +43,8 @@ func newCosignHarness(t *testing.T) *cosignHarness {
 		log, err := createSigningLog(filepath.Join(dir, "signing-log.json"))
 		require.NoError(t, err)
 		c := &cosigner{b: &own, key: key, log: log, token: "token-" + string(rune('a'+i))}
+		// Each operator sets its anchors once the set's coins are there.
+		setAnchors(t, c)
 		srv := httptest.NewServer(c.handler())
 		t.Cleanup(srv.Close)
 		h.signers = append(h.signers, c)
@@ -49,6 +52,21 @@ func newCosignHarness(t *testing.T) *cosignHarness {
 		h.b.cosigners = append(h.b.cosigners, &remoteSigner{URL: srv.URL, Token: c.token})
 	}
 	return h
+}
+
+// setAnchors is signer-log anchors -set: the operator sets the signer's
+// anchors to the tips of the lines, as its own nodes see them.
+func setAnchors(t *testing.T, c *cosigner) {
+	t.Helper()
+	state, err := c.b.load()
+	require.NoError(t, err)
+	_, err = c.fillAnchors(state)
+	require.NoError(t, err)
+	// The harness's keys are new (History "new"): they never signed
+	// without a log, so they need no cutover (round4_test.go and
+	// round5_test.go rebuild logs that do).
+	require.Equal(t, historyNew, c.log.History)
+	require.NoError(t, c.log.write())
 }
 
 func TestActionKeyIsCanonical(t *testing.T) {
@@ -198,7 +216,7 @@ func TestSignerRefusesBadProposals(t *testing.T) {
 		}), "unsigned"},
 		"spends a non-reserve output": {tamper(func(tx *wire.MsgTx) {
 			tx.TxIn[0].PreviousOutPoint = *h.coin()
-		}), "not a confirmed peg output"},
+		}), "the anchor, first"},
 		"unknown deposit": {func() signRequest {
 			r := good
 			r.Action.Deposit = wire.OutPoint{Hash: chainhash.Hash{7}}.String()
@@ -232,41 +250,54 @@ func TestSignerRefusesBadProposals(t *testing.T) {
 func TestSignerWontDoubleSign(t *testing.T) {
 	require := require.New(t)
 	h := newCosignHarness(t)
-	// A second reserve output, so two different releases are possible.
+	// A second reserve output, in a later block, so two different releases
+	// could be built.
+	h.vm.mine()
 	coinbase := wire.NewMsgTx(1)
-	coinbase.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{1}, wire.MaxPrevOutIndex), []byte{2}, nil))
+	coinbase.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{}, wire.MaxPrevOutIndex), []byte{2}, nil))
 	coinbase.AddTxOut(wire.NewTxOut(9_000_000_000*doge, h.b.signers.pkScript()))
 	h.vm.add(coinbase, 1)
 
 	alice := h.user(1)
 	h.deposit(100*doge, &alice, 6)
-	reserve := h.reserveUTXOs()
-	require.Len(reserve, 2)
-	first, _ := h.releaseRequest(reserve[:1])
-	second, _ := h.releaseRequest(reserve[1:])
+	s, err := h.b.load()
+	require.NoError(err)
+	require.Len(s.reserveUTXOs, 2)
+	anchor := *s.reserveAnchor
+	var other utxo
+	for _, u := range s.reserveUTXOs {
+		if u.outPoint != anchor.outPoint {
+			other = u
+		}
+	}
+	first, _ := h.releaseRequest([]utxo{anchor})
+	second, _ := h.releaseRequest([]utxo{other})
 	r := h.b.cosigners[0]
 
 	sign := func(req signRequest) error {
 		return r.post("/v1/sign", req, &signResponse{})
 	}
 	require.NoError(sign(first))
-	// Could confirm alongside the first: refused.
-	require.ErrorContains(sign(second), "could confirm alongside")
+	// From another coin it could confirm alongside the first: refused, by
+	// the anchor (every release spends the reserve's oldest coin).
+	require.ErrorContains(sign(second), "the anchor, first")
 	// A different textual encoding of the same deposit is the same action.
 	// The deposit output is vout 0, so appending a zero changes :0 to :00.
 	aliased := second
 	aliased.Action.Deposit += "0"
-	require.ErrorContains(sign(aliased), "could confirm alongside")
+	require.ErrorContains(sign(aliased), "the anchor, first")
 	// The same transaction again is fine.
 	require.NoError(sign(first))
 
-	// Once the first can no longer confirm (its input is spent by
-	// something else), a replacement may be signed.
+	// Once the first can no longer confirm (its input is spent in a block
+	// by something else), the anchor moves, and a new one may be signed.
 	spend := wire.NewMsgTx(1)
-	spend.AddTxIn(wire.NewTxIn(&reserve[0].outPoint, nil, nil))
-	spend.AddTxOut(wire.NewTxOut(reserve[0].value, h.b.signers.pkScript()))
+	spend.AddTxIn(wire.NewTxIn(&anchor.outPoint, nil, nil))
+	spend.AddTxOut(wire.NewTxOut(anchor.value, h.b.signers.pkScript()))
 	h.vm.add(spend, 1)
-	second, _ = h.releaseRequest(reserve[1:])
+	s, err = h.b.load()
+	require.NoError(err)
+	second, _ = h.releaseRequest([]utxo{*s.reserveAnchor})
 	require.NoError(sign(second))
 
 	// The log survives a restart.
@@ -359,4 +390,36 @@ func TestCoordinatorNamesEachSigner(t *testing.T) {
 	require.Equal("aa", pinned[0].TLSPin)
 	swapped := []*remoteSigner{{URL: "https://signer1.example", TLSPin: "bb"}}
 	require.ErrorContains(set.identifyCosigners(swapped), "not the pin on its card")
+}
+
+// TestSignerLimitsNewRegistrations: a coordinator-key holder can't make a
+// signer's node watch addresses without end, by registering them or by
+// naming them in proposals.
+func TestSignerLimitsNewRegistrations(t *testing.T) {
+	require := require.New(t)
+	h := newCosignHarness(t)
+	c, r := h.signers[0], h.b.cosigners[0]
+	c.maxRegistrations = 3
+	for i := byte(1); i <= 3; i++ {
+		require.NoError(r.register(h.user(i)))
+	}
+	require.ErrorContains(r.register(h.user(4)), "limit")
+	require.NoError(r.register(h.user(2)), "one already watched is free")
+
+	// Naming a new one in a proposal counts too.
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: 1}, nil, nil))
+	req := signRequest{Chain: chainDogecoinVM, Tx: encodeTx(tx), Register: []string{encodeDest(h.user(5))},
+		Action: action{Kind: actionRelease, Deposit: (wire.OutPoint{}).String()}}
+	_, _, _, err := c.check(req)
+	require.ErrorContains(err, "limit")
+	registered, err := c.b.registry.has(h.user(5))
+	require.NoError(err)
+	require.False(registered)
+
+	// An hour later, there is room again.
+	for i := range c.registered {
+		c.registered[i] = c.registered[i].Add(-time.Hour)
+	}
+	require.NoError(r.register(h.user(4)))
 }

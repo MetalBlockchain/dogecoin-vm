@@ -20,13 +20,70 @@ type confirmationTier struct {
 
 // confirmationsFor is how many Dogecoin confirmations a deposit of value
 // koinu needs before it's credited.
+//
+// On mainnet nothing is credited at fewer than minMainnetConfirmations,
+// whatever a tier says: a Dogecoin block can be reorganised away, and one
+// confirmation (as the beta policy's smallest tier allowed) is undone by an
+// ordinary orphan.
 func (b *bridge) confirmationsFor(value int64) int64 {
+	n := b.depositConfirmations
 	for _, t := range b.confirmationTiers {
 		if value <= t.UpTo {
-			return t.Confirmations
+			n = t.Confirmations
+			break
 		}
 	}
-	return b.depositConfirmations
+	if n < b.confFloor {
+		n = b.confFloor
+	}
+	return n
+}
+
+// minMainnetConfirmations is the fewest Dogecoin confirmations a mainnet
+// deposit is credited at, however small.
+const minMainnetConfirmations = 6
+
+// shallowCap is the most the peg credits, in total, from deposits that
+// don't yet have the full -confirmations: -max-shallow, or by default the
+// largest tier's amount. Tiers bound each deposit, not their sum: many
+// small deposits in one block would each pass the lowest tier, and one
+// reorganisation would undo them all while their credits on DogecoinVM
+// stand.
+func (b *bridge) shallowCap() int64 {
+	if b.maxShallow > 0 {
+		return b.maxShallow
+	}
+	if n := len(b.confirmationTiers); n > 0 {
+		return b.confirmationTiers[n-1].UpTo
+	}
+	return 0 // no tiers: nothing is credited before full confirmations
+}
+
+// shallowCredited is what the peg has credited from deposits still short of
+// the full confirmations.
+func (b *bridge) shallowCredited(s *pegState) int64 {
+	var total int64
+	for _, d := range s.deposits {
+		if _, done := s.released[d.outPoint]; done && d.confirmations < b.depositConfirmations {
+			total += d.value
+		}
+	}
+	return total
+}
+
+// shallowRoom reports whether crediting d now keeps shallow credit within
+// shallowCap, given other shallow credit already promised. A deposit with
+// the full confirmations always fits.
+func (b *bridge) shallowRoom(s *pegState, d deposit, promised int64) error {
+	if d.confirmations >= b.depositConfirmations {
+		return nil
+	}
+	limit := b.shallowCap()
+	if total := b.shallowCredited(s) + promised + d.value; total > limit {
+		return fmt.Errorf("crediting deposit %v at %d confirmations would put %s DOGE on deposits short of %d confirmations (limit %s DOGE); it waits for more",
+			d.outPoint, d.confirmations, formatDoge(total), b.depositConfirmations, formatDoge(limit))
+	}
+	return nil
 }
 
 // parseConfirmationTiers reads "10:6,50:12" (up to 10 DOGE: 6
@@ -123,6 +180,25 @@ func sameTiers(a, b []confirmationTier) bool { return slices.Equal(a, b) }
 
 // tiersForAPI is the tiers with amounts as DOGE strings, like every other
 // amount the API returns.
+// creditTiers are the tiers as deposits are actually credited: each raised
+// to the mainnet floor, and a tier that then asks no more than the one
+// before folded into it. /api/info publishes these, so the site never
+// promises a deposit fewer confirmations than confirmationsFor waits.
+func (b *bridge) creditTiers() []confirmationTier {
+	var out []confirmationTier
+	for _, t := range b.confirmationTiers {
+		if t.Confirmations < b.confFloor {
+			t.Confirmations = b.confFloor
+		}
+		if n := len(out); n > 0 && out[n-1].Confirmations >= t.Confirmations {
+			out[n-1].UpTo = t.UpTo
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 func tiersForAPI(tiers []confirmationTier) []map[string]any {
 	out := make([]map[string]any, len(tiers))
 	for i, t := range tiers {
