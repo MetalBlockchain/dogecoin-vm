@@ -23,17 +23,13 @@ kept working, and no balance changed.
 - **Deposits wait at least 6 Dogecoin confirmations** (about 6 minutes), however
   small: one confirmation can be undone by an ordinary Dogecoin reorg.
 - The site's services run with tighter system sandboxing.
-
-## In the code, not yet released
-
-- **Public RPC hardening** (thanks [@MlennGarien](https://github.com/MlennGarien), #4).
-  The fix the live node has run since 26 Sep, now in the public code with a test.
-- **Signer-set fingerprints use the full hash** (thanks @MlennGarien, #3).
-  Operators confirm a signer set by reading 24 words instead of a short code.
-- **Signer connections and passkey backups** (thanks @MlennGarien, #7).
-  A signer's connection must match the key in the signed-off signer set, and new
-  wallet-site passkey backups require PIN or biometric verification. Older
-  backups still open.
+- **Also in this release**, thanks to [@MlennGarien](https://github.com/MlennGarien):
+  public RPC hardening (#4, live on the node since 26 Sep), signer-set
+  fingerprints read as 24 words from the full hash (#3), and signer
+  connections pinned to the signed-off set, with new passkey backups requiring
+  PIN or biometric verification (#7). And DIP 21, `dogecoin:` and
+  `dogecoinvm:` payment links, drafted by
+  [@qlpqlp](https://github.com/qlpqlp) (#8).
 
 ## 9 Oct 2026: developer docs
 

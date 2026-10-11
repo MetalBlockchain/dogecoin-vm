@@ -28,19 +28,14 @@ and refunds only after a confirmed cancel.</li>
 (about 6 minutes), however small: one confirmation can be undone by an
 ordinary Dogecoin reorg.</li>
 <li>The site's services run with tighter system sandboxing.</li>
-</ul>
-<h2 id="in-the-code-not-yet-released">In the code, not yet released</h2>
-<ul>
-<li><strong>Public RPC hardening</strong> (thanks <a
-href="https://github.com/MlennGarien">@MlennGarien</a>, #4). The fix the
-live node has run since 26 Sep, now in the public code with a test.</li>
-<li><strong>Signer-set fingerprints use the full hash</strong> (thanks
-@MlennGarien, #3). Operators confirm a signer set by reading 24 words
-instead of a short code.</li>
-<li><strong>Signer connections and passkey backups</strong> (thanks
-@MlennGarien, #7). A signer's connection must match the key in the
-signed-off signer set, and new wallet-site passkey backups require PIN
-or biometric verification. Older backups still open.</li>
+<li><strong>Also in this release</strong>, thanks to <a
+href="https://github.com/MlennGarien">@MlennGarien</a>: public RPC
+hardening (#4, live on the node since 26 Sep), signer-set fingerprints
+read as 24 words from the full hash (#3), and signer connections pinned
+to the signed-off set, with new passkey backups requiring PIN or
+biometric verification (#7). And DIP 21, <code>dogecoin:</code> and
+<code>dogecoinvm:</code> payment links, drafted by <a
+href="https://github.com/qlpqlp">@qlpqlp</a> (#8).</li>
 </ul>
 <h2 id="9-oct-2026-developer-docs">9 Oct 2026: developer docs</h2>
 <ul>
