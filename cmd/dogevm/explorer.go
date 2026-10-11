@@ -28,7 +28,7 @@ type txView struct {
 	Confirmations int64    `json:"confirmations"`
 	BlockHash     string   `json:"blockHash,omitempty"`
 	Time          int64    `json:"time,omitempty"`
-	Kind          string   `json:"kind"`  // transfer, credit, withdrawal, reserve, reward
+	Kind          string   `json:"kind"`  // transfer, credit, withdrawal, maintenance, reserve, reward
 	Label         string   `json:"label"` // plain-words description
 	Inputs        []ioView `json:"inputs"`
 	Outputs       []ioView `json:"outputs"`
@@ -85,12 +85,43 @@ func (srv *server) describe(v *txView, tx *wire.MsgTx, spendsReserve bool) {
 			}
 			return
 		}
+		// Bridge maintenance: the reserve paid only to itself. Only the
+		// signers can spend the reserve, so the tag can be believed here.
+		if spendsReserve && paysOnly(tx, reserve) {
+			if _, ok := parseFence(tx); ok {
+				v.Kind = "maintenance"
+				v.Label = "Bridge maintenance (fence): the peg reserve moved to itself, so nothing the signers signed before can spend it. " +
+					"No one is paid; the fee comes from the bridge's operating capital."
+				return
+			}
+			if _, ok := parseCancel(tx); ok {
+				v.Kind = "maintenance"
+				v.Label = "Bridge maintenance (cancel): the peg reserve moved to itself, so a deposit can no longer be credited here before it is refunded on Dogecoin. " +
+					"The fee comes from the bridge's operating capital."
+				return
+			}
+		}
 		if _, _, ok := opReturnData(tx); ok {
 			v.Kind, v.Label = "transfer", "Transfer on DogecoinVM with an unverified bridge message"
 			return
 		}
 		v.Kind, v.Label = "transfer", "Transfer on DogecoinVM"
 	}
+}
+
+// paysOnly reports whether every output of tx pays script, apart from its
+// OP_RETURN message.
+func paysOnly(tx *wire.MsgTx, script []byte) bool {
+	paid := false
+	for _, out := range tx.TxOut {
+		switch {
+		case bytes.Equal(out.PkScript, script):
+			paid = true
+		case txscript.GetScriptClass(out.PkScript) != txscript.NullDataTy:
+			return false
+		}
+	}
+	return paid
 }
 
 // prevOut returns the output op spends, from a cache: outputs never change.
