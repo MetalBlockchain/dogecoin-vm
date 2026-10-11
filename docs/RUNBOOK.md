@@ -325,13 +325,12 @@ backup. The only exceptions are named explicitly:
   separate signers existed, so every signature it made is on the chains.
   It rebuilds the log from them, anchors included.
 
-Of the three DogecoinVM signers set up in September 2026, signer 3 has no
-log, and signers 1 and 2 have logs only
-from 1 October 2026 on, written by software from before the cutover rule.
-So the first upgrade adopts signer 3 only (`ADOPT_LOGS="dogevm-signer-3"`);
-signers 1 and 2 keep their logs and are cut over as unproven. Then it
-fences both chains: neither adoption nor an old log shows a signature kept
-back, or one made before the logs began. Follow "First
+A signer whose log doesn't cover everything its key signed (no log, or a
+log begun after the key first signed: `signer-log check` lists the
+transactions it lacks as `unlogged`) is adopted: its log is rebuilt from the
+chains. The upgrade then cuts over every signer and fences both chains:
+neither adoption nor an old log shows a signature kept back, or one made
+before the logs began. Follow "First
 upgrade of the live bridge" below, step by step.
 
 After an upgrade to this version, while the bridge is still paused, move
@@ -361,11 +360,10 @@ explorer); if not, contribute first, or payouts wait.
 
 ## First upgrade of the live bridge
 
-The live DogecoinVM bridge (Metal mainnet, Dogecoin mainnet) runs software
-from before the cutover rule. Signer 3 kept no log; signers 1 and 2 kept
-logs only from 1 October 2026, so neither shows what was signed in
-September. Its first upgrade adopts signer 3's log from the chains, cuts
-over all three, and fences both chains before anything else is signed. Do these in order, as root on the bridge's host;
+For a bridge running software from before the cutover rule. Signers whose
+logs don't cover everything they signed are adopted from the chains; the
+upgrade cuts over all of them and fences both chains before anything else is
+signed. Do these in order, as root on the bridge's host;
 stop at the first surprise, and stay paused until the last step. Nothing
 here touches the VM plugin (the Metal node keeps running it); that is
 upgraded separately.
@@ -459,8 +457,7 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
    stops (exit 3) if it fails; if `inventory` couldn't run at all (a node
    down, a wrong path) that is exit 1, not 3.
 5. **Reconcile against the chain, outpoint by outpoint (stop gate).**
-   Signer 3 kept no log and signers 1 and 2 none before 1 October, so
-   nothing records everything they signed; the
+   When no signer's log records everything it signed, the
    cutover can only fence what the wallets know. Check that what they know
    is everything: for every address `inventory` lists under `addresses`
    (the peg address and every registered personal deposit address), list
@@ -493,17 +490,19 @@ Read them again after step 10 (`move-web-state.sh` moves the registry).
 7. **Backup.** `dogevm-backup run`, then copy it off the host
    (`scripts/pull-backups.sh`).
 8. **Upgrade, adopt, fence.** Without `RESUME`, so you resume by hand,
-   adopting only signer 3, the one with no log (no key may use
-   `INIT_LOGS`: all three have signed; signers 1 and 2 keep their logs,
-   which the upgrade checks and cuts over; `ADOPT_LOGS` acts only on a
-   signer with no log):
+   adopting every signer whose log lacks something it signed (no key that
+   has signed may use `INIT_LOGS`). `ADOPT_LOGS` acts only on a signer with
+   no log, so first stop each such signer and move its log aside (keep it):
+   `signer-log adopt` into a scratch file, as that signer's user, must
+   succeed and contain every action of the old log. A signer whose log is
+   complete keeps it; the upgrade checks it and cuts it over:
 
        cd /opt/dogevm/src
-       REMOTE=$REMOTE BRANCH=$BRANCH ADOPT_LOGS="dogevm-signer-3" \
+       REMOTE=$REMOTE BRANCH=$BRANCH ADOPT_LOGS="<every signer whose log lacks something>" \
          deploy/upgrade-bridge.sh $C
 
    It runs "Upgrading the bridge software": coverage compared, inventory
-   checked, signer 3's log adopted, all three cut over and their recorded coins
+   checked, the named logs adopted, all three cut over and their recorded coins
    compared again, the point of no return crossed **before any signer
    starts**, the bridge left stopped, and fences sent on both chains until
    every signer is done (a Dogecoin fence needs 20 confirmations, about 20
@@ -583,7 +582,7 @@ The upgrade prints the commands for each of these:
    Dogecoin cutover, and a signer restarted in between keeps its cutover.
 4. Carry on from step 9 below.
 
-Rehearsed on 10 Oct 2026 (a signer that wouldn't start, then fencing
+Rehearsed (a signer that wouldn't start, then fencing
 interrupted by killing every signer): no second fence, nothing signed
 but fences, the fee as predicted.
 
