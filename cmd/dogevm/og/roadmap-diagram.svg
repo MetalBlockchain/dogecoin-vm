@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="705" height="1105" viewBox="0 0 705 1105" font-family="Helvetica, Arial, sans-serif" font-size="19">
+  <!-- The source of web/roadmap-diagram.png: scripts/render-diagram.sh.
+       Keep the alt text in pages/roadmap.html in step with it. -->
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#555"/>
+    </marker>
+    <style>
+      .panel { fill: #fafafa; stroke: #999; stroke-width: 1.5; }
+      .box { fill: #eee; stroke: #999; stroke-width: 1.5; }
+      .edge { fill: none; stroke: #555; stroke-width: 1.6; marker-end: url(#a); }
+      .label { fill: #fff; }
+      text { fill: #222; text-anchor: middle; }
+    </style>
+  </defs>
+  <rect width="705" height="1105" fill="#fff"/>
+
+  <!-- DogecoinVM on Metal -->
+  <rect class="panel" x="46" y="10" width="613" height="458"/>
+  <text x="352" y="31">DogecoinVM on Metal</text>
+  <rect class="box" x="195" y="56" width="315" height="123"/>
+  <text x="352" y="98">Peg reserve</text>
+  <text x="352" y="124">(consensus-created,</text>
+  <text x="352" y="150">signer-locked)</text>
+  <path class="edge" d="M292 181 C 240 230, 250 280, 300 327"/>
+  <path class="edge" d="M405 327 C 455 280, 465 230, 413 181"/>
+  <rect class="label" x="98" y="226" width="242" height="56"/>
+  <text x="219" y="248">credit after 6–20</text>
+  <text x="219" y="274">confirmations, by size</text>
+  <rect class="label" x="365" y="226" width="242" height="56"/>
+  <text x="486" y="248">withdrawal with a</text>
+  <text x="486" y="274">Dogecoin address</text>
+  <rect class="box" x="195" y="328" width="315" height="95"/>
+  <text x="352" y="370">User's DogecoinVM</text>
+  <text x="352" y="396">address</text>
+
+  <!-- Dogecoin -->
+  <rect class="panel" x="10" y="529" width="685" height="557"/>
+  <text x="352" y="550">Dogecoin</text>
+  <rect class="box" x="232" y="575" width="277" height="65"/>
+  <text x="370" y="614">User's Dogecoin wallet</text>
+  <path class="edge" d="M315 642 C 250 680, 205 700, 210 757"/>
+  <rect class="label" x="135" y="686" width="150" height="30"/>
+  <text x="210" y="708">sends DOGE</text>
+  <rect class="box" x="52" y="760" width="316" height="124"/>
+  <text x="210" y="800">Personal deposit address</text>
+  <text x="210" y="826">(2-of-3 signers, bound to</text>
+  <text x="210" y="852">the user)</text>
+  <path class="edge" d="M210 886 C 210 930, 260 950, 300 972"/>
+  <rect class="box" x="272" y="975" width="198" height="65"/>
+  <text x="371" y="1014">Locked DOGE</text>
+  <path class="edge" d="M440 973 C 540 930, 530 760, 530 720 C 530 680, 480 660, 430 642"/>
+  <rect class="label" x="410" y="794" width="243" height="56"/>
+  <text x="531" y="816">payout once the</text>
+  <text x="531" y="842">withdrawal is final</text>
+</svg>
