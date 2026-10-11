@@ -42,8 +42,13 @@ Each signer runs `dogevm signer` with one key. For every proposal it:
    credited twice through this signer.
 5. **Applies its daily limit**, if one is set (`-max-daily`).
 
-A compromised coordinator can therefore delay transfers but can't move
-locked DOGE. That would take `Required` signers.
+With signers run by independent operators, each on their own nodes, a
+compromised coordinator can therefore delay transfers but can't move locked
+DOGE. That would take `Required` signers.
+
+On metaldoge.com each key has run in its own signer service since 27
+September 2026 (set fingerprint `0cb9-3ab1-d970-1cf9-8024` since 1 October
+2026). During the alpha, one operator holds all of the bridge's signing keys, so you are trusting that operator. Caps and daily limits are enforced by the signer software; they don't limit what someone holding the keys could take. Moving the keys to independent operators is planned.
 
 ## The setup ceremony
 

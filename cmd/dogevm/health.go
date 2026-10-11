@@ -361,12 +361,25 @@ func postTelegram(token, chatID, msg string) error {
 
 // monitor runs the checks every interval and alerts when a check changes
 // state, and again every remind while one is failing.
-func (h *healthChecker) monitor(interval, remind time.Duration, alert alerter) {
+func (h *healthChecker) monitor(interval, remind time.Duration, alert alerter, usage *activity) {
 	last := map[string]bool{}
 	var lastAlert time.Time
 	for {
 		state, err := h.b.load()
 		checks := h.run(state, err)
+		if usage != nil && err == nil {
+			registered, rerr := h.b.registry.list()
+			if rerr == nil {
+				if lines := usage.events(state, len(registered)); len(lines) > 0 {
+					msg := "DogecoinVM bridge activity:"
+					for _, l := range lines {
+						msg += "\n- " + l
+					}
+					log.Print(msg)
+					alert.send(msg)
+				}
+			}
+		}
 
 		var changed []string
 		for _, c := range checks {
@@ -437,6 +450,7 @@ func cmdMonitor(args []string) error {
 	test := fs.Bool("test-alert", false, "send a test alert and exit")
 	interval := fs.Duration("interval", time.Minute, "time between checks")
 	remind := fs.Duration("remind", 6*time.Hour, "repeat an alert this often while a check fails")
+	notify := fs.Bool("activity", true, "also announce bridge use (deposits, credits, withdrawals, payments, refunds, new deposit addresses)")
 	once := fs.Bool("once", false, "run the checks once, print them, and exit non-zero if one fails")
 	s.register(fs)
 	b := bridgeFlags(fs)
@@ -483,6 +497,10 @@ func cmdMonitor(args []string) error {
 		alert.send("DogecoinVM bridge: test alert. Alerts are working.")
 		return nil
 	}
-	h.monitor(*interval, *remind, alert)
+	var usage *activity
+	if *notify {
+		usage = newActivity()
+	}
+	h.monitor(*interval, *remind, alert, usage)
 	return nil
 }

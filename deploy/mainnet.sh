@@ -147,7 +147,8 @@ ENV
     alerts="-telegram-token-file $SECRETS/telegram-token -telegram-chat $(cat "$SECRETS/telegram-chat")"
   for unit in bridge web monitor; do
     local exec="$BIN/dogevm bridge -signers $keyed $coordinate $policy -interval 30s"
-    [[ $unit == web ]] && exec="$BIN/dogevm serve -signers $public $policy ${health% -webhook*} -doge-index $STATE/web/dogeindex -finality $STATE/web/finality.json -listen 127.0.0.1:8081"
+    # -chain-id fills /api/info's chainID (2hFCfzdMmfXBxYgvvdL7BYiJAxdejyn4AksMYUM2eM5gN7Xrjy on metaldoge.com).
+    [[ $unit == web ]] && exec="$BIN/dogevm serve -signers $public $policy -chain-id $chain ${health% -webhook*} -doge-index $STATE/web/dogeindex -finality $STATE/web/finality.json -listen 127.0.0.1:8081"
     [[ $unit == monitor ]] && exec="$BIN/dogevm monitor -signers $public $policy $health $alerts"
     cat >"/etc/systemd/system/dogevm-$unit-main.service" <<UNIT
 [Unit]

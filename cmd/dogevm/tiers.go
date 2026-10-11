@@ -180,6 +180,25 @@ func sameTiers(a, b []confirmationTier) bool { return slices.Equal(a, b) }
 
 // tiersForAPI is the tiers with amounts as DOGE strings, like every other
 // amount the API returns.
+// creditTiers are the tiers as deposits are actually credited: each raised
+// to the mainnet floor, and a tier that then asks no more than the one
+// before folded into it. /api/info publishes these, so the site never
+// promises a deposit fewer confirmations than confirmationsFor waits.
+func (b *bridge) creditTiers() []confirmationTier {
+	var out []confirmationTier
+	for _, t := range b.confirmationTiers {
+		if t.Confirmations < b.confFloor {
+			t.Confirmations = b.confFloor
+		}
+		if n := len(out); n > 0 && out[n-1].Confirmations >= t.Confirmations {
+			out[n-1].UpTo = t.UpTo
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 func tiersForAPI(tiers []confirmationTier) []map[string]any {
 	out := make([]map[string]any, len(tiers))
 	for i, t := range tiers {

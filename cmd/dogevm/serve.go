@@ -190,7 +190,7 @@ func (srv *server) info(*http.Request) (any, error) {
 		"reserveAddress":       reserveAddr.EncodeAddress(),
 		"signers":              map[string]any{"required": srv.b.signers.Required, "publicKeys": srv.b.signers.PublicKeys},
 		"depositConfirmations": srv.b.depositConfirmations,
-		"confirmationTiers":    tiersForAPI(srv.b.confirmationTiers),
+		"confirmationTiers":    tiersForAPI(srv.b.creditTiers()),
 		"vmFee":                formatDoge(srv.b.vmFee),
 		"dogeFee":              formatDoge(srv.b.dogeFee),
 		"minDeposit":           formatDoge(srv.b.minDeposit),

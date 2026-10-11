@@ -43,9 +43,9 @@ td:last-child, th:last-child { padding-right: 0; }
 td.state { width: 1%; }
 
 .ids { display: grid; gap: 0.4rem; background: var(--surface-sunk); padding: 1rem 1.25rem; border-radius: 3px; margin: 0 0 1rem; }
-.ids div { display: grid; grid-template-columns: 11rem 1fr; gap: 1rem; }
+.ids div { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 1rem; }
 .ids dt { color: var(--ink-soft); font-size: 0.9rem; }
-.ids dd { margin: 0; font-family: var(--mono); font-size: 0.82rem; word-break: break-all; }
+.ids dd { margin: 0; min-width: 0; font-family: var(--mono); font-size: 0.82rem; overflow-wrap: anywhere; }
 @media (max-width: 34rem) { .ids div { grid-template-columns: 1fr; gap: 0; } }
 
 .flow { display: grid; gap: 1.25rem; margin: 1.25rem 0; }

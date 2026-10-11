@@ -123,9 +123,10 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .page p { margin: 0 0 1rem; }
 .page h1, .page h2 { text-wrap: balance; }
 .page .lede { font-size: 1.2rem; color: var(--ink-soft); }
-.page dl.facts-list { display: grid; grid-template-columns: max-content 1fr; gap: 0.5rem 1.5rem; margin: 1rem 0; }
+.page dl.facts-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.5rem 1.5rem; margin: 1rem 0; }
 .page dl.facts-list dt { color: var(--ink-soft); }
-.page dl.facts-list dd { margin: 0; }
+.page dl.facts-list dd { margin: 0; min-width: 0; }
+.page dl.facts-list dd code { overflow-wrap: anywhere; }
 @media (max-width: 34rem) { .page dl.facts-list { grid-template-columns: 1fr; gap: 0.1rem; } .page dl.facts-list dd { margin-bottom: 0.6rem; } }
 .page .toc { display: flex; flex-wrap: wrap; gap: 0.4rem 1.25rem; padding: 0.9rem 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); margin: 1.5rem 0; }
 .page code { font-family: var(--mono); font-size: 0.9em; }

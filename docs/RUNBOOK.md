@@ -1,13 +1,21 @@
 # Runbook
 
 What to do when something goes wrong with the mainnet bridge. The commands
-assume the host set up by `deploy/mainnet.sh`: state in `/var/lib/metal-main`,
-secrets in `/var/lib/metal-main/secrets`, services run as the `dogevm` user.
+assume the host set up by `deploy/mainnet.sh` and moved onto separate signers
+([FIRST-ROUND-TRIP.md](FIRST-ROUND-TRIP.md)), with services running as the
+`dogevm` user.
 
 ```sh
-S=/var/lib/metal-main/secrets
-dv() { sudo -u dogevm env HOME=/opt/dogevm $(cat $S/bridge.env | xargs) /opt/dogevm/bin/dogevm "$@"; }
+SECRETS=/var/lib/metal-main/secrets
+S=$SECRETS/separate-signers
+dv() { sudo -u dogevm env HOME=/opt/dogevm $(cat $SECRETS/bridge.env | xargs) /opt/dogevm/bin/dogevm "$@"; }
+# The coordinator's flags, for commands that ask the signers to sign
+co="-signers $S/signers.json -cosigners $S/cosigners.json -coordinator-key-file $S/coordinator/coordinator.key"
 ```
+
+Older copies of this runbook used `$SECRETS/signers.json`. That file no
+longer exists, so commands that name it fail. If the bridge's unit passes
+`-deposits`, pass the same to `audit` and `refund`.
 
 ## First: pause
 
@@ -16,10 +24,11 @@ second. A pause is safe: nothing is lost, and deposits and withdrawals made
 while paused are processed after it ends.
 
 ```sh
-dv pause -signers $S/signers.json -reason "Investigating an alert. Funds are safe."
+dv pause -signers $S/signers.json -reason "Investigating an alert. Deposits and withdrawals are on hold."
 ```
 
-Within seconds:
+This writes `$S/paused.json`, next to the set the bridge, web wallet and
+monitor run with. Within seconds:
 - the bridge stops proposing and paying anything, and refunds are refused;
 - metaldoge.com shows a red banner with the reason, and `/api/status` has
   `paused`;
@@ -32,10 +41,17 @@ To resume, once the cause is understood and fixed:
 dv resume -signers $S/signers.json
 ```
 
-With separate signers, each operator can also pause their own signer:
-`dogevm pause -dir /var/lib/dogevm-signer -reason "..."`. Once fewer than
-the required number of signers are available, nothing moves. A pause is the
-one power every operator has on their own.
+Each signer can also be paused on its own:
+
+```sh
+sudo -u dogevm /opt/dogevm/bin/dogevm pause -dir /var/lib/dogevm-signer-N -reason "..."   # N = 1, 2 or 3
+sudo -u dogevm /opt/dogevm/bin/dogevm resume -dir /var/lib/dogevm-signer-N
+```
+
+Once fewer than the required number of signers are available, nothing
+moves. With independent operators, a pause is the one power every operator
+has on their own. A pause that other operators can trigger remotely isn't in
+the live bridge yet: each pause is written where its process runs.
 
 Any operator can also pause **every** signer, without the coordinator:
 `dogevm pause -dir /var/lib/dogevm-signer -remote all -key-file
@@ -47,13 +63,12 @@ resumed. Only each signer's own operator resumes it, with `dogevm resume
 -dir`, so a stolen operator key can stop the peg but never restart it.
 
 **What a pause does not do.** It stops the software. It does not stop
-someone who has stolen the keys. While all three signer keys are on one
-server, a compromise of that server exposes them all. The beta caps (100
-DOGE per deposit, 1,000 in total) do **not** bound that loss: they are
-enforced by the signer software, not by the peg's script, so whoever holds
-two keys can move everything locked, held deposits included. The caps bound
-what a bug or a misbehaving coordinator can do. Separate signers (Phase 2)
-are the real fix.
+someone who has stolen the keys. During the alpha one operator holds all of
+the bridge's signing keys. The alpha caps (100 DOGE per deposit, 4,200 DOGE
+in total) and each signer's daily limit (4,200 DOGE) are enforced by the
+signer software, so they don't limit what someone holding the keys could
+take. The signers already run as separate services; the real fix is moving
+the keys to independent operators (Phase 3 on the roadmap).
 
 ## Alerts
 
@@ -73,7 +88,7 @@ The monitor checks every minute and alerts on Telegram when a check changes.
 ## A deposit that hasn't arrived
 
 ```sh
-dv refund -signers $S/signers.json -list     # held or not yet credited, and why
+dv refund $co -list     # held or not yet credited, and why
 ```
 
 - **Waiting for confirmations** (20, or fewer for small deposits under the
@@ -83,13 +98,19 @@ dv refund -signers $S/signers.json -list     # held or not yet credited, and why
 - **Waiting for room under the circulating cap:** it's credited when there is room, or refund it.
 - **Above the maximum deposit, below the minimum, or no destination:** refund it.
 
+Users ask for refunds through the contact details at
+[metaldoge.com/terms#contact](https://metaldoge.com/terms#contact). Check that
+the request comes from the sender before refunding anywhere but back to the
+sender.
+
 ```sh
-dv refund -signers $S/signers.json -deposit TXID:VOUT            # back to the sender
-dv refund -signers $S/signers.json -deposit TXID:VOUT -to DOGEADDR
+dv refund $co -deposit TXID:VOUT            # back to the sender
+dv refund $co -deposit TXID:VOUT -to DOGEADDR
 ```
 
-With separate signers, each operator first adds `TXID:VOUT DOGEADDR` to their
-`-refund-approvals` file.
+Each signer approves only refunds listed in its `-refund-approvals` file, so
+first add `TXID:VOUT DOGEADDR` to the file named by `-refund-approvals` in
+each signer's unit (`systemctl cat dogevm-signer-N`).
 
 A deposit with **no destination** (an untagged payment to the peg address)
 can never be credited, and is refunded in one run.
@@ -129,7 +150,7 @@ always do them.
    for investigation.
 5. Rebuild on a new server from backup (below). Treat every key that was on
    the old server as exposed: move the funds to new keys as soon as key
-   rotation exists (Phase 2).
+   rotation exists (Phase 3).
 
 ## Restore from backup
 

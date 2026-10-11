@@ -75,3 +75,25 @@ func TestPolicyTiersMustAgree(t *testing.T) {
 }
 
 func newFlagSetForTest() *flag.FlagSet { return flag.NewFlagSet("test", flag.ContinueOnError) }
+
+// /api/info's tiers must match what confirmationsFor waits: on mainnet the
+// 1-confirmation tier is raised to the floor and folded into the next.
+func TestCreditTiersApplyTheMainnetFloor(t *testing.T) {
+	b := &bridge{depositConfirmations: 20, confFloor: minMainnetConfirmations,
+		confirmationTiers: []confirmationTier{{UpTo: 1e8, Confirmations: 1}, {UpTo: 10e8, Confirmations: 6}, {UpTo: 50e8, Confirmations: 12}}}
+	got := b.creditTiers()
+	want := []confirmationTier{{UpTo: 10e8, Confirmations: 6}, {UpTo: 50e8, Confirmations: 12}}
+	require.Equal(t, want, got)
+	for _, v := range []int64{1, 1e8, 10e8, 10e8 + 1, 50e8} {
+		var n int64 = b.depositConfirmations
+		for _, tr := range got {
+			if v <= tr.UpTo {
+				n = tr.Confirmations
+				break
+			}
+		}
+		require.Equal(t, b.confirmationsFor(v), n, "value %d", v)
+	}
+	b.confFloor = 0 // regtest/testnet: tiers as configured
+	require.Equal(t, b.confirmationTiers, b.creditTiers())
+}

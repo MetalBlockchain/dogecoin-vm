@@ -12,7 +12,7 @@ locally; it doesn't validate, hold any bridge key or need any stake.
 | Subnet (L1) ID | `2t2zEB1T3mNUE2WoheMFMjfhAvQJawtgiwnKPJz2NsFk7FDgyN` |
 | DogecoinVM chain ID | `2hFCfzdMmfXBxYgvvdL7BYiJAxdejyn4AksMYUM2eM5gN7Xrjy` |
 | VM ID (plugin file name) | `mEUwHwfd8UTHf23UYkQxHvy1n1EGwWieXQnjmtzSryJRZckzu` |
-| Plugin release | **v0.1.1**, the build mainnet runs (https://github.com/MetalBlockchain/dogecoin-vm, tag `v0.1.1`) |
+| Plugin release | **v0.1.2**, the build mainnet runs (v0.1.1 plus the public-RPC hotfix; don't build v0.1.1) (https://github.com/MetalBlockchain/dogecoin-vm, tag `v0.1.2`) |
 
 ## What you need
 
@@ -34,12 +34,12 @@ sudo install -m 755 metalgo/build/metalgo /usr/local/bin/metalgo
 
 ## 2. Build the DogecoinVM plugin
 
-Build the release tag the network runs (v0.1.1); newer commits on the
+Build the release tag the network runs (v0.1.2); newer commits on the
 default branch may not be deployed yet. The plugin file must be named after
 the VM ID and sit in metalgo's plugin directory.
 
 ```sh
-git clone --branch v0.1.1 https://github.com/MetalBlockchain/dogecoin-vm
+git clone --branch v0.1.2 https://github.com/MetalBlockchain/dogecoin-vm
 cd dogecoin-vm
 go run ./scripts/vm-id-generator.go       # prints mEUwHwfd8UTHf23UYkQxHvy1n1EGwWieXQnjmtzSryJRZckzu
 sudo install -d /var/lib/metal/plugins
@@ -73,7 +73,7 @@ JSON
 | Key | What it does |
 |---|---|
 | `rpcUser` / `rpcPass` | Full JSON-RPC access. Keep it private (or leave it out). Generate the password, e.g. `openssl rand -hex 24`. |
-| `rpcLimitUser` / `rpcLimitPass` | A read-mostly login: blocks, transactions, `searchrawtransactions`, `sendrawtransaction` and similar; no wallet or admin methods. This is what metaldoge.com exposes as `public`/`public`. |
+| `rpcLimitUser` / `rpcLimitPass` | A read-only login: blocks, transactions, `searchrawtransactions` (at most 500 per call; page with `skip`) and similar; no broadcast, wallet or admin methods. This is what metaldoge.com exposes as `public`/`public`. |
 | `txIndex` | Index every transaction, so `getrawtransaction` works for any txid. |
 | `addrIndex` | Index addresses, so `searchrawtransactions` can list an address's history. Wallets and explorers need it. |
 | `dataDir`, `logDir` | Where the chain's database and logs go. Set them explicitly: otherwise they're derived from `$HOME`. |
@@ -178,7 +178,7 @@ needs:
 | Tip, blocks | `getblockcount`, `getblockhash`, `getblock` |
 | A transaction | `getrawtransaction <txid> 1` (needs `txIndex`) |
 | An address's history and UTXOs | `searchrawtransactions <address>` (needs `addrIndex`), then `gettxout` for what's unspent |
-| Broadcast | `sendrawtransaction <hex>` |
+| Broadcast | `sendrawtransaction <hex>` (full login only) |
 
 The bridge (deposit addresses, withdrawals, proof of reserves) isn't part of a
 node: use the bridge's API at metaldoge.com for that ([API.md](API.md)). Keys

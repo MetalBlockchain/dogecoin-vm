@@ -15,8 +15,10 @@ The reserve is not circulating supply. It is locked to the signers and leaves th
 ## Flows
 
 **Peg-in (Dogecoin → DogecoinVM)**
+
+0. The web and Mac wallets instead give each user a personal deposit address: a P2SH script that commits to the user's DogecoinVM address followed by the signers' multisig, so no `OP_RETURN` is needed. `POST /api/deposit-address` returns it, and the wallet re-derives it from the signers' keys before showing it. The steps below then apply the same way.
 1. The user sends DOGE on Dogecoin to the peg address. The same transaction carries an `OP_RETURN` tagged `DVMD` naming the DogecoinVM address to credit (`dogevm peg-in` builds it).
-2. After `-confirmations` Dogecoin blocks (default 6), the bridge spends the reserve. It pays the deposit amount, minus `-vm-fee` (default 0.01 DOGE), to that address, and tags the transaction `DVMI` with the deposit's outpoint.
+2. After `-confirmations` Dogecoin blocks (default 6; `-confirmation-tiers` can ask fewer for small deposits, and metaldoge.com uses 6, 12 or 20 by size: on mainnet never fewer than 6), the bridge spends the reserve. It pays the deposit amount, minus `-vm-fee` (default 0.01 DOGE), to that address, and tags the transaction `DVMI` with the deposit's outpoint.
 3. DogecoinVM finalizes the release in its next block.
 
 **Peg-out (DogecoinVM → Dogecoin)**
@@ -46,11 +48,11 @@ Each is the whole data of the transaction's single `OP_RETURN` output. Transacti
 
 This is a federated peg: **the signers can move the locked DOGE.** m of the n signers could release reserve coins with no deposit behind them, or spend DOGE locked on Dogecoin. The audit would detect either, but it cannot prevent them. This is the same trust model as other federated pegs; making it trustless needs a Dogecoin light client inside DogecoinVM (Scrypt and AuxPoW header validation) and is not built.
 
-The current bridge is a single process holding all signer keys, which suits development and a testnet only. Production needs:
-- Each signer running its own process with its own key (ideally an HSM), co-signing releases and payments that it has verified independently.
-- A deposit confirmation depth sized to Dogecoin reorg risk (tens of blocks, not 6).
-- A peg-out delay and rate limits, so a compromised signer set is caught by the audit before everything moves.
-- Monitoring and alerting on the audit.
+On metaldoge.com the bridge is a coordinator that holds no keys, and each key runs in its own signer service ([SIGNERS.md](SIGNERS.md)). During the alpha, one operator holds all of the bridge's signing keys, so you are trusting that operator. Caps and daily limits are enforced by the signer software; they don't limit what someone holding the keys could take. Moving the keys to independent operators is planned. Production needs:
+- Each signer run by an independent operator on their own machine, with their own nodes (ideally an HSM), co-signing releases and payments that it has verified independently.
+- A deposit confirmation depth sized to Dogecoin reorg risk (tens of blocks for large deposits; metaldoge.com uses 6 to 20 by size).
+- A peg-out delay and rate limits, so a compromised signer set is caught by the audit before everything moves. (Each signer's daily limit is a software rate limit; it doesn't stop someone holding the keys.)
+- Monitoring and alerting on the audit (done: the monitor checks every minute and alerts on Telegram).
 
 Other limits:
 - Deposits and peg-outs pay P2PKH or P2SH destinations only.

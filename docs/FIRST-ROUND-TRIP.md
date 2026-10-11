@@ -1,5 +1,9 @@
 # First round trip, then separate signers
 
+> Done: the first round trip on 23 September 2026, and separate signers on
+> 27 September 2026. Kept as a record; [RUNBOOK.md](RUNBOOK.md) has the
+> current operating commands.
+
 What to do once the bridge's Dogecoin node has caught up: prove a deposit
 and a withdrawal end to end on mainnet, then move the bridge onto separate
 signer services. Commands run on the server, as root.
@@ -17,15 +21,17 @@ curl -s https://metaldoge.com/api/health | jq '.status, (.checks[] | select(.ok 
 catches up too: the web wallet's Dogecoin balance appears.
 
 Then give memory back: the sync ran with a 6 GB cache (`dbcache=6000` in
-`/var/lib/dogecoin-main/dogecoin.conf`), which a synced node doesn't need on
-a 15 GB server shared with metalgo and the bridge. Set `dbcache=1000` and
+`/var/lib/dogecoin-main/dogecoin.conf`), which a synced node doesn't need.
+Set `dbcache=1000` and
 restart Dogecoin Core at a quiet moment (`systemctl restart dogecoind-main`;
 it takes a minute or two to come back).
 
 ## 1. The first deposit is credited
 
 The 1 DOGE deposit (Dogecoin transaction `74e053f6…`) is credited 20
-confirmations after the node sees it, less the 0.01 DOGE bridge fee.
+confirmations after the node sees it, less the 0.01 DOGE bridge fee. (Every
+deposit waited 20 then; since the confirmation tiers came on 25 September
+2026 a deposit waits 6 to 20, depending on its size.)
 
 - In the wallet: the DogecoinVM balance shows 0.99 DOGE, and the Deposit tab
   lists the deposit as credited.
@@ -35,7 +41,7 @@ confirmations after the node sees it, less the 0.01 DOGE bridge fee.
 - `curl -s https://metaldoge.com/api/status | jq .audit`: `locked` covers
   `circulating` plus anything pending, and the monitor's `peg` check passes.
 
-If it isn't credited within a few minutes of 20 confirmations, see "A deposit
+If it isn't credited within a few minutes of its confirmations, see "A deposit
 that hasn't arrived" in [RUNBOOK.md](RUNBOOK.md).
 
 ## 2. A withdrawal back to Dogecoin
@@ -44,8 +50,9 @@ From the Mac app (or the web wallet's Withdraw tab), withdraw at least the
 minimum to your own Dogecoin address. Check the review screen: the amount to
 the bridge, and the Dogecoin address it pays.
 
-- The withdrawal is final on DogecoinVM in about two seconds; the bridge pays
-  it on its next pass (every 30 seconds), less the 0.1 DOGE Dogecoin fee.
+- The withdrawal is final on DogecoinVM, usually in under a second; the
+  bridge pays it as soon as it sees the block (a new block on either chain
+  starts a pass at once), less the 0.1 DOGE Dogecoin fee.
 - The explorer shows the withdrawal with both transactions; the Dogecoin one
   links to a public explorer.
 - `/api/status` audit still balances, and `/api/health` stays `ok`.
@@ -53,17 +60,19 @@ the bridge, and the Dogecoin address it pays.
 ## 3. Record it
 
 Note both round trips' transaction IDs (deposit, credit, withdrawal, payout),
-then update the roadmap: "Where it stands", and Phase 1's done items, with
+then update the roadmap: "Where it stands", and Phase 2's done items, with
 links. That's the end-to-end proof.
 
 ## 4. Separate signers
 
-This moves the bridge onto the Phase 2 design on this server: three signer
-services, one key each, each checking every transaction against the nodes
-before signing, and a coordinator that holds no keys. The peg address
-doesn't change. It's a rehearsal of the protocol with live funds; the
-security gain comes when signers move to other operators' machines
-([SIGNERS.md](SIGNERS.md)).
+This moves the bridge onto the Phase 3 design: three signer services, one
+key each, each checking every transaction against the nodes before signing,
+and a coordinator that holds no keys. The peg address doesn't change. It's a
+rehearsal of the protocol with live funds; the security gain comes when the
+keys move to independent operators ([SIGNERS.md](SIGNERS.md)). Until then
+one operator holds all of the keys, and the caps and daily limits, which the
+signer software enforces, don't limit what someone holding the keys could
+take.
 
 Do it at a quiet moment: nothing pending in either direction
 (`/api/status` audit `pendingPegIns` and `pendingPegOuts` are 0).
@@ -80,8 +89,9 @@ It copies each key to its own signer directory under
 checks the keys and their order match the live set's, and writes a service
 file per signer. It starts nothing. `rm -r` the directory undoes it.
 
-Staged again on 25 September 2026 with the confirmation tiers in the policy
-(fingerprint `7c71-1377-b369-6632-ecd5`, peg address unchanged). Before starting the signers, refresh each one's copy
+Switched on 27 September 2026 (fingerprint then `7c71-1377-b369-6632-ecd5`).
+Since 1 October 2026 the live set is `0cb9-3ab1-d970-1cf9-8024` (4,200 DOGE
+cap). The peg address is unchanged. Before starting the signers, refresh each one's copy
 of the deposit registry, since addresses registered after staging aren't in
 it:
 
