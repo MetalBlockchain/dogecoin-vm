@@ -831,19 +831,14 @@ func cmdServe(args []string) error {
 	// Go does not know the web app manifest's type, and the page is served
 	// with nosniff.
 	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+	_ = mime.AddExtensionType(".ico", "image/x-icon")
+	_ = mime.AddExtensionType(".txt", "text/plain; charset=utf-8")
 	static, err := fs.Sub(webFiles, "web")
 	if err != nil {
 		return err
 	}
 	mux := http.NewServeMux()
-	// A wallet should always run its current code, so browsers check for a
-	// newer file each time rather than reusing a cached one.
-	files := http.FileServerFS(static)
-	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache")
-		files.ServeHTTP(w, r)
-	}))
-	if err := handlePages(mux); err != nil {
+	if err := handlePages(mux, static); err != nil {
 		return err
 	}
 	// New blocks are pushed to open wallets, so they refresh the moment a

@@ -3,7 +3,11 @@ package main
 import (
 	"encoding/hex"
 	"encoding/json"
+	"html/template"
+	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path"
@@ -12,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -234,4 +239,83 @@ func TestWebPasskey(t *testing.T) {
 	out, err := exec.Command(node, "testdata/passkey_check.mjs").CombinedOutput()
 	require.NoError(t, err, string(out))
 	require.Equal(t, "ok\n", string(out))
+}
+
+// TestSiteFiles checks what crawlers, browsers and security researchers ask
+// for: robots.txt, a sitemap of every page, security.txt (current, and
+// pointing at the private advisory form), favicon.ico, and a styled 404
+// for anything else, a directory included.
+func TestSiteFiles(t *testing.T) {
+	require := require.New(t)
+	static, err := fs.Sub(webFiles, "web")
+	require.NoError(err)
+	mux := http.NewServeMux()
+	require.NoError(handlePages(mux, static))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	get := func(p string) (int, string, string) {
+		resp, err := http.Get(ts.URL + p)
+		require.NoError(err)
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(err)
+		return resp.StatusCode, resp.Header.Get("Content-Type"), string(body)
+	}
+
+	status, _, body := get("/robots.txt")
+	require.Equal(http.StatusOK, status)
+	require.Contains(body, "Sitemap: https://metaldoge.com/sitemap.xml")
+
+	status, ctype, body := get("/sitemap.xml")
+	require.Equal(http.StatusOK, status)
+	require.Contains(ctype, "xml")
+	for _, p := range sitePages {
+		require.Contains(body, "<loc>https://metaldoge.com"+p.Path+"</loc>")
+	}
+
+	status, _, body = get("/.well-known/security.txt")
+	require.Equal(http.StatusOK, status)
+	require.Contains(body, "\nContact: https://github.com/MetalBlockchain/dogecoin-vm/security/advisories/new\n")
+	require.Contains(body, "\nPreferred-Languages: en\n")
+	m := regexp.MustCompile(`\nExpires: (\S+)\n`).FindStringSubmatch(body)
+	require.NotNil(m, "security.txt has no Expires")
+	expires, err := time.Parse(time.RFC3339, m[1])
+	require.NoError(err)
+	require.True(expires.After(time.Now()), "security.txt expired on %s: renew it", m[1])
+
+	status, ctype, body = get("/favicon.ico")
+	require.Equal(http.StatusOK, status)
+	require.Equal("image/x-icon", ctype)
+	require.True(strings.HasPrefix(body, "\x00\x00\x01\x00"), "favicon.ico is not an icon")
+
+	for _, p := range []string{"/no-such-page", "/deep/no/such/page", "/vendor/", "/vendor"} {
+		status, ctype, body = get(p)
+		require.Equal(http.StatusNotFound, status, p)
+		require.Contains(ctype, "text/html", p)
+		require.Contains(body, "Page not found", p)
+		require.Contains(body, `href="/tokens.css"`, p) // styled at any depth
+	}
+	// Pages and files are still served.
+	status, _, _ = get("/roadmap")
+	require.Equal(http.StatusOK, status)
+	status, _, _ = get("/app.js")
+	require.Equal(http.StatusOK, status)
+}
+
+// TestPagePreviews checks every page has its own link preview, and says
+// it's alpha in the header.
+func TestPagePreviews(t *testing.T) {
+	pages, err := renderPages()
+	require.NoError(t, err)
+	for _, p := range sitePages {
+		page := string(pages[p.Path])
+		title := template.HTMLEscapeString(p.Title)
+		require.Contains(t, page, `<meta property="og:title" content="`+title+`">`, p.Path)
+		require.Contains(t, page, `<meta property="og:url" content="https://metaldoge.com`+p.Path+`">`, p.Path)
+		require.Contains(t, page, `<meta property="og:image" content="https://metaldoge.com/og.png">`, p.Path)
+		require.Contains(t, page, `<meta name="twitter:card" content="summary_large_image">`, p.Path)
+		require.Equal(t, 1, strings.Count(page, `property="og:title"`), p.Path)
+		require.Contains(t, page, `class="brand-alpha"`, p.Path)
+	}
 }

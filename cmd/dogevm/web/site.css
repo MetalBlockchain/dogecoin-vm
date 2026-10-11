@@ -52,6 +52,8 @@ code { font-family: var(--mono); font-size: 0.9em; }
   text-decoration: none;
 }
 .site-brand img { width: 2rem; height: 2rem; }
+/* Every page says it's alpha, not just the bridge page's band. */
+.brand-alpha { font: 600 0.7rem/1 var(--sans); letter-spacing: 0.02em; padding: 0.25rem 0.45rem; border-radius: 99px; background: var(--band); color: var(--band-ink); margin-left: -0.25rem; }
 .site-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.35rem; }
 .site-nav a, .nav-cta {
   padding: 0.5rem 0.7rem;

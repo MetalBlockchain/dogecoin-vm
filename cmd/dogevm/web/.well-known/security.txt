@@ -1,0 +1,6 @@
+# Report security issues privately, through GitHub's private advisory form.
+# Renew Expires before it passes (a test fails once it has).
+Contact: https://github.com/MetalBlockchain/dogecoin-vm/security/advisories/new
+Expires: 2027-10-11T00:00:00Z
+Preferred-Languages: en
+Canonical: https://metaldoge.com/.well-known/security.txt
