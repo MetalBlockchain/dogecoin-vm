@@ -21,3 +21,29 @@ func TestLimitedUserIsReadOnly(t *testing.T) {
 		t.Errorf("searchrawtransactions cap %d is too large", maxSearchRawTransactionsCount)
 	}
 }
+
+func TestSearchRawTransactionsCountIsBounded(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	tests := []struct {
+		name  string
+		count *int
+		want  int
+	}{
+		{name: "default", want: 100},
+		{name: "negative", count: intPointer(-1), want: 1},
+		{name: "zero", count: intPointer(0), want: 0},
+		{name: "below cap", count: intPointer(maxSearchRawTransactionsCount - 1), want: maxSearchRawTransactionsCount - 1},
+		{name: "at cap", count: intPointer(maxSearchRawTransactionsCount), want: maxSearchRawTransactionsCount},
+		{name: "above cap", count: intPointer(maxSearchRawTransactionsCount + 1), want: maxSearchRawTransactionsCount},
+		{name: "maximum integer", count: &maxInt, want: maxSearchRawTransactionsCount},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := searchRawTransactionsCount(test.count); got != test.want {
+				t.Fatalf("searchRawTransactionsCount() = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func intPointer(value int) *int { return &value }

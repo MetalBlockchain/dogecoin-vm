@@ -248,11 +248,11 @@ var rpcUnimplemented = map[string]struct{}{
 	"preciousblock":    {},
 }
 
-// Commands that are available to a limited user
 // maxSearchRawTransactionsCount is the most transactions one
 // searchrawtransactions call returns.
 const maxSearchRawTransactionsCount = 500
 
+// Commands that are available to a limited user.
 var rpcLimited = map[string]struct{}{
 	// Websockets commands
 	"notifyblocks": {},
@@ -3260,22 +3260,9 @@ func handleSearchRawTransactions(s *rpcServer, cmd any, closeChan <-chan struct{
 		}
 	}
 
-	// Override the default number of requested entries if needed.  Also,
-	// just return now if the number of requested entries is zero to avoid
-	// extra work.
-	numRequested := 100
-	if c.Count != nil {
-		numRequested = *c.Count
-		if numRequested < 0 {
-			numRequested = 1
-		}
-	}
-	// A caller's count sizes an allocation before anything is looked up,
-	// and the public read-only user can call this, so bound it: larger
-	// histories are read in pages with skip (the bridge pages at 500).
-	if numRequested > maxSearchRawTransactionsCount {
-		numRequested = maxSearchRawTransactionsCount
-	}
+	// Resolve the number of requested entries. A caller's count sizes an
+	// allocation before anything is looked up, so it must be bounded first.
+	numRequested := searchRawTransactionsCount(c.Count)
 	if numRequested == 0 {
 		return nil, nil
 	}
@@ -3488,6 +3475,23 @@ func handleSearchRawTransactions(s *rpcServer, cmd any, closeChan <-chan struct{
 	}
 
 	return srtList, nil
+}
+
+// searchRawTransactionsCount normalizes and caps the caller's count. The
+// public read-only user can call searchrawtransactions, so larger histories
+// are read in pages with skip (the bridge pages at 500).
+func searchRawTransactionsCount(count *int) int {
+	numRequested := 100
+	if count != nil {
+		numRequested = *count
+		if numRequested < 0 {
+			numRequested = 1
+		}
+	}
+	if numRequested > maxSearchRawTransactionsCount {
+		return maxSearchRawTransactionsCount
+	}
+	return numRequested
 }
 
 // handleSendRawTransaction implements the sendrawtransaction command.
