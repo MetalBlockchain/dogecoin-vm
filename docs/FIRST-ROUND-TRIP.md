@@ -74,6 +74,11 @@ one operator holds all of the keys, and the caps and daily limits, which the
 signer software enforces, don't limit what someone holding the keys could
 take.
 
+The commands below are the record of the 27 September 2026 switch. The
+layout has changed since: each signer now runs as its own system user from
+`/var/lib/dogevm-signer-N`, with the binary at `/usr/local/lib/dogevm/dogevm`.
+For today's commands, see [RUNBOOK.md](RUNBOOK.md).
+
 Do it at a quiet moment: nothing pending in either direction
 (`/api/status` audit `pendingPegIns` and `pendingPegOuts` are 0).
 
@@ -90,8 +95,8 @@ checks the keys and their order match the live set's, and writes a service
 file per signer. It starts nothing. `rm -r` the directory undoes it.
 
 Switched on 27 September 2026 (fingerprint then `7c71-1377-b369-6632-ecd5`).
-Since 1 October 2026 the live set is `0cb9-3ab1-d970-1cf9-8024` (4,200 DOGE
-cap). The peg address is unchanged. Before starting the signers, refresh each one's copy
+A new set, with the 4,200 DOGE cap, has been live since 1 October 2026
+(short form `0cb9-3ab1-d970-1cf9-8024`, which `join` no longer accepts). The peg address is unchanged. Before starting the signers, refresh each one's copy
 of the deposit registry, since addresses registered after staging aren't in
 it:
 

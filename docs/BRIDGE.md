@@ -18,12 +18,12 @@ The reserve is not circulating supply. It is locked to the signers and leaves th
 
 0. The web and Mac wallets instead give each user a personal deposit address: a P2SH script that commits to the user's DogecoinVM address followed by the signers' multisig, so no `OP_RETURN` is needed. `POST /api/deposit-address` returns it, and the wallet re-derives it from the signers' keys before showing it. The steps below then apply the same way.
 1. The user sends DOGE on Dogecoin to the peg address. The same transaction carries an `OP_RETURN` tagged `DVMD` naming the DogecoinVM address to credit (`dogevm peg-in` builds it).
-2. After `-confirmations` Dogecoin blocks (default 6; `-confirmation-tiers` can ask fewer for small deposits, and metaldoge.com uses 6, 12 or 20 by size: on mainnet never fewer than 6), the bridge spends the reserve. It pays the deposit amount, minus `-vm-fee` (default 0.01 DOGE), to that address, and tags the transaction `DVMI` with the deposit's outpoint.
+2. After `-confirmations` Dogecoin blocks (default 6; `-confirmation-tiers` can ask fewer for small deposits, and metaldoge.com uses 6, 12 or 20 by size: on mainnet never fewer than 6; credit before the full `-confirmations` is capped in total by `-max-shallow`, 10 DOGE on metaldoge.com), the bridge spends the reserve. It pays the deposit amount, minus `-vm-fee` (default 0.01 DOGE), to that address, and tags the transaction `DVMI` with the deposit's outpoint.
 3. DogecoinVM finalizes the release in its next block.
 
 **Peg-out (DogecoinVM → Dogecoin)**
 1. The user pays DOGE on DogecoinVM to the reserve address. The transaction carries an `OP_RETURN` tagged `DVMO` naming a Dogecoin address (`dogevm peg-out` builds it).
-2. Once it is in a block (final), the bridge pays the amount, minus `-doge-fee` (default 1 DOGE), from the peg address on Dogecoin. It tags the payment `DVMR` with the peg-out's txid.
+2. Once it is in a block (final), the bridge pays the amount, minus `-doge-fee` (default 1 DOGE; metaldoge.com: 0.1), from the peg address on Dogecoin. It tags the payment `DVMR` with the peg-out's txid.
 
 ## Tags
 
@@ -38,7 +38,7 @@ Each is the whole data of the transaction's single `OP_RETURN` output. Transacti
 
 ## Safety properties
 
-- **Exactly once.** The bridge keeps no database; it reads its state back from both chains every time. A deposit counts as credited only if a release carrying its outpoint exists, and a peg-out as paid only if a payment carrying its txid exists. After a crash, the bridge picks up where it left off.
+- **Exactly once.** Obligations are read back from both chains every time; the bridge keeps files only for the deposit registry, signing logs and unsettled-transaction evidence. A deposit counts as credited only if a release carrying its outpoint exists, and a peg-out as paid only if a payment carrying its txid exists. After a crash, the bridge picks up where it left off.
 - **Spoofed tags are ignored.** Anyone can write `DVMI` or `DVMR` into a transaction. The bridge only trusts them on transactions that spend reserve or peg outputs, which only the signers can do. Otherwise, a forged `DVMI` could mark someone's deposit as already credited.
 - **Solvency check.** Before every action the bridge checks that `locked on Dogecoin ≥ circulating on DogecoinVM + pending peg-ins + pending peg-outs`, and halts if it does not hold. `dogevm audit` prints the same numbers for anyone to check.
 - **Deposits without a usable tag** (none, malformed, or below `-min-deposit`) are not credited. They show up in the audit as `unclaimedOnDogecoin`. The same goes for untagged payments into the reserve (`unclaimedOnDogecoinVM`).

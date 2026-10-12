@@ -50,17 +50,18 @@ sudo -u dogevm /opt/dogevm/bin/dogevm resume -dir /var/lib/dogevm-signer-N
 
 Once fewer than the required number of signers are available, nothing
 moves. With independent operators, a pause is the one power every operator
-has on their own. A pause that other operators can trigger remotely isn't in
-the live bridge yet: each pause is written where its process runs.
+has on their own.
 
-Any operator can also pause **every** signer, without the coordinator:
-`dogevm pause -dir /var/lib/dogevm-signer -remote all -key-file
-/var/lib/dogevm-signer/signer.key -reason "..."` signs the pause with their
-signer key and sends it to each signer on the set's cards (or `-remote
-URL,URL`), and says which it reached. A signer applies a pause signed by a
-key of its set, dated within 10 minutes of its clock and after it was last
-resumed. Only each signer's own operator resumes it, with `dogevm resume
--dir`, so a stolen operator key can stop the peg but never restart it.
+The signer software also has a signed remote pause: `dogevm pause -dir
+/var/lib/dogevm-signer -remote all -key-file /var/lib/dogevm-signer/signer.key
+-reason "..."` signs the pause with an operator's signer key and sends it to
+each signer on the set's cards (or `-remote URL,URL`), and says which it
+reached. A signer applies a pause signed by a key of its set, dated within 10
+minutes of its clock and after it was last resumed; only each signer's own
+operator resumes it, with `dogevm resume -dir`, so a stolen operator key can
+stop the peg but never restart it. It needs the transport pins on the set's
+cards, which the live set doesn't carry yet, so today each signer is paused
+locally, as above.
 
 **What a pause does not do.** It stops the software. It does not stop
 someone who has stolen the keys. During the alpha one operator holds all of
@@ -93,8 +94,8 @@ dv refund $co -list     # held or not yet credited, and why
 
 - **Waiting for confirmations** (20, or fewer for small deposits under the
   tiers, never fewer than 6 on mainnet): nothing to do. Small deposits
-  credited early are capped in total (`-max-shallow`, by default the
-  largest tier's amount); the rest wait for all 20.
+  credited early are capped in total (`-max-shallow`: 10 DOGE on
+  metaldoge.com; by default the largest tier's amount); the rest wait for all 20.
 - **Waiting for room under the circulating cap:** it's credited when there is room, or refund it.
 - **Above the maximum deposit, below the minimum, or no destination:** refund it.
 
@@ -302,8 +303,9 @@ running. It:
     `history` and `cutoverLeft`, the commands to send more fences, and how
     to read each signer's `signer-log status`;
 11. when every signer is done, starts the bridge, takes fresh health
-    (`/api/health`: every expected check present: pause, peg, bridge,
-    dogecoin, dogecoinvm) and checks the peg is solvent.
+    (`/api/health`, seven checks: pause, peg, bridge, dogecoin, wallet,
+    dogecoinvm and validator; pause, peg, bridge, dogecoin and dogecoinvm
+    must be present) and checks the peg is solvent.
 
 It resumes only if `RESUME=1`, the bridge wasn't paused before the
 upgrade, and every check but the pause passes; then it lifts the bridge's

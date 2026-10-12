@@ -32,7 +32,7 @@
     <h2 id="fees">Fees, limits and timings</h2>
     <p>Live from the bridge:</p>
     <dl class="facts-list" id="live-facts">
-      <dt>Confirmations before a deposit is credited</dt><dd><span data-info="confirmationTiers">…</span>. Each takes about a minute; smaller deposits carry less risk, so they wait less. If many deposits arrive together, some may wait up to 20 confirmations: the bridge limits how much it credits before full confirmation.</dd>
+      <dt>Confirmations before a deposit is credited</dt><dd><span data-info="confirmationTiers">…</span>. Each takes about a minute; smaller deposits carry less risk, so they wait less. At most 10 DOGE in total is credited before full confirmation, so if several deposits arrive together, those beyond that wait for all 20 confirmations.</dd>
       <dt>Bridge fee on each deposit</dt><dd><span data-info="vmFee" data-doge>…</span> DOGE</dd>
       <dt>Dogecoin fee on each withdrawal</dt><dd><span data-info="dogeFee" data-doge>…</span> DOGE</dd>
       <dt>Smallest deposit</dt><dd><span data-info="minDeposit" data-doge>…</span> DOGE</dd>
@@ -54,7 +54,7 @@
         <tr><td>Network fee</td><td>Any payment on DogecoinVM</td><td>0.001 DOGE per kB, usually about 0.00023 DOGE</td><td>The validator that built the block</td></tr>
         <tr><td>Bridge fee</td><td>Each deposit</td><td><span data-info="vmFee" data-doge>…</span> DOGE</td><td>The validator that built the block (it's the fee of the transaction that credits you)</td></tr>
         <tr><td>Withdrawal fee</td><td>Each withdrawal</td><td><span data-info="dogeFee" data-doge>…</span> DOGE</td><td>Dogecoin's miners (it pays for the payout on Dogecoin)</td></tr>
-        <tr><td>Bridge housekeeping (clean start, fee bumps)</td><td>Never you</td><td>From the bridge's operating capital</td><td>Dogecoin's miners, or the DogecoinVM validator</td></tr>
+        <tr><td>Bridge housekeeping (clean start, fee bumps)</td><td>Never you</td><td>From the surplus operators contribute</td><td>Dogecoin's miners, or the DogecoinVM validator</td></tr>
       </tbody>
     </table>
     </div>
@@ -74,15 +74,15 @@
     </div>
     <p class="table-note">Typical fees are for a payment spending one coin, with change, about 227 bytes; a payment spending more coins is larger and costs more. Some Dogecoin wallets pay more than the recommended rate.</p>
     <p><strong>No fee is destroyed or leaves the peg.</strong> Fees paid on DogecoinVM stay there as ordinary DOGE, backed by DOGE locked on Dogecoin like any other. The bridge's signers aren't paid from fees yet.</p>
-    <p>The peg usually shows a little more DOGE locked than circulates. That surplus is the bridge's own operating capital and kept change: it pays housekeeping fees, never yours.</p>
+    <p>The peg usually shows a little more DOGE locked than circulates. The surplus is only what the operators deliberately contribute: it pays housekeeping fees, never yours. Deposits not yet credited are owed to their senders, so they aren't surplus.</p>
 
     <h2 id="trust">Trust and limits</h2>
     <div class="callout"><p><strong>Alpha, with real DOGE.</strong> The bridge is new and hasn't had an external audit, one operator holds all of its signing keys, and the chain has one validator. Keep amounts small. See the <a href="/terms">alpha terms</a>.</p></div>
     <ul>
-      <li><strong>Custody.</strong> The DOGE locked on Dogecoin and the reserve on DogecoinVM are held by a 2-of-3 multisig of peg signers. Any two of them could move it. During the alpha, one operator holds all of the bridge's signing keys, so you are trusting that operator. Caps and daily limits are enforced by the signer software; they don't limit what someone holding the keys could take. Moving the keys to independent operators is planned: it's the work in progress on the <a href="/roadmap">roadmap</a>, and the software and setup ceremony for it are built.</li>
-      <li><strong>What the signers check.</strong> Since 27 September 2026 each key has run in its own signer service, and the bridge process holds none. Each signer service checks every transaction against both chains, and signs only what is owed, exactly as it would build it. These checks guard against a faulty bridge process, not against whoever holds the keys: during the alpha that is one operator. Since 11 October 2026 each signer also keeps a permanent log of what it has signed, and stops if any of it is missing. With independent operators, each signer will check through its own nodes.</li>
+      <li><strong>Custody.</strong> The DOGE locked on Dogecoin and the reserve on DogecoinVM are held by a 2-of-3 multisig of peg signers. Any two of them could move it. During the alpha, one operator holds all of the bridge's signing keys, so you are trusting that operator. Caps and daily limits are enforced by the signer software; they don't limit what someone holding the keys could take. Moving the keys to independent operators is planned: it's the work in progress on the <a href="/roadmap">roadmap</a>. The signer software and setup ceremony are built; rotating to fresh keys is the next piece of work.</li>
+      <li><strong>What the signers check.</strong> Since 27 September 2026 each key has run in its own signer service, and the bridge process holds none. Each signer service checks every transaction against both chains, and signs only what is owed, exactly as it would build it. These checks guard against a faulty bridge process, not against whoever holds the keys: during the alpha that is one operator. Since 11 October 2026 each signer also keeps a permanent log of what it has signed, and stops if any of it is missing. Today all three signers check through the bridge host's nodes; with independent operators, each will check through its own.</li>
       <li><strong>Caps.</strong> During the alpha, each deposit and the total on DogecoinVM are capped (the live figures are above), and each signer has a daily limit. The signer software enforces them, so they limit what the bridge itself can do, not what someone holding the keys could take.</li>
-      <li><strong>Pause.</strong> The operator can pause the bridge in an emergency: nothing is signed or paid, and the site shows why. The signer software also accepts a pause signed by any signer's operator, for when the signers have separate operators. Deposits and withdrawals made while paused are processed after it resumes.</li>
+      <li><strong>Pause.</strong> The operator can pause the bridge in an emergency: nothing is signed or paid, and the site shows why. The signer software also accepts a pause signed by any signer's operator, for when the signers have separate operators; it isn't enabled live yet. Deposits and withdrawals made while paused are processed after it resumes.</li>
       <li><strong>Refunds.</strong> A deposit that can't be credited, for example one over the alpha limit, is held on Dogecoin and can be refunded. To ask for a refund, use the contact details in the <a href="/terms#contact">terms</a>.</li>
       <li><strong>Backups.</strong> The signers' keys and the bridge's records are backed up daily, encrypted, and a restore has been checked against the live keys.</li>
     </ul>
@@ -113,6 +113,5 @@ GET  /api/health               checks, for uptime monitors</pre>
 
     <h2 id="security">Security</h2>
     <p>Please report vulnerabilities privately through <a href="https://github.com/MetalBlockchain/dogecoin-vm/security/advisories/new">GitHub's security advisories</a>, not in a public issue.</p>
-    <!-- TODO: once the security advisories are published, add: Past advisories are <a href="https://github.com/MetalBlockchain/dogecoin-vm/security/advisories">published on GitHub</a>. -->
   </main>
 {{end}}

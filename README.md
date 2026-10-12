@@ -4,7 +4,7 @@ A Dogecoin virtual machine for [Metal Blockchain](https://github.com/MetalBlockc
 
 DogecoinVM is a fork of [MetalBlockchain/btcvm](https://github.com/MetalBlockchain/btcvm), which embeds [btcd](https://github.com/btcsuite/btcd) as the ledger and script engine. It is a second ledger for existing DOGE, not a new coin:
 
-- **No premine and no block reward.** The genesis blocks pay nothing, and the coinbase can only claim transaction fees. DOGE enters the ledger only through a two-way peg with Dogecoin ([docs/BRIDGE.md](docs/BRIDGE.md)).
+- **No premine and no block reward.** The genesis block pays nothing; blocks 1..N create the peg reserve, locked to the signers and not circulating. Otherwise the coinbase can only claim transaction fees. DOGE enters circulation only through a two-way peg with Dogecoin ([docs/BRIDGE.md](docs/BRIDGE.md)).
 - **Same addresses and keys as Dogecoin.** A `D…` address, WIF key or `dgpv`/`dgub` extended key is the same on both chains. So are the transaction format and signing, so a wallet's Dogecoin signing code works as is; what a wallet needs is a DogecoinVM data source (the JSON-RPC or the site's API) in place of the Dogecoin network.
 - **No change to Dogecoin itself.** Dogecoin keeps running exactly as it does today.
 
@@ -61,7 +61,7 @@ The peg is federated: the signers are trusted. See [docs/BRIDGE.md](docs/BRIDGE.
 
 The signers can run separately, each with one key on its own machine, checking every transaction against its own view of both chains before signing. With independent operators, a compromised bridge process can then delay transfers but can't move locked DOGE. See [docs/SIGNERS.md](docs/SIGNERS.md).
 
-On metaldoge.com each key has run in its own signer service since 27 September 2026, and the bridge process holds none. The protection above also needs independent operators, which isn't the case yet: during the alpha, one operator holds all of the bridge's signing keys, so you are trusting that operator. Caps and daily limits are enforced by the signer software; they don't limit what someone holding the keys could take. Moving the keys to independent operators is planned.
+On metaldoge.com each key has run in its own signer service since 27 September 2026, and the bridge process holds none; today the three signers share one host and its nodes. The protection above also needs independent operators, which isn't the case yet: during the alpha, one operator holds all of the bridge's signing keys, so you are trusting that operator. Caps and daily limits are enforced by the signer software; they don't limit what someone holding the keys could take. Moving the keys to independent operators is planned.
 
 ## Status and roadmap
 

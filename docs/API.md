@@ -192,11 +192,12 @@ yourself against any Dogecoin explorer.
 }
 ```
 
-`reserveCreated` is the reserve the chain created at genesis (it backs nothing
+`reserveCreated` is the reserve the chain created in its reserve blocks (it backs nothing
 by itself); `reserveCreated − reserveHeld` is what circulates. Anything locked
 above what circulates and is owed (`audit.surplus` in `/api/status`) is the
-bridge's own operating capital and kept change, which pays its housekeeping
-fees.
+surplus: only what the operators deliberately contribute. It pays the
+bridge's housekeeping fees. Deposits that weren't credited are owed back, so
+they are never surplus.
 
 ### `GET /api/activity`
 
@@ -585,6 +586,3 @@ it yet.
   [roadmap](https://metaldoge.com/roadmap).
 - Report vulnerabilities privately via
   [GitHub security advisories](https://github.com/MetalBlockchain/dogecoin-vm/security/advisories/new).
-
-<!-- TODO: once the security advisories are published, add: "Past advisories
-     are [published on GitHub](https://github.com/MetalBlockchain/dogecoin-vm/security/advisories)." -->

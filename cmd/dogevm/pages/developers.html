@@ -266,12 +266,14 @@ reserves yourself against any Dogecoin explorer.</p>
       &quot;confirmations&quot;: 11580, &quot;txid&quot;: &quot;709b55bd…201b&quot;, &quot;vout&quot;: 0 }
   ]
 }</code></pre>
-<p><code>reserveCreated</code> is the reserve the chain created at
-genesis (it backs nothing by itself);
+<p><code>reserveCreated</code> is the reserve the chain created in its
+reserve blocks (it backs nothing by itself);
 <code>reserveCreated − reserveHeld</code> is what circulates. Anything
 locked above what circulates and is owed (<code>audit.surplus</code> in
-<code>/api/status</code>) is the bridge's own operating capital and kept
-change, which pays its housekeeping fees.</p>
+<code>/api/status</code>) is the surplus: only what the operators
+deliberately contribute. It pays the bridge's housekeeping fees.
+Deposits that weren't credited are owed back, so they are never
+surplus.</p>
 <h3 id="get-apiactivity"><code>GET /api/activity</code></h3>
 <p>Recent bridge activity: deposits and withdrawals, newest first (up to
 100).</p>
@@ -665,7 +667,5 @@ href="/roadmap">roadmap</a>.</li>
 href="https://github.com/MetalBlockchain/dogecoin-vm/security/advisories/new">GitHub
 security advisories</a>.</li>
 </ul>
-<!-- TODO: once the security advisories are published, add: "Past advisories
-     are [published on GitHub](https://github.com/MetalBlockchain/dogecoin-vm/security/advisories)." -->
   </main>
 {{end}}

@@ -9,6 +9,10 @@ DogecoinVM is a Dogecoin-compatible virtual machine running on Metal Blockchain.
 | [SIGNERS.md](SIGNERS.md) | Separate signer services and the `dogevm signer-setup` ceremony |
 | [RUNBOOK.md](RUNBOOK.md) | What the operator does when something goes wrong: pause, alerts, refunds, restore |
 | [FIRST-ROUND-TRIP.md](FIRST-ROUND-TRIP.md) | The record of the first mainnet round trip and the move to separate signers |
+| [API.md](API.md) | The public HTTP API and JSON-RPC, for wallet and app developers ([metaldoge.com/developers](https://metaldoge.com/developers)) |
+| [RUN-A-NODE.md](RUN-A-NODE.md) | Running a DogecoinVM node that follows the chain ([metaldoge.com/run-a-node](https://metaldoge.com/run-a-node)) |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in DogecoinVM, the bridge and the Mac wallet ([metaldoge.com/changelog](https://metaldoge.com/changelog)) |
+| [dip-0021.md](dip-0021.md) | DIP 21 (draft): `dogecoin:` and `dogecoinvm:` payment links |
 
 The user-facing docs are at [metaldoge.com/docs](https://metaldoge.com/docs), and the roadmap at [metaldoge.com/roadmap](https://metaldoge.com/roadmap).
 

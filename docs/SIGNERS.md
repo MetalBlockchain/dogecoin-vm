@@ -3,7 +3,8 @@
 The DOGE locked on Dogecoin and the reserve on DogecoinVM are both held by an
 m-of-n multisig of peg signers. This page covers running those signers
 separately: each key on its own machine, each signer checking every
-transaction for itself before signing.
+transaction for itself before signing. Today, on metaldoge.com, the three
+signers are separate services on one host (see below).
 
 ## How it works
 
@@ -47,8 +48,10 @@ compromised coordinator can therefore delay transfers but can't move locked
 DOGE. That would take `Required` signers.
 
 On metaldoge.com each key has run in its own signer service since 27
-September 2026 (set fingerprint `0cb9-3ab1-d970-1cf9-8024` since 1 October
-2026). During the alpha, one operator holds all of the bridge's signing keys, so you are trusting that operator. Caps and daily limits are enforced by the signer software; they don't limit what someone holding the keys could take. Moving the keys to independent operators is planned.
+September 2026; the current set has been in use since 1 October 2026 (`join`
+shows its 24-word fingerprint; the 80-bit short form shown before is
+retired). Today all three signers run on the bridge host and use its nodes.
+During the alpha, one operator holds all of the bridge's signing keys, so you are trusting that operator. Caps and daily limits are enforced by the signer software; they don't limit what someone holding the keys could take. Moving the keys to independent operators is planned.
 
 ## The setup ceremony
 
@@ -120,11 +123,13 @@ that short form.
   root is compromised). A key written before encryption still loads, with a
   warning; `dogevm signer-key encrypt -key-file FILE` encrypts it in place
   (then delete unencrypted copies, including in backups). The coordinator
-  key only signs requests, so it stays unencrypted.
+  key only signs requests, so it stays unencrypted. Today the live signer
+  keys predate encryption and are unencrypted.
 - **A Dogecoin Core node** (`-txindex`, with a wallet for watch-only
   addresses) and **a DogecoinVM node**. These are what make the signer
   independent: it checks everything against its own nodes. A signer that
-  uses someone else's node trusts that node's operator.
+  uses someone else's node trusts that node's operator. Today the live
+  signers all use the bridge host's nodes.
 - **The signer service** from `join`. It serves on port 9700. Requests must
   be signed by the coordinator key, name this signer's public key (so a
   request made for one signer is refused by the others), carry a nonce it
@@ -138,6 +143,8 @@ that short form.
   coordinator accepts only the pinned signer key, and never talks plain
   HTTP beyond its own machine. Both pins are covered by the fingerprint.
   The coordinator finds its transport key next to `-coordinator-key-file`.
+  Today the live signers are on the coordinator's machine and the set
+  carries no transport pins, so they take signed requests over local HTTP.
 - **The signing log** (`signing-log.json`), made with the key by
   `signer-setup init`. Back it up. A signer never runs on a missing log, or
   on one older than what it has signed: at start and before every signature

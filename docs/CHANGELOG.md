@@ -6,6 +6,11 @@ newest first. DogecoinVM is **alpha**: see the [terms](https://metaldoge.com/ter
 Security fixes are listed once they're live, described by what they protect
 rather than how the problem could be used.
 
+## 12 Oct 2026: early credit capped at 10 DOGE
+
+- At most 10 DOGE in total is credited before full confirmation; deposits
+  beyond that wait for all 20 Dogecoin confirmations.
+
 ## 11 Oct 2026: hardened bridge (v0.2.0, [#9](https://github.com/MetalBlockchain/dogecoin-vm/pull/9))
 
 The bridge and its three signers now run hardened software. Deposits and
@@ -30,17 +35,14 @@ kept working, and no balance changed.
   need to do anything.
 - **Also in this release**, thanks to [@MlennGarien](https://github.com/MlennGarien):
   public RPC hardening ([#4](https://github.com/MetalBlockchain/dogecoin-vm/pull/4), live on the node since 26 Sep), signer-set
-  fingerprints read as 24 words from the full hash ([#3](https://github.com/MetalBlockchain/dogecoin-vm/pull/3)), and signer
-  connections pinned to the signed-off set, with new passkey backups requiring
-  PIN or biometric verification ([#7](https://github.com/MetalBlockchain/dogecoin-vm/pull/7)).
+  fingerprints read as 24 words from the full hash ([#3](https://github.com/MetalBlockchain/dogecoin-vm/pull/3)), and software
+  that pins signer connections to the signed-off set, with new passkey backups
+  requiring PIN or biometric verification ([#7](https://github.com/MetalBlockchain/dogecoin-vm/pull/7)). The live signers,
+  on one host, don't use TLS yet.
 - **DIP 21 (draft):** [`dogecoin:` and `dogecoinvm:` payment
   links](https://github.com/MetalBlockchain/dogecoin-vm/blob/dogecoin/docs/dip-0021.md),
   drafted by [@qlpqlp](https://github.com/qlpqlp) ([#8](https://github.com/MetalBlockchain/dogecoin-vm/pull/8)). No wallet
   supports it yet.
-
-<!-- TODO: once the security advisories are published, add a bullet after "Stricter signers":
-     "Fixes for four privately reported issues, thanks to @MishaBoar and
-     @byfor8: [advisories](https://github.com/MetalBlockchain/dogecoin-vm/security/advisories)." -->
 
 ## 9 Oct 2026: developer docs
 
@@ -76,7 +78,7 @@ kept working, and no balance changed.
 ## 27 Sep 2026: separate signers
 
 - Each of the bridge's three signers runs as its own service with its own key,
-  and signers only accept requests over mutually authenticated connections.
+  and signers only accept requests signed by the coordinator's key.
 - Each request names the signer it's for and can't be replayed. A signer refuses
   to sign if its signing record is missing or out of date.
 
